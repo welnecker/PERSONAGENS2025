@@ -214,7 +214,9 @@ def _llm_ping() -> str:
             "max_tokens": 8,
             "temperature": 0.0,
         }
-        data, used, prov = route_chat_strict(st.session_state["model"], payload, provider=st.session_state["provider"])
+        # 👇 Sem 'provider' aqui
+        data, used, prov = route_chat_strict(st.session_state["model"], payload)
+
         # extrai texto de forma robusta
         txt = ""
         try:
@@ -223,7 +225,8 @@ def _llm_ping() -> str:
                 txt = data.get("choices", [{}])[0].get("text", "") or ""
         except Exception:
             pass
-        if "PONG" in txt.upper():
+
+        if "PONG" in (txt or "").upper():
             return f"OK ({prov}:{used})"
         return f"resposta inesperada ({prov}:{used}): {txt[:80]!r}"
     except Exception as e:
