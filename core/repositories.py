@@ -1,139 +1,81 @@
 # core/repositories.py
-from datetime import datetime
 from typing import Any, Dict, List, Optional
-import re
-
 from .database import get_col
 
-# --- Coleções (helpers) ---
-def _hist():
-    return get_col("mary_historia")
+# coleções
+_state  = lambda: get_col("state_data")
+_hist   = lambda: get_col("history")
+_events = lambda: get_col("events")
 
-def _state():
-    return get_col("mary_state")
+# ---------- Fatos ----------
+def get_facts(usuario: str) -> Dict[str, Any]:
+    d = _state().find_one({"usuario": usuario})
+    return d.get("fatos", {}) if d else {}
 
-def _events():
-    return get_col("mary_eventos")
+def get_fact(usuario: str, key: str, default: Any = None) -> Any:
+    d = _state().find_one({"usuario": usuario})
+    if not d:
+        return default
+    cur = d.get("fatos", {})
+    # acesso raso ou pontilhado
+    for part in key.split("."):
+        if not isinstance(cur, dict) or part not in cur:
+            return default
+        cur = cur[part]
+    return cur
 
-def _profile():
-    return get_col("mary_perfil")
+def set_fact(usuario: str, key: str, value: Any, meta: Optional[Dict[str, Any]] = None) -> None:
+    meta = meta or {}
+    _state().update_one(
+        {"usuario": usuario},
+        {"$set": {f"usuario": usuario, f"fatos.{key}": value, "meta": meta}},
+        upsert=True
+    )
 
-def _uq(usuario: str) -> Dict[str, Any]:
-    """Filtro ancorado e case-insensitive por usuário."""
-    return {"usuario": {"$regex": f"^{re.escape(usuario)}$", "$options": "i"}}
-
-# -------- CRUD básico --------
-def save_interaction(usuario: str, user_msg: str, mary_msg: str, modelo: str = "") -> None:
+# ---------- Histórico ----------
+def save_interaction(usuario: str, mensagem_usuario: str, resposta_mary: str, model_tag: str) -> None:
     _hist().insert_one({
         "usuario": usuario,
-        "mensagem_usuario": user_msg,
-        "resposta_mary": mary_msg,
-        "modelo": modelo,
-        "timestamp": datetime.utcnow().isoformat(),
+        "mensagem_usuario": mensagem_usuario,
+        "resposta_mary": resposta_mary,
+        "model": model_tag,
     })
 
 def get_history_docs(usuario: str, limit: int = 400) -> List[Dict[str, Any]]:
-    cur = _hist().find(_uq(usuario)).sort([("_id", 1)]).limit(limit)
-    return list(cur)
+    return list(_hist().find({"usuario": usuario}, sort=[("_id", 1)], limit=limit))
 
-def set_fact(usuario: str, key: str, value: Any, meta: Optional[Dict[str, Any]] = None) -> None:
-    _state().update_one(
-        {"usuario": usuario},
-        {"$set": {
-            f"fatos.{key}": value,
-            f"meta.{key}": (meta or {}),
-            "atualizado_em": datetime.utcnow(),
-        }},
-        upsert=True,
-    )
+def delete_user_history(usuario: str) -> int:
+    return _hist().delete_many({"usuario": usuario})
 
-def get_fact(usuario: str, key: str, default=None):
-    try:
-        # NÃO passe projeção para database.find_one (API local trata 2º arg como "sort")
-        d = _state().find_one({"usuario": usuario})
-        if not d:
-            return default
-        fatos = d.get("fatos", {})
-        # suporta caminho com pontos, ex.: "perfil.idade"
-        cur = fatos
-        for part in (key or "").split("."):
-            if not isinstance(cur, dict) or part not in cur:
-                return default
-            cur = cur[part]
-        return default if cur is None else cur
-    except Exception:
-        return default
+def delete_last_interaction(usuario: str) -> bool:
+    docs = list(_hist().find({"usuario": usuario}))
+    if not docs:
+        return False
+    last_id = docs[-1]["_id"]
+    return _hist().delete_many({"_id": last_id}) > 0
 
-
-def get_facts(usuario: str) -> dict:
-    try:
-        d = _state().find_one({"usuario": usuario})
-        return d.get("fatos", {}) if d else {}
-    except Exception:
-        return {}
-
-
-def register_event(
-    usuario: str,
-    tipo: str,
-    descricao: str,
-    local: Optional[str] = None,
-    meta: Optional[Dict[str, Any]] = None,
-) -> None:
+# ---------- Eventos ----------
+def register_event(usuario: str, tipo: str, descricao: str, local: Optional[str], extra: Optional[Dict[str, Any]] = None) -> None:
     _events().insert_one({
         "usuario": usuario,
         "tipo": tipo,
         "descricao": descricao,
         "local": local,
-        "ts": datetime.utcnow(),
-        "tags": [],
-        "meta": meta or {},
+        "extra": extra or {},
     })
 
-def last_event(usuario: str, tipo: str):
-    return _events().find_one({**_uq(usuario), "tipo": tipo}, sort=[("ts", -1)])
-
 def list_events(usuario: str, limit: int = 5) -> List[Dict[str, Any]]:
-    cur = _events().find(_uq(usuario)).sort([("ts", -1)]).limit(limit)
-    return list(cur)
+    docs = list(_events().find({"usuario": usuario}, sort=[("_id", -1)], limit=limit))
+    return docs
 
-# -------- Listagem utilitária --------
-def list_interactions(usuario: str, limit: int = 400) -> List[Dict[str, Any]]:
-    cur = _hist().find(_uq(usuario)).sort([("_id", 1)]).limit(limit)
-    return list(cur)
-
-# -------- Deleters --------
-def delete_user_history(usuario: str) -> int:
-    res = _hist().delete_many(_uq(usuario))
-    return res.deleted_count
-
-def delete_last_interaction(usuario: str) -> bool:
-    doc = _hist().find_one(_uq(usuario), sort=[("_id", -1)])
-    if not doc:
-        return False
-    _hist().delete_one({"_id": doc["_id"]})
-    return True
+# ---------- Utilidades ----------
+def last_event(usuario: str, tipo: str) -> Optional[Dict[str, Any]]:
+    return _events().find_one({"usuario": usuario, "tipo": tipo}, sort=[("_id", -1)])
 
 def delete_all_user_data(usuario: str) -> Dict[str, int]:
-    out: Dict[str, int] = {}
-    out["hist"]    = _hist().delete_many(_uq(usuario)).deleted_count
-    out["state"]   = _state().delete_many(_uq(usuario)).deleted_count
-    out["eventos"] = _events().delete_many(_uq(usuario)).deleted_count
-    out["perfil"]  = _profile().delete_many(_uq(usuario)).deleted_count
-    return out
-
-def reset_nsfw(usuario: str) -> None:
-    """Força NSFW OFF e limpa locks de cena."""
-    _state().update_one(
-        {"usuario": usuario},
-        {
-            "$set": {"fatos.virgem": True},
-            "$unset": {
-                "fatos.cena_parceiro_ativo": "",
-                "fatos.cena_parceiro_ativo_ts": "",
-                "fatos.cena_parceiro_ttl_min": "",
-            },
-        },
-        upsert=True,
-    )
-    _events().delete_many({**_uq(usuario), "tipo": "primeira_vez"})
+    return {
+        "hist": _hist().delete_many({"usuario": usuario}),
+        "state": _state().delete_many({"usuario": usuario}),
+        "eventos": _events().delete_many({"usuario": usuario}),
+        "perfil": 0,
+    }
