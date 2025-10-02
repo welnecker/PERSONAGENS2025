@@ -1,6 +1,7 @@
 import streamlit as st
 from characters.registry import get_service
 from ui.sidebar_renderer import render_sidebar
+from app.main import main
 
 def main():
     st.set_page_config(page_title="Roleplay App", layout="centered")
