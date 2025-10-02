@@ -3,16 +3,10 @@ from typing import Any, Dict, List, Optional, Iterable, Tuple, Union
 from threading import RLock
 import uuid
 
-# Armazenamento em memória (processo local)
 _STORE: Dict[str, List[Dict[str, Any]]] = {}
 _LOCK = RLock()
 
-
-# ===== Helpers =====
 def _get_nested(doc: Dict[str, Any], dotted: str, default: Any = None) -> Any:
-    """
-    Acessa campos aninhados usando caminho com pontos, ex.: "fatos.parceiro_atual".
-    """
     if not dotted:
         return default
     cur: Any = doc
@@ -22,35 +16,36 @@ def _get_nested(doc: Dict[str, Any], dotted: str, default: Any = None) -> Any:
         cur = cur[part]
     return cur
 
+def _ensure_path(doc: Dict[str, Any], dotted: str) -> Dict[str, Any]:
+    cur = doc
+    parts = dotted.split(".")
+    for p in parts[:-1]:
+        if p not in cur or not isinstance(cur[p], dict):
+            cur[p] = {}
+        cur = cur[p]
+    return cur
+
+def _set_nested(doc: Dict[str, Any], dotted: str, value: Any) -> None:
+    parent = _ensure_path(doc, dotted)
+    parent[dotted.split(".")[-1]] = value
 
 def _normalize_sort(sort: Optional[Union[Dict[str, int], List, Tuple]]) -> List[Tuple[str, int]]:
-    """
-    Aceita:
-      - None
-      - [("ts", -1), ("_id", 1)]
-      - ("ts", -1)
-      - {"ts": -1, "_id": 1}
-    Retorna lista de pares [(key, dir), ...]. Para entradas inválidas → [].
-    """
     if not sort:
         return []
     if isinstance(sort, dict):
         return [(k, v) for k, v in sort.items()]
     if isinstance(sort, (list, tuple)):
-        # lista de pares
         if sort and isinstance(sort[0], (list, tuple)):
             try:
                 return [(str(k), int(d)) for (k, d) in sort]  # type: ignore[misc]
             except Exception:
                 return []
-        # tupla única ("campo", dir)
         if len(sort) == 2 and isinstance(sort[0], str):
             try:
                 return [(sort[0], int(sort[1]))]  # type: ignore[index]
             except Exception:
                 return []
     return []
-
 
 class MemoryCollection:
     def __init__(self, name: str):
@@ -65,17 +60,11 @@ class MemoryCollection:
             return {"inserted_id": d["_id"]}
 
     def _match(self, doc: Dict[str, Any], filt: Optional[Dict[str, Any]]) -> bool:
-        """
-        Filtro simples:
-          - igualdade por chave (suporta caminho com pontos)
-          - operador $in
-        """
         if not filt:
             return True
         for k, v in filt.items():
             if isinstance(v, dict) and "$in" in v:
-                val = _get_nested(doc, k, object())
-                if val not in v["$in"]:
+                if _get_nested(doc, k, object()) not in v["$in"]:
                     return False
             else:
                 if _get_nested(doc, k, object()) != v:
@@ -90,13 +79,10 @@ class MemoryCollection:
     ) -> Iterable[Dict[str, Any]]:
         with _LOCK:
             rows = [d.copy() for d in _STORE.get(self.name, []) if self._match(d, filt)]
-
-        # ordenação (estável), do último critério para o primeiro
         sort_items = _normalize_sort(sort)
         for key, direction in reversed(sort_items):
-            reverse = True if direction in (-1, "desc", "DESC") else False  # aceita ints e strings
+            reverse = True if direction in (-1, "desc", "DESC") else False
             rows.sort(key=lambda x: _get_nested(x, key), reverse=reverse)
-
         if limit is not None:
             try:
                 n = int(limit)
@@ -104,7 +90,6 @@ class MemoryCollection:
                     rows = rows[:n]
             except Exception:
                 pass
-
         return rows
 
     def find_one(
@@ -116,24 +101,28 @@ class MemoryCollection:
         return rows[0] if rows else None
 
     def update_one(self, filt: Dict[str, Any], update: Dict[str, Any], upsert: bool = False) -> None:
-        """
-        Implementação simples de update:
-          - Suporta $set (apenas chaves de 1 nível). Se precisar de set pontilhado, adaptar aqui.
-        """
         with _LOCK:
             rows = _STORE.get(self.name, [])
             for d in rows:
                 if self._match(d, filt):
                     if "$set" in update:
-                        # $set raso (sem split por ponto) para manter simplicidade
-                        d.update(update["$set"])
+                        for k, v in update["$set"].items():
+                            # suporta chaves pontilhadas
+                            if "." in k:
+                                _set_nested(d, k, v)
+                            else:
+                                d[k] = v
                     else:
                         d.update(update)
                     return
             if upsert:
                 doc = dict(filt)
                 if "$set" in update:
-                    doc.update(update["$set"])
+                    for k, v in update["$set"].items():
+                        if "." in k:
+                            _set_nested(doc, k, v)
+                        else:
+                            doc[k] = v
                 self.insert_one(doc)
 
     def delete_many(self, filt: Dict[str, Any]) -> int:
@@ -143,7 +132,5 @@ class MemoryCollection:
             rows[:] = [d for d in rows if not self._match(d, filt)]
             return before - len(rows)
 
-
 def get_col(name: str) -> MemoryCollection:
-    """Retorna uma 'coleção' em memória com interface básica (insert/find/update/delete)."""
     return MemoryCollection(name)
