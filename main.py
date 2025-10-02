@@ -1,23 +1,17 @@
 # main.py
 from __future__ import annotations
 
-import os
 import sys
+import inspect
 from pathlib import Path
 import streamlit as st
 
-# ======================================================================
-# Bootstrap de import (garante que o pacote local esteja no sys.path)
-# ======================================================================
+# Garantir raiz no sys.path
 ROOT = Path(__file__).resolve().parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-st.set_page_config(page_title="PERSONAGENS 2025", page_icon="🎭", layout="wide")
-
-# ======================================================================
 # Imports defensivos
-# ======================================================================
 try:
     from characters.registry import get_service, list_characters  # noqa: E402
 except Exception as e:
@@ -28,6 +22,7 @@ except Exception as e:
     )
     st.stop()
 
+# Provedores/modelos (lazy router)
 try:
     from core.service_router import available_providers, list_models  # noqa: E402
 except Exception as e:
@@ -38,69 +33,18 @@ except Exception as e:
     )
     st.stop()
 
-# ======================================================================
-# Sidebar: Personagem, Provedor, Modelo, User ID, Preferências por personagem
-# ======================================================================
-st.sidebar.title("Configuração")
+st.set_page_config(page_title="PERSONAGENS 2025", page_icon="🎭", layout="wide")
 
-# Personagem
+# ===== Sidebar: Personagem =====
+st.sidebar.title("Personagem")
 char_names = list_characters()
-if not char_names:
-    st.sidebar.error("Nenhuma personagem registrada em `characters/`.")
-    st.stop()
-
 default_idx = char_names.index("Mary") if "Mary" in char_names else 0
-choice = st.sidebar.selectbox("Personagem", char_names, index=default_idx)
+choice = st.sidebar.selectbox("Escolha", char_names, index=default_idx)
 
-# Instancia o serviço da personagem escolhida
+# Instancia service da personagem
 service = get_service(choice)
 
-# User ID (persistente na sessão)
-if "user_id" not in st.session_state:
-    st.session_state.user_id = os.getenv("DEFAULT_USER_ID", "anon")
-
-st.sidebar.text_input(
-    "User ID",
-    key="user_id",
-    placeholder="ex.: anon, user123...",
-    help="Identificador lógico para histórico/memória desta personagem.",
-)
-
-# Provedor
-prov_opts = available_providers()
-if not prov_opts:
-    # fallback visual para não quebrar a UI
-    prov_opts = ["openrouter", "together"]
-
-# Seleção automática baseada nas chaves presentes
-def _default_provider_index(opts: list[str]) -> int:
-    if "openrouter" in opts and os.getenv("OPENROUTER_API_KEY"):
-        return opts.index("openrouter")
-    if "together" in opts and os.getenv("TOGETHER_API_KEY"):
-        return opts.index("together")
-    return 0
-
-prov_index = _default_provider_index(prov_opts)
-provider = st.sidebar.selectbox("Provedor", prov_opts, index=prov_index)
-
-# Modelos por provedor
-models = []
-try:
-    models = list_models(provider) or []
-except Exception:
-    models = []
-
-if not models:
-    st.sidebar.warning(
-        "Nenhum modelo listado para este provedor.\n\n"
-        "• Configure `OPENROUTER_API_KEY` e/ou `TOGETHER_API_KEY`.\n"
-        "• Opcional: defina `OPENROUTER_MODELS` / `TOGETHER_MODELS`."
-    )
-    models = ["<nenhum modelo>"]
-
-model = st.sidebar.selectbox("Modelo", models, index=0)
-
-# Sidebar específico da personagem (opcional)
+# Sidebar específico (opcional por personagem)
 render_sidebar = getattr(service, "render_sidebar", None)
 if callable(render_sidebar):
     try:
@@ -108,47 +52,81 @@ if callable(render_sidebar):
     except Exception as e:
         import traceback
         st.sidebar.error(
-            f"Erro no sidebar de {service.title}:\n\n"
-            f"**{e.__class__.__name__}:** {e}\n\n```\n{traceback.format_exc()}\n```"
+            f"Erro no sidebar de {service.title}:\n\n**{e.__class__.__name__}:** {e}\n\n"
+            f"```\n{traceback.format_exc()}\n```"
         )
 else:
     st.sidebar.caption("Sem preferências específicas para esta personagem.")
 
-# ======================================================================
-# Corpo: Mensagem e ação
-# ======================================================================
+# ===== Sidebar: Provedor e Modelo =====
+st.sidebar.markdown("---")
+st.sidebar.subheader("Modelo")
+
+providers = available_providers()
+provider = st.sidebar.selectbox("Provedor", providers, index=0)
+
+try:
+    models = list_models(provider) or ["openrouter/auto"]
+except Exception:
+    models = ["openrouter/auto"]
+
+model = st.sidebar.selectbox("Modelo", models, index=0)
+
+# Hiperparâmetros básicos
+temperature = st.sidebar.slider("Temperature", 0.0, 1.0, 0.6, 0.05)
+top_p = st.sidebar.slider("Top-p", 0.0, 1.0, 0.9, 0.05)
+max_tokens = st.sidebar.slider("Max tokens", 128, 4096, 1024, 64)
+
+# ===== Corpo =====
 st.title(service.title)
+prompt = st.text_area("Você:", height=140, placeholder="Escreva sua fala/cena aqui…")
+send = st.button("Enviar", type="primary")
 
-prompt = st.text_area("Mensagem", height=220, placeholder="Escreva sua fala/cena aqui…")
+def _call_reply_safe(svc, **params):
+    """
+    Chama svc.reply(...) passando apenas os parâmetros que a assinatura aceita.
+    Também mapeia alguns aliases comuns: se o método aceitar 'text', preenche com prompt/user.
+    """
+    sig = inspect.signature(svc.reply)
+    accepted = dict()
 
-col_send, col_clear = st.columns([1, 1])
+    # Alias úteis
+    if "text" in sig.parameters and "text" not in params:
+        params["text"] = params.get("prompt") or params.get("user") or ""
 
-with col_send:
-    if st.button("Enviar", type="primary", use_container_width=True):
-        if not prompt.strip():
-            st.warning("Digite uma mensagem antes de enviar.")
-        elif model == "<nenhum modelo>":
-            st.error("Selecione um modelo válido. Verifique as chaves do provedor.")
-        else:
-            with st.spinner("Gerando…"):
-                try:
-                    # IMPORTANTE: a assinatura usada pelos serviços
-                    # reply(user=<ID>, model=<MODEL>, provider=<PROV>, prompt=<TEXTO>)
-                    reply = service.reply(
-                        user=st.session_state.user_id,
-                        model=model,
-                        provider=provider,
-                        prompt=prompt,
-                    )
-                    st.markdown(reply)
-                except Exception as e:
-                    import traceback
-                    st.error(
-                        "Erro durante a geração:\n\n"
-                        f"**{e.__class__.__name__}:** {e}\n\n"
-                        f"```\n{traceback.format_exc()}\n```"
-                    )
+    for k, v in params.items():
+        if k in sig.parameters:
+            accepted[k] = v
 
-with col_clear:
-    if st.button("Limpar entrada", use_container_width=True):
-        st.experimental_rerun()
+    # Se nada bateu, tenta uma chamada posicional mínima com o prompt
+    if not accepted:
+        try:
+            return svc.reply(params.get("prompt") or params.get("user") or "")
+        except TypeError:
+            # Se mesmo assim não deu, relança erro original
+            pass
+
+    return svc.reply(**accepted)
+
+if send and (prompt or "").strip():
+    with st.spinner("Gerando…"):
+        try:
+            # Parâmetros “largos”: passamos todos e deixamos o filtro decidir
+            reply = _call_reply_safe(
+                service,
+                user=prompt,             # compat com serviços antigos
+                prompt=prompt,           # compat com serviços novos
+                model=model,
+                provider=provider,
+                temperature=temperature,
+                top_p=top_p,
+                max_tokens=max_tokens,
+                user_id=st.session_state.get("user_id"),
+            )
+            st.markdown(reply)
+        except Exception as e:
+            import traceback
+            st.error(
+                f"Erro durante a geração:\n\n**{e.__class__.__name__}:** {e}\n\n"
+                f"```\n{traceback.format_exc()}\n```"
+            )
