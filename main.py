@@ -13,6 +13,21 @@ from typing import Optional, List, Tuple
 
 import streamlit as st
 
+from core.database import db_status, get_col
+
+bk, info = db_status()
+st.sidebar.caption(f"DB: **{bk}** — {info}")
+
+if st.sidebar.button("🔍 Testar conexão Mongo"):
+    try:
+        col = get_col("diagnostic")
+        r_id = col.insert_one({"ts": __import__("datetime").datetime.utcnow()})["inserted_id"]
+        last = col.find_one(sort=[("ts", -1)])
+        st.sidebar.success(f"OK (id={r_id}) — last={last}")
+    except Exception as e:
+        st.sidebar.error(f"Falha: {e}")
+
+
 # ============ Ajuste de path ============
 ROOT = Path(__file__).resolve().parent
 if str(ROOT) not in sys.path:
