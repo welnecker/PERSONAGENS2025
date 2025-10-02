@@ -1,1 +1,3 @@
-# deixa o pacote 'core' explícito
+# package marker for 'core'
+__all__ = []
+
