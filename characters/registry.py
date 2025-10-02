@@ -1,18 +1,28 @@
-from typing import Dict, Type
-from core.common.base_service import BaseCharacter
-from characters.laura.service import LauraService
-from characters.nerith.service import NerithService
-from characters.mary.service import MaryService
+# characters/registry.py
+from __future__ import annotations
+from importlib import import_module
+from typing import Dict, Tuple, Type, List, Optional
 
-_SERVICES: Dict[str, BaseCharacter] = {
-    "laura": LauraService(),
-    "nerith": NerithService(),
-    "narith": NerithService(),
-    "elfa": NerithService(),
-    "mary": MaryService(),
+from core.common.base_service import BaseCharacter
+
+# Catálogo: nome visível -> (módulo, classe)
+# Deixe somente referências de string; NUNCA importe services no topo para evitar ImportError cedo.
+_CATALOG: Dict[str, Tuple[str, str]] = {
+    "Mary":   ("characters.mary.service", "MaryService"),
+    "Laura":  ("characters.laura.service", "LauraService"),
+    "Nerith": ("characters.nerith.service", "NerithService"),  # ou "Narith" se preferir
 }
 
-def get_service(name: str) -> BaseCharacter:
-    key = (name or "mary").strip().lower()
-    return _SERVICES.get(key, _SERVICES["mary"])
+def list_characters() -> List[str]:
+    return list(_CATALOG.keys())
+
+def get_service(name: Optional[str]) -> BaseCharacter:
+    key = (name or "").strip().title()
+    if key not in _CATALOG:
+        key = "Mary"
+    module_name, cls_name = _CATALOG[key]
+    mod = import_module(module_name)
+    cls: Type[BaseCharacter] = getattr(mod, cls_name)
+    return cls()
+
 
