@@ -28,9 +28,11 @@ def _check_scrypt(pwd: str) -> bool:
     if not salt_hex or not hash_hex:
         return False
     try:
-        calc = hashlib.scrypt(pwd.encode("utf-8"),
-                              salt=bytes.fromhex(salt_hex),
-                              n=2**14, r=8, p=1).hex()
+        calc = hashlib.scrypt(
+            pwd.encode("utf-8"),
+            salt=bytes.fromhex(salt_hex),
+            n=2**14, r=8, p=1
+        ).hex()
         return hmac.compare_digest(calc, hash_hex)
     except Exception:
         return False
@@ -107,7 +109,6 @@ except Exception as e:
 try:
     from core.service_router import available_providers, list_models, chat as provider_chat
 except Exception:
-    # Fallback mínimo se service_router falhar
     def available_providers():
         provs = []
         provs.append(("OpenRouter", bool(os.environ.get("OPENROUTER_API_KEY")), "OK" if os.environ.get("OPENROUTER_API_KEY") else "sem chave"))
@@ -126,7 +127,7 @@ except Exception:
     def provider_chat(model: str, messages: List[dict], **kw):
         raise RuntimeError("service_router indisponível.")
 
-# ---------- Database helpers (UI escolhe backend) ----------
+# ---------- Database helpers ----------
 try:
     from core.database import get_backend, set_backend, ping_db, get_col, db_status
 except Exception:
@@ -136,6 +137,28 @@ except Exception:
     def get_col(_name: str): raise RuntimeError("DB indisponível")
     def db_status(): return ("unknown", "core.database ausente")
 
+# Repositório (histórico/fatos) — safe fallback
+try:
+    from core.repositories import (
+        get_history_docs, get_history_docs_multi,
+        set_fact, get_fact, get_facts,
+        delete_user_history, delete_last_interaction, delete_all_user_data,
+        register_event, list_events,
+        save_interaction,
+    )
+except Exception:
+    def get_history_docs(_u: str, limit: int = 400): return []
+    def get_history_docs_multi(_keys: List[str], limit: int = 400): return []
+    def set_fact(*a, **k): ...
+    def get_fact(_u: str, _k: str, default=None): return default
+    def get_facts(_u: str): return {}
+    def delete_user_history(_u: str): return 0
+    def delete_last_interaction(_u: str): return False
+    def delete_all_user_data(_u: str): return {"hist": 0, "state": 0, "eventos": 0, "perfil": 0}
+    def register_event(*a, **k): ...
+    def list_events(_u: str, limit: int = 5): return []
+    def save_interaction(*a, **k): ...
+
 # ---------- Sidebar: Provedores + DB ----------
 st.sidebar.subheader("🧠 Provedores LLM")
 for name, ok, detail in available_providers():
@@ -144,11 +167,9 @@ for name, ok, detail in available_providers():
 st.sidebar.markdown("---")
 st.sidebar.subheader("🗄️ Banco de Dados")
 
-# Status atual
 bk, info = db_status()
 st.sidebar.caption(f"Backend: **{bk}** — {info}")
 
-# Escolha backend
 cur_backend = get_backend()
 choice_backend = st.sidebar.radio(
     "Backend",
@@ -162,12 +183,10 @@ if choice_backend != cur_backend:
     st.sidebar.success(f"Backend ajustado para **{choice_backend}**.")
     st.rerun()
 
-# Teste de conexão
 if st.sidebar.button("🔍 Testar conexão DB"):
     kind, ok, detail = ping_db()
     (st.sidebar.success if ok else st.sidebar.error)(f"{kind}: {detail}")
 
-# Teste de escrita rápida (apenas se get_col existir)
 if choice_backend == "mongo":
     mu = os.environ.get("MONGO_USER", "")
     mc = os.environ.get("MONGO_CLUSTER", "")
@@ -189,6 +208,7 @@ st.session_state.setdefault("character", "Mary")
 all_models = list_models(None)
 st.session_state.setdefault("model", (all_models[0] if all_models else "deepseek/deepseek-chat-v3-0324"))
 st.session_state.setdefault("history", [])  # List[Tuple[str, str]]
+st.session_state.setdefault("history_loaded_for", "")
 
 # ---------- Controles topo ----------
 c1, c2 = st.columns([2, 2])
@@ -218,7 +238,37 @@ if callable(render_sidebar):
 else:
     st.sidebar.caption("Sem preferências para esta personagem.")
 
-# ---------- Histórico render ----------
+# ---------- Helpers de histórico ----------
+def _user_keys_for_history(user_id: str, character_name: str) -> List[str]:
+    # chave principal por personagem + legado simples
+    ch = (character_name or "").strip().lower()
+    return [f"{user_id}::{ch}", user_id]
+
+def _reload_history():
+    user_id = str(st.session_state["user_id"])
+    char = str(st.session_state["character"])
+    key = f"{user_id}|{char}|{get_backend()}"
+    if st.session_state["history_loaded_for"] == key:
+        return
+    try:
+        keys = _user_keys_for_history(user_id, char)
+        docs = get_history_docs_multi(keys, limit=400) or []
+        hist: List[Tuple[str, str]] = []
+        for d in docs:
+            u = (d.get("mensagem_usuario") or "").strip()
+            a = (d.get("resposta_mary") or "").strip()
+            if u:
+                hist.append(("user", u))
+            if a:
+                hist.append(("assistant", a))
+        st.session_state["history"] = hist
+        st.session_state["history_loaded_for"] = key
+    except Exception as e:
+        st.sidebar.warning(f"Não foi possível carregar o histórico: {e}")
+
+_reload_history()
+
+# ---------- Render histórico ----------
 for role, content in st.session_state["history"]:
     with st.chat_message("user" if role == "user" else "assistant", avatar=("💬" if role == "user" else "💚")):
         st.markdown(content)
@@ -244,6 +294,9 @@ with st.expander("🔧 Diagnóstico LLM"):
 
 # ---------- Helper de chamada segura ----------
 def _safe_reply_call(_service, *, user: str, model: str, prompt: str) -> str:
+    # garante fallback para services que leem prompt do session_state
+    st.session_state["prompt"] = prompt
+
     fn = getattr(_service, "reply", None)
     if not callable(fn):
         raise RuntimeError("Service atual não expõe reply().")
@@ -277,6 +330,7 @@ if final_prompt:
     with st.chat_message("user"):
         st.markdown("🔁 **Continuar**" if auto_continue else final_prompt)
     st.session_state["history"].append(("user", "🔁 Continuar" if auto_continue else final_prompt))
+
     with st.spinner("Gerando…"):
         try:
             text = _safe_reply_call(
@@ -287,6 +341,7 @@ if final_prompt:
             )
         except Exception as e:
             text = f"Erro durante a geração:\n\n**{e.__class__.__name__}** — {e}\n\n```\n{traceback.format_exc()}\n```"
+
     with st.chat_message("assistant", avatar="💚"):
         st.markdown(text)
     st.session_state["history"].append(("assistant", text))
