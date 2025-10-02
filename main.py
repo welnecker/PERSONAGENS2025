@@ -1,59 +1,46 @@
-# app/main.py
+# main.py
 from __future__ import annotations
-import os
+
 import sys
-import streamlit as st
+from pathlib import Path
 
-# Garante que o diretório raiz esteja no PYTHONPATH
-HERE = os.path.dirname(os.path.abspath(__file__))
-ROOT = os.path.dirname(HERE)
-if ROOT not in sys.path:
-    sys.path.insert(0, ROOT)
+# --- assegura que o projeto raiz está no sys.path (Streamlit muda o CWD às vezes) ---
+ROOT = Path(__file__).resolve().parent
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 
-from characters.registry import get_service, list_characters  # noqa: E402
+import streamlit as st  # noqa: E402
 
+# tente importar o registry e mostre erro útil se falhar
+try:
+    from characters.registry import get_service, list_characters  # noqa: E402
+except Exception as e:  # mostra traceback na interface
+    import traceback
+    st.error("Falha ao importar `characters.registry`.\n\n"
+             f"**{e.__class__.__name__}:** {e}\n\n```\n{traceback.format_exc()}\n```")
+    st.stop()
 
-def main():
-    st.set_page_config(page_title="PERSONAGENS2025", page_icon="💚", layout="centered")
+st.set_page_config(page_title="PERSONAGENS 2025", page_icon="🎭", layout="wide")
 
-    # Sidebar — seleção de personagem
-    personagens = list_characters()
-    if not personagens:
-        st.error("Nenhuma personagem registrada em characters/registry.py")
-        return
+st.sidebar.title("Personagem")
+char_names = list_characters()
+choice = st.sidebar.selectbox("Escolha", char_names, index=char_names.index("Mary") if "Mary" in char_names else 0)
 
-    char = st.sidebar.selectbox("Personagem", personagens, index=0)
-    service = get_service(char)
+service = get_service(choice)
 
-    # Modelo (padrão do serviço, se houver)
-    default_model = getattr(service, "default_model", "gpt-4o-mini")
-    model = st.sidebar.text_input("Modelo", value=default_model)
+# desenha o sidebar específico da personagem
+service.render_sidebar(st.sidebar)
 
-    # Render do sidebar específico da personagem (se existir)
-    if hasattr(service, "render_sidebar"):
-        service.render_sidebar(st)  # cada serviço define seus campos/flags próprios
+st.title(service.title)
+user = st.text_input("Você:", placeholder="Escreva sua fala/cena aqui…")
+model = st.selectbox("Modelo", service.available_models(), index=0)
 
-    # Prompt
-    st.markdown(f"### {char}")
-    prompt = st.text_area("Mensagem", height=160, placeholder="Escreva a cena / fala...")
-
-    # Botão
-    if st.button("Enviar", type="primary", use_container_width=True):
-        if not prompt.strip():
-            st.warning("Escreva algo antes de enviar.")
-            return
-
-        # Usuário lógico (pode vir da sessão/autenticação)
-        usuario = st.session_state.get("usuario_key", "local")
-
+if st.button("Enviar", type="primary") or (user and st.session_state.get("enter_to_send", False)):
+    with st.spinner("Gerando…"):
         try:
-            resposta = service.gerar_resposta(usuario=usuario, prompt_usuario=prompt, model=model)
-            st.markdown(resposta)
+            reply = service.reply(user=user, model=model)
         except Exception as e:
-            st.exception(e)
-
-
-if __name__ == "__main__":
-    main()
-
-
+            import traceback
+            st.error(f"Erro durante a geração:\n\n**{e.__class__.__name__}:** {e}\n\n```\n{traceback.format_exc()}\n```")
+        else:
+            st.markdown(reply)
