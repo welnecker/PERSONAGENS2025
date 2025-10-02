@@ -48,12 +48,30 @@ def set_fact(usuario: str, key: str, value: Any, meta: Optional[Dict[str, Any]] 
     )
 
 def get_fact(usuario: str, key: str, default=None):
-    d = _state().find_one({"usuario": usuario}, {f"fatos.{key}": 1})
-    return (d or {}).get("fatos", {}).get(key, default)
+    try:
+        # NÃO passe projeção para database.find_one (API local trata 2º arg como "sort")
+        d = _state().find_one({"usuario": usuario})
+        if not d:
+            return default
+        fatos = d.get("fatos", {})
+        # suporta caminho com pontos, ex.: "perfil.idade"
+        cur = fatos
+        for part in (key or "").split("."):
+            if not isinstance(cur, dict) or part not in cur:
+                return default
+            cur = cur[part]
+        return default if cur is None else cur
+    except Exception:
+        return default
 
-def get_facts(usuario: str) -> Dict[str, Any]:
-    d = _state().find_one(_uq(usuario), {"fatos": 1}) or {}
-    return (d.get("fatos") or {})
+
+def get_facts(usuario: str) -> dict:
+    try:
+        d = _state().find_one({"usuario": usuario})
+        return d.get("fatos", {}) if d else {}
+    except Exception:
+        return {}
+
 
 def register_event(
     usuario: str,
