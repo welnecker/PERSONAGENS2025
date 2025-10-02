@@ -1,60 +1,57 @@
 # core/together.py
 from __future__ import annotations
-import os, httpx
-from typing import Dict, Any, Tuple
 
-TOGETHER_API_KEY = os.environ.get("TOGETHER_API_KEY", "")
-TOGETHER_BASE_URL = os.environ.get(
-    "TOGETHER_BASE_URL", "https://api.together.xyz/v1/chat/completions"
-)
+import os
+from typing import Any, Dict, List, Tuple, Optional
+
+TOGETHER_BASE_URL = "https://api.together.xyz/v1/chat/completions"
 
 def _headers() -> Dict[str, str]:
-    if not TOGETHER_API_KEY:
+    key = os.getenv("TOGETHER_API_KEY")
+    if not key:
         raise RuntimeError("TOGETHER_API_KEY não definido.")
     return {
-        "Authorization": f"Bearer {TOGETHER_API_KEY}",
+        "Authorization": f"Bearer {key}",
         "Content-Type": "application/json",
+        "Accept": "application/json",
     }
 
-def chat(payload: Dict[str, Any]) -> Tuple[Dict[str, Any], str, str]:
-    model = payload.get("model")
-    if not model:
-        raise ValueError("Payload sem 'model'.")
-    messages = payload.get("messages") or []
-    if not isinstance(messages, list) or not messages:
-        raise ValueError("Payload sem 'messages' válidas.")
+def chat(
+    messages: List[Dict[str, str]],
+    model: str,
+    max_tokens: int = 2048,
+    temperature: float = 0.7,
+    top_p: float = 0.9,
+    extra_params: Optional[Dict[str, Any]] = None,
+) -> Tuple[Dict[str, Any], str, str]:
+    """
+    Chama Together Chat Completions. Retorna (data, used_model, "together").
+    Importa httpx de forma preguiçosa para não quebrar o app se o pacote não estiver instalado.
+    """
+    try:
+        import httpx  # lazy import
+    except Exception as e:
+        raise RuntimeError("Pacote `httpx` não está instalado. Adicione em requirements.txt.") from e
 
     body: Dict[str, Any] = {
         "model": model,
         "messages": messages,
-        "temperature": payload.get("temperature", 0.6),
-        "top_p": payload.get("top_p", 0.9),
-        "max_tokens": payload.get("max_tokens", 1024),
-        "stream": False,
+        "max_tokens": max_tokens,
+        "temperature": temperature,
+        "top_p": top_p,
     }
-    for k in ("stop", "frequency_penalty", "presence_penalty", "logit_bias"):
-        if k in payload:
-            body[k] = payload[k]
+    if extra_params:
+        body.update(extra_params)
+
+    headers = _headers()
+    timeout = float(os.getenv("LLM_HTTP_TIMEOUT", "60"))
 
     try:
-        timeout = float(os.environ.get("LLM_HTTP_TIMEOUT", "60"))
         with httpx.Client(timeout=timeout) as client:
-            r = client.post(TOGETHER_BASE_URL, json=body, headers=_headers())
+            r = client.post(TOGETHER_BASE_URL, json=body, headers=headers)
             r.raise_for_status()
             data = r.json()
-            if not isinstance(data, dict) or "choices" not in data:
-                raise RuntimeError(f"Resposta inesperada Together: {data}")
             used = body["model"]
             return data, used, "together"
-    except httpx.HTTPStatusError as e:
-        status = e.response.status_code if e.response else "?"
-        text = ""
-        try:
-            text = e.response.text if e.response is not None else ""
-        except Exception:
-            pass
-        raise RuntimeError(f"Falha Together (HTTP {status}): {text or e}") from e
     except httpx.HTTPError as e:
         raise RuntimeError(f"Falha Together: {e}") from e
-    except Exception as e:
-        raise RuntimeError(f"Erro Together (genérico): {e}") from e
