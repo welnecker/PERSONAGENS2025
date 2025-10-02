@@ -1,57 +1,39 @@
 # core/together.py
-from __future__ import annotations
-
-import os
-from typing import Any, Dict, List, Tuple, Optional
+from typing import Any, Dict, List, Tuple
+import os, httpx
 
 TOGETHER_BASE_URL = "https://api.together.xyz/v1/chat/completions"
 
-def _headers() -> Dict[str, str]:
-    key = os.getenv("TOGETHER_API_KEY")
-    if not key:
-        raise RuntimeError("TOGETHER_API_KEY não definido.")
-    return {
-        "Authorization": f"Bearer {key}",
-        "Content-Type": "application/json",
-        "Accept": "application/json",
-    }
+DEFAULT_MODELS = [
+    "together/meta-llama/Meta-Llama-3.1-405B-Instruct-Turbo",
+    "together/Qwen/Qwen2.5-72B-Instruct",
+    "together/Qwen/QwQ-32B",
+]
 
-def chat(
-    messages: List[Dict[str, str]],
-    model: str,
-    max_tokens: int = 2048,
-    temperature: float = 0.7,
-    top_p: float = 0.9,
-    extra_params: Optional[Dict[str, Any]] = None,
-) -> Tuple[Dict[str, Any], str, str]:
-    """
-    Chama Together Chat Completions. Retorna (data, used_model, "together").
-    Importa httpx de forma preguiçosa para não quebrar o app se o pacote não estiver instalado.
-    """
-    try:
-        import httpx  # lazy import
-    except Exception as e:
-        raise RuntimeError("Pacote `httpx` não está instalado. Adicione em requirements.txt.") from e
+def chat(model: str, messages: List[Dict[str, str]], **kwargs: Any) -> Tuple[Dict[str, Any], str, str]:
+    api_key = os.environ.get("TOGETHER_API_KEY", "")
+    if not api_key:
+        raise RuntimeError("Together: falta TOGETHER_API_KEY.")
 
     body: Dict[str, Any] = {
-        "model": model,
+        "model": model.replace("together/", "", 1),
         "messages": messages,
-        "max_tokens": max_tokens,
-        "temperature": temperature,
-        "top_p": top_p,
+        "max_tokens": kwargs.get("max_tokens", 1024),
+        "temperature": kwargs.get("temperature", 0.7),
+        "top_p": kwargs.get("top_p", 0.95),
     }
-    if extra_params:
-        body.update(extra_params)
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+    }
 
-    headers = _headers()
-    timeout = float(os.getenv("LLM_HTTP_TIMEOUT", "60"))
-
+    timeout = float(os.environ.get("LLM_HTTP_TIMEOUT", "60"))
     try:
         with httpx.Client(timeout=timeout) as client:
             r = client.post(TOGETHER_BASE_URL, json=body, headers=headers)
             r.raise_for_status()
             data = r.json()
-            used = body["model"]
+            used = "together/" + body["model"]
             return data, used, "together"
     except httpx.HTTPError as e:
         raise RuntimeError(f"Falha Together: {e}") from e
