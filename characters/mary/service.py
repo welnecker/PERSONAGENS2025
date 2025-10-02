@@ -1,20 +1,20 @@
 # characters/mary/service.py
 from __future__ import annotations
-from typing import List, Dict, Any, Tuple
-
-import re
+from typing import List, Dict
 
 from core.common.base_service import BaseCharacter
-from core.common import SidebarSection  # você pode adicionar campos depois, se quiser
-from core.personas import get_persona
+from core.common import SidebarSection
 from core.service_router import route_chat_strict
 from core.repositories import save_interaction, get_history_docs
 from core.tokens import toklen
 
+# >>> Importa a persona da Mary deste pacote, não do core
+from .persona import get_persona
+
 
 def _montar_historico(usuario_key: str, history_boot: List[Dict[str, str]], limite_tokens: int = 120_000) -> List[Dict[str, str]]:
     """
-    Versão mínima local do montador de histórico.
+    Monta histórico compacto no formato OpenAI.
     """
     try:
         docs = get_history_docs(usuario_key) or []
@@ -40,30 +40,22 @@ def _montar_historico(usuario_key: str, history_boot: List[Dict[str, str]], limi
 
 class MaryService(BaseCharacter):
     """
-    Serviço mínimo e autônomo para Mary.
-    Não depende de core.service.
+    Serviço autônomo para Mary.
+    Depende apenas da persona local e utilitários comuns.
     """
-
     slug: str = "mary"
     display_name: str = "Mary"
 
-    # Se quiser campos no sidebar de Mary, defina aqui
     def get_sidebar_schema(self) -> List[SidebarSection]:
-        return []  # Mary não tem campos específicos (por enquanto)
+        # Mary sem campos específicos no sidebar (por enquanto)
+        return []
 
     def reply(self, user: str, model: str) -> str:
-        """
-        Gera a resposta da Mary usando apenas persona + histórico.
-        """
-        # Persona e few-shots da Mary vindos do módulo existente
         persona_text, history_boot = get_persona("Mary")
 
-        # Chave de histórico para Mary permanece apenas pelo usuário (sem sufixo)
-        usuario_key = self.session_user_key  # BaseCharacter fornece isso (user_id)
-        if not usuario_key:
-            usuario_key = "anon"
+        # Chave de histórico da Mary = apenas o usuário (sem sufixo de personagem)
+        usuario_key = self.session_user_key or "anon"
 
-        # Monta histórico compacto
         hist = _montar_historico(usuario_key, history_boot)
 
         messages: List[Dict[str, str]] = (
@@ -83,7 +75,7 @@ class MaryService(BaseCharacter):
         data, used_model, provider = route_chat_strict(model, payload)
         resposta = (data.get("choices", [{}])[0].get("message", {}) or {}).get("content", "") or ""
 
-        # Persiste para o histórico desta persona
+        # Persiste
         try:
             save_interaction(usuario_key, user, resposta, f"{provider}:{used_model}")
         except Exception:
