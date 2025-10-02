@@ -1,13 +1,12 @@
-# reexporta utilidades comuns
-from .base_service import BaseCharacter
+# core/common/__init__.py
 from .sidebar_types import (
     FieldSpec, SidebarSection,
-    field_bool, field_text, field_select, field_slider
+    text_field, textarea_field, checkbox_field, select_field,
+    number_field, slider_field, time_field, date_field,
 )
 
 __all__ = [
-    "BaseCharacter",
     "FieldSpec", "SidebarSection",
-    "field_bool", "field_text", "field_select", "field_slider",
+    "text_field", "textarea_field", "checkbox_field", "select_field",
+    "number_field", "slider_field", "time_field", "date_field",
 ]
-
