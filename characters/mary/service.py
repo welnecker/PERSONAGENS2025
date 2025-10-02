@@ -1,23 +1,17 @@
-from typing import List, Dict
+# characters/mary/service.py
+from __future__ import annotations
+from typing import List
 from core.common.base_service import BaseCharacter
-from core.common.sidebar_types import FieldSpec
-from .persona import PERSONA_TEXT, HISTORY_BOOT
+from core.service import gerar_resposta
 
 class MaryService(BaseCharacter):
-    name = "Mary"
-    aliases = ()
+    title = "Mary"
 
-    def persona_text(self) -> str: return PERSONA_TEXT
-    def history_boot(self) -> List[Dict[str,str]]: return HISTORY_BOOT
+    # Sidebar opcional (padrão no-op da base já serve)
+    def available_models(self) -> List[str]:
+        return ["gpt-5"]
 
-    def style_guide(self, nsfw_on: bool, flirt_mode: bool, romance_on: bool) -> str:
-        base = "ESTILO: eu; 3–5 parágrafos; 1–2 frases cada; flerte com humor; sem metacena."
-        nsfw = " NSFW ON: sensual leve e consentida; sem vulgaridade." if nsfw_on else " NSFW OFF."
-        return base + nsfw
-
-    def sidebar_schema(self):
-        return [
-            FieldSpec("flirt_mode","Modo flerte","bool",default=False),
-            FieldSpec("local_cena_atual","Local atual","select",choices=["","casa","praia","loja"], default="casa"),
-        ]
+    def reply(self, user: str, model: str) -> str:
+        # Chama o core genérico com o nome da personagem
+        return gerar_resposta(usuario="GLOBAL", prompt_usuario=user, model=model, character=self.title)
 
