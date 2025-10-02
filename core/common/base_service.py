@@ -1,6 +1,5 @@
 from abc import ABC, abstractmethod
 from typing import Any, Dict, List, Tuple
-
 from core.common.sidebar_types import FieldSpec
 
 class BaseCharacter(ABC):
@@ -9,9 +8,12 @@ class BaseCharacter(ABC):
 
     # Persona
     @abstractmethod
-    def persona_text(self) -> str: ...
+    def persona_text(self) -> str:
+        pass
+
     @abstractmethod
-    def history_boot(self) -> List[Dict[str, str]]: ...
+    def history_boot(self) -> List[Dict[str, str]]:
+        pass
 
     # Estilo e few-shots
     def style_guide(self, nsfw_on: bool, flirt_mode: bool, romance_on: bool) -> str:
@@ -41,4 +43,5 @@ class BaseCharacter(ABC):
 
     def post_generation(self, text: str, user_prompt: str, usuario_key: str) -> str:
         return text
+
 
