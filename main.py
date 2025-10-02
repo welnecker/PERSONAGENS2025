@@ -202,6 +202,86 @@ if choice_backend == "mongo":
 
 st.sidebar.markdown("---")
 
+# ---------- Sidebar: Manutenção ----------
+st.sidebar.markdown("---")
+st.sidebar.subheader("🧹 Manutenção")
+
+def _force_reload_history():
+    # força recarga do histórico na próxima render
+    st.session_state["history"] = []
+    st.session_state["history_loaded_for"] = ""
+
+# chaves alvo (por personagem e legado)
+_user_id = str(st.session_state.get("user_id", ""))
+_char    = str(st.session_state.get("character", "")).strip().lower()
+_key_primary = f"{_user_id}::{_char}" if _user_id and _char else _user_id
+_key_legacy  = _user_id
+
+colA, colB = st.sidebar.columns(2)
+
+# Apagar último turno (tenta por-personagem; se não houver, tenta legado)
+if colA.button("⏪ Apagar último turno"):
+    try:
+        deleted = False
+        try:
+            deleted = delete_last_interaction(_key_primary)
+        except Exception:
+            pass
+        if not deleted:
+            try:
+                deleted = delete_last_interaction(_key_legacy)
+            except Exception:
+                pass
+
+        if deleted:
+            st.sidebar.success("Último turno apagado.")
+            _force_reload_history()
+            st.rerun()
+        else:
+            st.sidebar.info("Não havia interações para apagar.")
+    except Exception as e:
+        st.sidebar.error(f"Falha ao apagar último turno: {e}")
+
+# Resetar histórico (apaga TODAS as interações, mantém memórias/fatos/eventos)
+if colB.button("🔄 Resetar histórico"):
+    try:
+        n1 = 0
+        n2 = 0
+        try:
+            n1 = delete_user_history(_key_primary)
+        except Exception:
+            pass
+        try:
+            n2 = delete_user_history(_key_legacy)
+        except Exception:
+            pass
+        total = int(n1 or 0) + int(n2 or 0)
+        st.sidebar.success(f"Histórico apagado ({total} itens).")
+        _force_reload_history()
+        st.rerun()
+    except Exception as e:
+        st.sidebar.error(f"Falha ao resetar histórico: {e}")
+
+# Apagar TUDO (interações + fatos + eventos)
+if st.sidebar.button("🧨 Apagar TUDO (chat + memórias)"):
+    try:
+        # Executa para ambas as chaves (personagem e legado)
+        try:
+            delete_all_user_data(_key_primary)
+        except Exception:
+            pass
+        try:
+            delete_all_user_data(_key_legacy)
+        except Exception:
+            pass
+
+        st.sidebar.success("Tudo apagado para este usuário/personagem.")
+        _force_reload_history()
+        st.rerun()
+    except Exception as e:
+        st.sidebar.error(f"Falha ao apagar TUDO: {e}")
+
+
 # ---------- Estado base ----------
 st.session_state.setdefault("user_id", "Janio Donisete")
 st.session_state.setdefault("character", "Mary")
