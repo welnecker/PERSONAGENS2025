@@ -30,7 +30,7 @@ def _pick(*names: str, default: str = "") -> str:
         if val is None:
             val = os.getenv(name)
         if val not in (None, ""):
-            return str(val)
+            return str(val).strip()
     return str(default)
 
 
@@ -47,6 +47,7 @@ class _Settings:
     MONGO_USER: str = _pick("MONGO_USER", default="")
     MONGO_PASS: str = _pick("MONGO_PASS", default="")
     MONGO_CLUSTER: str = _pick("MONGO_CLUSTER", default="")
+    MONGO_DB: str = _pick("MONGO_DB", default=APP_NAME)
 
     # LLM timeout
     LLM_HTTP_TIMEOUT: str = _pick("LLM_HTTP_TIMEOUT", default="60")
@@ -81,6 +82,8 @@ class _Settings:
             os.environ.setdefault("MONGO_PASS", self.MONGO_PASS)
         if self.MONGO_CLUSTER:
             os.environ.setdefault("MONGO_CLUSTER", self.MONGO_CLUSTER)
+        if self.MONGO_DB:
+            os.environ.setdefault("MONGO_DB", self.MONGO_DB)
 
         # OpenRouter
         if self.OPENROUTER_API_KEY:
@@ -99,8 +102,11 @@ class _Settings:
         if not (self.MONGO_USER and self.MONGO_PASS and self.MONGO_CLUSTER):
             return ""
         from urllib.parse import quote_plus
+        # Faz URL-encode em user e pass por segurança
+        user_q = quote_plus(self.MONGO_USER)
+        pass_q = quote_plus(self.MONGO_PASS)
         return (
-            f"mongodb+srv://{self.MONGO_USER}:{quote_plus(self.MONGO_PASS)}"
+            f"mongodb+srv://{user_q}:{pass_q}"
             f"@{self.MONGO_CLUSTER}/?retryWrites=true&w=majority&appName={self.APP_NAME}"
         )
 
