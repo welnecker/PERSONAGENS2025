@@ -2,96 +2,63 @@
 from __future__ import annotations
 
 import os
-import httpx
-from typing import Dict, Any, Tuple
+from typing import Any, Dict, List, Tuple, Optional
 
-OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY", "")
-OPENROUTER_BASE_URL = os.environ.get(
-    "OPENROUTER_BASE_URL",
-    "https://openrouter.ai/api/v1/chat/completions",
-)
+OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1/chat/completions"
 
-# Cabeçalhos opcionais recomendados pela OpenRouter (melhor roteamento/quotas)
-OPENROUTER_SITE_URL = os.environ.get(
-    "OPENROUTER_SITE_URL",
-    "https://github.com/welnecker/PERSONAGENS2025",
-)
-OPENROUTER_APP_NAME = os.environ.get(
-    "OPENROUTER_APP_NAME",
-    "PERSONAGENS2025",
-)
-
-def _build_headers() -> Dict[str, str]:
-    if not OPENROUTER_API_KEY:
-        raise RuntimeError("OPENROUTER_API_KEY não definido no ambiente/secrets.")
-
+def _headers() -> Dict[str, str]:
+    key = os.getenv("OPENROUTER_API_KEY")
+    if not key:
+        raise RuntimeError("OPENROUTER_API_KEY não definido.")
     headers = {
-        "Authorization": f"Bearer {OPENROUTER_API_KEY}",
+        "Authorization": f"Bearer {key}",
         "Content-Type": "application/json",
+        "Accept": "application/json",
     }
-    # Campos opcionais: ajudam a OpenRouter a identificar o app
-    if OPENROUTER_SITE_URL:
-        headers["HTTP-Referer"] = OPENROUTER_SITE_URL
-    if OPENROUTER_APP_NAME:
-        headers["X-Title"] = OPENROUTER_APP_NAME
+    # headers opcionais
+    site = os.getenv("OPENROUTER_SITE_URL")
+    app = os.getenv("OPENROUTER_APP_NAME")
+    if site:
+        headers["HTTP-Referer"] = site
+        headers["X-Title"] = app or "PERSONAGENS2025"
     return headers
 
-
-def chat(payload: Dict[str, Any]) -> Tuple[Dict[str, Any], str, str]:
+def chat(
+    messages: List[Dict[str, str]],
+    model: str,
+    max_tokens: int = 2048,
+    temperature: float = 0.7,
+    top_p: float = 0.9,
+    extra_params: Optional[Dict[str, Any]] = None,
+) -> Tuple[Dict[str, Any], str, str]:
     """
-    Envia uma chamada de chat para a OpenRouter (API estilo OpenAI).
-    Espera payload com: model, messages, temperature, top_p, max_tokens.
-    Retorna: (data_json, used_model, "openrouter")
+    Chama OpenRouter Chat Completions. Retorna (data, used_model, "openrouter").
+    Importa httpx de forma preguiçosa para não quebrar o app se o pacote não estiver instalado.
     """
-    model = payload.get("model")
-    if not model:
-        raise ValueError("Payload sem 'model'.")
-
-    messages = payload.get("messages", [])
-    if not isinstance(messages, list) or not messages:
-        raise ValueError("Payload sem 'messages' válidas.")
+    try:
+        import httpx  # lazy import
+    except Exception as e:
+        raise RuntimeError("Pacote `httpx` não está instalado. Adicione em requirements.txt.") from e
 
     body: Dict[str, Any] = {
         "model": model,
         "messages": messages,
-        "temperature": payload.get("temperature", 0.6),
-        "top_p": payload.get("top_p", 0.9),
-        "max_tokens": payload.get("max_tokens", 1024),
-        "stream": False,
+        "max_tokens": max_tokens,
+        "temperature": temperature,
+        "top_p": top_p,
     }
+    if extra_params:
+        body.update(extra_params)
 
-    # Repasse opcional de campos suportados, se presentes
-    for k in ("stop", "frequency_penalty", "presence_penalty", "logit_bias"):
-        if k in payload:
-            body[k] = payload[k]
-
-    headers = _build_headers()
+    headers = _headers()
+    timeout = float(os.getenv("LLM_HTTP_TIMEOUT", "60"))
 
     try:
-        timeout = float(os.environ.get("LLM_HTTP_TIMEOUT", "60"))
         with httpx.Client(timeout=timeout) as client:
             r = client.post(OPENROUTER_BASE_URL, json=body, headers=headers)
             r.raise_for_status()
             data = r.json()
-
-            if not isinstance(data, dict) or "choices" not in data:
-                raise RuntimeError(f"Resposta inesperada da OpenRouter: {data}")
-
-            used_model = (data.get("model") or body["model"]) if isinstance(data, dict) else body["model"]
-            return data, used_model, "openrouter"
-
-    except httpx.HTTPStatusError as e:
-        # Mensagens específicas úteis (429, 401, etc.)
-        status = e.response.status_code if e.response else "?"
-        text = ""
-        try:
-            text = e.response.text if e.response is not None else ""
-        except Exception:
-            pass
-        raise RuntimeError(f"Falha OpenRouter (HTTP {status}): {text or e}") from e
-
+            used = body["model"]
+            return data, used, "openrouter"
     except httpx.HTTPError as e:
         raise RuntimeError(f"Falha OpenRouter: {e}") from e
-
-    except Exception as e:
-        raise RuntimeError(f"Erro OpenRouter (genérico): {e}") from e
