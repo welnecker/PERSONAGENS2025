@@ -3,9 +3,7 @@ from __future__ import annotations
 
 import os
 import sys
-import time
-import hmac
-import hashlib
+import inspect
 import traceback
 from pathlib import Path
 from typing import Optional, List, Tuple
@@ -17,8 +15,10 @@ ROOT = Path(__file__).resolve().parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-
 # ============ Gate opcional por senha ============
+import time, hmac, hashlib  # noqa: E402
+
+
 def _check_scrypt(pwd: str) -> bool:
     cfg = st.secrets.get("auth", {})
     salt_hex = cfg.get("salt", "")
@@ -37,9 +37,8 @@ def _check_scrypt(pwd: str) -> bool:
 
 
 def require_password_if_configured(app_name: str = "PERSONAGENS 2025"):
-    # Só ativa se houver bloco "auth" em secrets
     if "auth" not in st.secrets:
-        return
+        return  # sem configuração de auth → segue
 
     st.session_state.setdefault("_auth_ok", False)
     st.session_state.setdefault("_auth_attempts", 0)
@@ -77,12 +76,13 @@ def require_password_if_configured(app_name: str = "PERSONAGENS 2025"):
     st.stop()
 
 
-# ============ Config inicial ============
+# ============ Config página ============
 st.set_page_config(page_title="PERSONAGENS 2025", page_icon="🎭", layout="wide")
 require_password_if_configured("PERSONAGENS 2025")
+st.title("PERSONAGENS 2025")
 
-
-# ============ Registry de personagens ============
+# ============ Imports do app ============
+# Registry de personagens
 try:
     from characters.registry import get_service, list_characters  # noqa: E402
 except Exception as e:
@@ -90,224 +90,231 @@ except Exception as e:
              f"**{e.__class__.__name__}:** {e}\n\n```\n{traceback.format_exc()}\n```")
     st.stop()
 
-
-# ============ Router de provedores/modelos ============
+# Router de provedores/modelos
 try:
-    from core.service_router import available_providers as _avail_providers, list_models as _list_models  # noqa: E402
+    from core.service_router import available_providers, list_models, route_chat_strict  # noqa: E402
 except Exception:
-    _avail_providers = None
-    _list_models = None
-
-
-def _available_providers_norm() -> List[Tuple[str, bool, str]]:
-    """
-    Normaliza para lista de tuplas (nome, habilitado, detalhe).
-    Aceita retorno oficial (lista de tuplas) ou fallback (lista de strings).
-    """
-    if callable(_avail_providers):
-        try:
-            provs = _avail_providers() or []
-        except Exception:
-            provs = []
-    else:
+    # Fallback mínimo se service_router falhar
+    def available_providers():
         provs = []
-        if os.environ.get("OPENROUTER_API_KEY"):
-            provs.append(("OpenRouter", True, "OK"))
-        if os.environ.get("TOGETHER_API_KEY"):
-            provs.append(("Together", True, "OK"))
+        if os.getenv("OPENROUTER_API_KEY") or st.secrets.get("OPENROUTER_API_KEY"):
+            provs.append("openrouter")
+        if os.getenv("TOGETHER_API_KEY") or st.secrets.get("TOGETHER_API_KEY"):
+            provs.append("together")
+        return provs or ["mock"]
 
-    norm: List[Tuple[str, bool, str]] = []
-    for p in provs:
-        if isinstance(p, (list, tuple)):
-            name = str(p[0])
-            enabled = bool(p[1]) if len(p) >= 2 else True
-            detail = str(p[2]) if len(p) >= 3 else ""
-            norm.append((name, enabled, detail))
-        else:
-            norm.append((str(p), True, ""))
-    if not norm:
-        norm = [("OpenRouter", False, "sem chave"), ("Together", False, "sem chave")]
-    return norm
+    def list_models(provider: str):
+        if provider == "openrouter":
+            return [
+                "deepseek/deepseek-chat-v3-0324",
+                "anthropic/claude-3.5-haiku",
+                "qwen/qwen3-max",
+                "nousresearch/hermes-3-llama-3.1-405b",
+            ]
+        if provider == "together":
+            return [
+                "together/meta-llama/Meta-Llama-3.1-405B-Instruct-Turbo",
+                "together/Qwen/Qwen2.5-72B-Instruct",
+                "together/Qwen/QwQ-32B",
+            ]
+        return ["mock/gpt-5-mini"]
 
+# DB backend (para diagnóstico)
+DB_BACKEND = "unknown"
+try:
+    from core.database import get_col  # noqa: E402
+    # tenta expor BACKEND se definido no __init__.py do pacote
+    try:
+        from core.database import BACKEND as DB_BACKEND  # type: ignore
+    except Exception:
+        DB_BACKEND = os.getenv("DB_BACKEND", "unknown")
+except Exception:
+    get_col = None  # type: ignore
 
-def _list_models_norm(provider: str) -> List[str]:
-    if callable(_list_models):
-        try:
-            return _list_models(provider) or []
-        except Exception:
-            pass
-    # Fallback
-    if provider == "OpenRouter":
-        return [
-            "deepseek/deepseek-chat-v3-0324",
-            "anthropic/claude-3.5-haiku",
-            "qwen/qwen3-max",
-            "nousresearch/hermes-3-llama-3.1-405b",
-        ]
-    if provider == "Together":
-        return [
-            "together/meta-llama/Meta-Llama-3.1-405B-Instruct-Turbo",
-            "together/Qwen/Qwen2.5-72B-Instruct",
-            "together/Qwen/QwQ-32B",
-        ]
-    return ["mock/gpt-5-mini"]
+# NSFW (opcional)
+try:
+    from core.nsfw import nsfw_enabled  # noqa: E402
+except Exception:
+    def nsfw_enabled(_user: str) -> bool:
+        return False
 
 
 # ============ Estado base ============
-st.session_state.setdefault("user_id", "Visitante")
-st.session_state.setdefault("history", [])  # [(role, text)]
+st.session_state.setdefault("user_id", "Janio Donisete")
 st.session_state.setdefault("character", "Mary")
 st.session_state.setdefault("provider", None)
 st.session_state.setdefault("model", None)
+st.session_state.setdefault("history", [])  # type: List[Tuple[str, str]]
 
-# ============ Sidebar: Personagem ============
-st.sidebar.title("Personagem")
-characters = list_characters()
-default_idx = characters.index("Mary") if "Mary" in characters else 0
-choice = st.sidebar.selectbox("Escolha", characters, index=default_idx)
-service = get_service(choice)
+# ============ Sidebar ============
+st.sidebar.title("Configuração")
 
-# Render do sidebar específico da personagem
+# Personagem
+try:
+    chars = list_characters() or ["Mary", "Laura", "Nerith"]
+except Exception:
+    chars = ["Mary", "Laura", "Nerith"]
+if st.session_state["character"] not in chars:
+    st.session_state["character"] = chars[0]
+
+character = st.sidebar.selectbox("Personagem", chars, index=chars.index(st.session_state["character"]))
+st.session_state["character"] = character
+
+# Provedor
+providers = available_providers()
+if not providers:
+    providers = ["mock"]
+if st.session_state["provider"] not in providers:
+        # preferir openrouter, depois together
+    default_provider = "openrouter" if "openrouter" in providers else providers[0]
+    st.session_state["provider"] = default_provider
+
+provider = st.sidebar.selectbox("Provedor", providers, index=providers.index(st.session_state["provider"]))
+st.session_state["provider"] = provider
+
+# Modelos
+models = list_models(provider) or ["mock/gpt-5-mini"]
+if (st.session_state["model"] not in models):
+    st.session_state["model"] = models[0]
+
+model = st.sidebar.selectbox("Modelo", models, index=models.index(st.session_state["model"]))
+st.session_state["model"] = model
+
+# Diagnóstico de chaves
+or_ok = bool(os.getenv("OPENROUTER_API_KEY") or st.secrets.get("OPENROUTER_API_KEY"))
+tg_ok = bool(os.getenv("TOGETHER_API_KEY") or st.secrets.get("TOGETHER_API_KEY"))
+st.sidebar.markdown("### Diagnóstico")
+st.sidebar.caption(f"OpenRouter: {'OK' if or_ok else '—'} | Together: {'OK' if tg_ok else '—'}")
+st.sidebar.caption(f"DB backend: **{DB_BACKEND or 'unknown'}**")
+
+# Ping DB
+def _db_ping() -> str:
+    if not get_col:
+        return "get_col indisponível (core.database não importado)."
+    try:
+        col = get_col("healthcheck")
+        col.insert_one({"k": "ping", "ts": time.time()})
+        doc = col.find_one({"k": "ping"}, sort=[("ts", -1)])
+        return "OK" if doc else "falhou"
+    except Exception as e:
+        return f"erro: {e}"
+
+if st.sidebar.button("🔎 Testar DB"):
+    st.sidebar.info(f"DB ping: {_db_ping()}")
+
+# Ping provedor/modelo
+def _llm_ping() -> str:
+    try:
+        payload = {
+            "model": st.session_state["model"],
+            "messages": [
+                {"role": "system", "content": "Você é um sistema de saúde do app."},
+                {"role": "user", "content": "Responda exatamente: PONG."}
+            ],
+            "max_tokens": 8,
+            "temperature": 0.0,
+        }
+        data, used, prov = route_chat_strict(st.session_state["model"], payload, provider=st.session_state["provider"])
+        # extrai texto de forma robusta
+        txt = ""
+        try:
+            txt = (data.get("choices", [{}])[0].get("message", {}) or {}).get("content", "") or ""
+            if not txt:
+                txt = data.get("choices", [{}])[0].get("text", "") or ""
+        except Exception:
+            pass
+        if "PONG" in txt.upper():
+            return f"OK ({prov}:{used})"
+        return f"resposta inesperada ({prov}:{used}): {txt[:80]!r}"
+    except Exception as e:
+        return f"erro: {e}"
+
+if st.sidebar.button("🛰️ Ping modelo"):
+    st.sidebar.info(f"LLM ping: {_llm_ping()}")
+
+st.sidebar.markdown("---")
+
+# ============ Instancia service da personagem ============
+service = get_service(character)
+
+# Sidebar específico do serviço (defensivo)
 render_sidebar = getattr(service, "render_sidebar", None)
 if callable(render_sidebar):
     try:
         render_sidebar(st.sidebar)
     except Exception as e:
-        st.sidebar.error(f"Erro no sidebar de {getattr(service, 'title', choice)}:\n\n"
-                         f"**{e.__class__.__name__}:** {e}\n\n```\n{traceback.format_exc()}\n```")
+        st.sidebar.error(f"Erro no sidebar de {service.title}:\n\n**{e.__class__.__name__}:** {e}\n\n"
+                         f"```\n{traceback.format_exc()}\n```")
 else:
-    st.sidebar.caption("Sem preferências específicas para esta personagem.")
+    st.sidebar.caption("Sem preferências específicas.")
 
-st.sidebar.markdown("---")
+# Badge NSFW e local atual
+try:
+    # Mary usa chave simples; outras isolam por personagem
+    user_key = st.session_state["user_id"] if character == "Mary" else f"{st.session_state['user_id']}::{character.lower()}"
+    nsfw_badge = "✅ NSFW ON" if nsfw_enabled(user_key) else "🔒 NSFW OFF"
+except Exception:
+    nsfw_badge = "?"
 
-# ============ Sidebar: Provedor / Modelo ============
-provs = _available_providers_norm()
-prov_labels = [f"{name} {'✅' if ok else '⛔'}" + (f" · {detail}" if detail else "")
-               for (name, ok, detail) in provs]
+st.sidebar.markdown(f"**NSFW:** {nsfw_badge}")
+st.sidebar.caption(f"Provedor atual: **{provider}**")
+st.sidebar.caption(f"Modelo atual: **{model}**")
 
-default_provider_idx = 0
-for i, (_, ok, _) in enumerate(provs):
-    if ok:
-        default_provider_idx = i
-        break
-
-prov_choice_idx = st.sidebar.selectbox(
-    "Provedor",
-    list(range(len(provs))),
-    format_func=lambda i: prov_labels[i],
-    index=default_provider_idx
-)
-provider = provs[prov_choice_idx][0]
-
-models = _list_models_norm(provider)
-if not models:
-    models = ["mock/gpt-5-mini"]
-model = st.sidebar.selectbox("Modelo", models, index=0)
-
-# Persistir no estado
-st.session_state["character"] = choice
-st.session_state["provider"] = provider
-st.session_state["model"] = model
-
-# ============ Topo / Identidade ============
-st.title(getattr(service, "title", choice))
-user_id = st.text_input("👤 Usuário", value=st.session_state["user_id"])
-st.session_state["user_id"] = user_id.strip() or "Visitante"
-
-# ============ Histórico ============
+# ============ Histórico simples ============
 for role, content in st.session_state["history"]:
-    with st.chat_message("user" if role == "user" else "assistant", avatar=("💬" if role == "user" else "💚")):
-        st.markdown(content)
+    if role == "user":
+        with st.chat_message("user"):
+            st.markdown(content)
+    else:
+        with st.chat_message("assistant", avatar="💚"):
+            st.markdown(content)
 
-# Campo do usuário e botão Continuar
-colA, colB = st.columns([4, 1])
-with colA:
-    user_prompt = st.chat_input(f"Fale com {choice}")
-with colB:
-    continuar = st.button("▶️ Continuar", use_container_width=True)
+# ============ Entrada ============
+with st.container():
+    c1, c2 = st.columns([4, 1])
+    with c1:
+        prompt = st.chat_input(f"Mensagem para {character}")
+    with c2:
+        cont = st.button("▶️ Continuar")
 
-prompt: Optional[str] = None
-if continuar and not user_prompt:
-    prompt = (
-        "CONTINUAR: Prossiga a cena exatamente de onde parou. "
-        "Mantenha LOCAL_ATUAL e o tom. Avance ação e diálogo em 1ª pessoa."
+final_prompt: Optional[str] = None
+if cont and not prompt:
+    final_prompt = (
+        "CONTINUAR: Prossiga a cena exatamente de onde a última resposta parou. "
+        "Mantenha LOCAL_ATUAL, personagens presentes e tom. Não resuma; avance a ação e o diálogo em 1ª pessoa."
     )
-elif user_prompt:
-    prompt = user_prompt
-
-
-# ============ Compat: chamar reply() em qualquer formato ============
-def _call_reply_any(service_obj, *, user: str, model: str, prompt: str) -> str:
-    """
-    Tenta várias assinaturas de reply():
-      1) reply(user=..., model=..., prompt=...)
-      2) reply(user=..., model=..., text=...)
-      3) reply(user=..., model=..., message=...)
-      4) (atributo) service.user_prompt = prompt; reply(user=..., model=...)
-      5) fallback posicional
-    """
-    tried = []
-
-    # 1) nova assinatura
-    try:
-        return service_obj.reply(user=user, model=model, prompt=prompt)
-    except TypeError as e:
-        tried.append(f"prompt kw: {e}")
-
-    # 2) variantes de nome
-    for alt_kw in ("text", "message", "input_text"):
-        try:
-            return service_obj.reply(user=user, model=model, **{alt_kw: prompt})
-        except TypeError as e:
-            tried.append(f"{alt_kw} kw: {e}")
-
-    # 3) atributo para serviços legados
-    try:
-        setattr(service_obj, "user_prompt", prompt)
-        return service_obj.reply(user=user, model=model)
-    except TypeError as e:
-        tried.append(f"attr+2args: {e}")
-
-    # 4) fallback posicional
-    try:
-        return service_obj.reply(user, model, prompt)  # type: ignore[misc]
-    except TypeError as e:
-        tried.append(f"pos3: {e}")
-    try:
-        return service_obj.reply(user, model)  # type: ignore[misc]
-    except Exception as e:
-        tried.append(f"pos2: {e}")
-
-    raise TypeError("Formato de reply() incompatível. Tentativas: " + " | ".join(tried))
-
+elif prompt:
+    final_prompt = prompt
 
 # ============ Geração ============
-if prompt:
-    st.session_state["history"].append(("user", "🔁 Continuar" if (continuar and not user_prompt) else prompt))
+def _call_reply(_service, *, prompt_text: str) -> str:
+    """Chama reply com introspecção para aceitar assinaturas diferentes."""
+    sig = inspect.signature(_service.reply)
+    kwargs = {}
+    if "user" in sig.parameters:
+        kwargs["user"] = st.session_state["user_id"]
+    if "model" in sig.parameters:
+        kwargs["model"] = st.session_state["model"]
+    if "provider" in sig.parameters:
+        kwargs["provider"] = st.session_state["provider"]
+    if "prompt" in sig.parameters:
+        kwargs["prompt"] = prompt_text
+    if "text" in sig.parameters and "prompt" not in sig.parameters:
+        kwargs["text"] = prompt_text  # compatibilidade com serviços antigos
+    return _service.reply(**kwargs)
+
+if final_prompt:
+    # eco da mensagem do usuário
     with st.chat_message("user"):
-        st.markdown("🔁 **Continuar**" if (continuar and not user_prompt) else prompt)
+        st.markdown("🔁 **Continuar**" if (cont and not prompt) else final_prompt)
+    st.session_state["history"].append(("user", "🔁 Continuar" if (cont and not prompt) else final_prompt))
 
     with st.spinner("Gerando…"):
         try:
-            reply = _call_reply_any(
-                service,
-                user=st.session_state["user_id"],
-                model=st.session_state["model"],
-                prompt=prompt,
-            )
+            reply = _call_reply(service, prompt_text=final_prompt)
         except Exception as e:
             reply = f"Erro durante a geração:\n\n**{e.__class__.__name__}:** {e}\n\n```\n{traceback.format_exc()}\n```"
 
     with st.chat_message("assistant", avatar="💚"):
         st.markdown(reply)
     st.session_state["history"].append(("assistant", reply))
-
-
-# ============ Rodapé / Diagnóstico ============
-with st.expander("⚙️ Diagnóstico rápido"):
-    st.write("**Provedores detectados:**")
-    for name, ok, detail in provs:
-        st.write(f"- {name}: {'OK' if ok else 'NÃO CONFIGURADO'} {f'({detail})' if detail else ''}")
-    st.write("**Modelo atual:**", model)
-    st.write("**Personagem:**", choice)
-    st.write("**Usuário:**", st.session_state["user_id"])
