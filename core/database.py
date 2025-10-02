@@ -1,50 +1,59 @@
 # core/database.py
 from __future__ import annotations
 
-from typing import Any, Dict, Iterable, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Iterable, Tuple
 from threading import RLock
-import uuid
 import os
+import uuid
+import datetime as _dt
 
 from .config import settings
 
-# --------- Tentativa de usar PyMongo (opcional) ---------
-try:
-    from pymongo import MongoClient
-    HAVE_PYMONGO = True
-except Exception:
-    HAVE_PYMONGO = False
+# ===================== Estado global do backend =====================
+_BACKEND = os.getenv("DB_BACKEND", "").strip().lower() or "memory"
 
-_CLIENT: Optional["MongoClient"] = None
-_BACKEND: Optional[str] = None
-_REASON: str = ""
+def get_backend() -> str:
+    return _BACKEND
 
+def set_backend(kind: str) -> None:
+    global _BACKEND
+    kind = (kind or "").strip().lower()
+    _BACKEND = "mongo" if kind == "mongo" else "memory"
 
-# ===================== BACKEND: MEMÓRIA =====================
+# Se houver credenciais de Mongo, defaulta para mongo
+if settings.mongo_uri():
+    _BACKEND = os.getenv("DB_BACKEND", _BACKEND)
+    if _BACKEND not in ("memory", "mongo"):
+        _BACKEND = "mongo"
+
+# ===================== Implementação: Memória =====================
 _STORE: Dict[str, List[Dict[str, Any]]] = {}
 _LOCK = RLock()
 
+def _match_simple(doc: Dict[str, Any], filt: Optional[Dict[str, Any]]) -> bool:
+    if not filt:
+        return True
+    for k, v in filt.items():
+        # suporte mínimo a $in
+        if isinstance(v, dict) and "$in" in v:
+            if doc.get(k) not in v["$in"]:
+                return False
+        else:
+            if doc.get(k) != v:
+                return False
+    return True
 
-def _include_projection(doc: Dict[str, Any], proj: Optional[Dict[str, int]]) -> Dict[str, Any]:
-    """Suporte simples a projeção de inclusão (valores 1)."""
-    if not proj:
-        return dict(doc)
-    include_keys = [k for k, v in proj.items() if v]
-    if not include_keys:
-        return dict(doc)
-    out = {"_id": doc.get("_id")}
-    for k in include_keys:
-        # suporte raso (sem dots) para uso típico do app
-        if "." in k:
-            # projeções com dot: melhor retornar doc inteiro do que falhar
-            return dict(doc)
-        if k in doc:
-            out[k] = doc[k]
-    return out
-
+def _get_nested(d: Dict[str, Any], dotted: str, default=None):
+    cur = d
+    for part in dotted.split("."):
+        if not isinstance(cur, dict):
+            return default
+        cur = cur.get(part)
+        if cur is None:
+            return default
+    return cur
 
 class MemoryCollection:
-    """Coleção em memória com API similar ao PyMongo Collection."""
     def __init__(self, name: str):
         self.name = name
         _STORE.setdefault(name, [])
@@ -53,128 +62,169 @@ class MemoryCollection:
         with _LOCK:
             d = dict(doc)
             d.setdefault("_id", str(uuid.uuid4()))
+            d.setdefault("ts", _dt.datetime.utcnow())
             _STORE[self.name].append(d)
             return {"inserted_id": d["_id"]}
 
-    def _match(self, doc: Dict[str, Any], filt: Optional[Dict[str, Any]]) -> bool:
-        if not filt:
-            return True
-        for k, v in filt.items():
-            if isinstance(v, dict) and "$in" in v:
-                if doc.get(k) not in v["$in"]:
-                    return False
-            else:
-                if doc.get(k) != v:
-                    return False
-        return True
-
     def find(
         self,
-        filter: Optional[Dict[str, Any]] = None,
-        projection: Optional[Dict[str, int]] = None,
+        filt: Optional[Dict[str, Any]] = None,
         sort: Optional[List[Tuple[str, int]]] = None,
         limit: Optional[int] = None,
     ) -> Iterable[Dict[str, Any]]:
         with _LOCK:
-            rows = [d.copy() for d in _STORE.get(self.name, []) if self._match(d, filter)]
+            rows = [d.copy() for d in _STORE.get(self.name, []) if _match_simple(d, filt)]
         if sort:
+            # aplica múltiplas chaves, da última para a primeira
             for key, direction in reversed(sort):
-                rows.sort(key=lambda x: x.get(key), reverse=(direction < 0))
+                rows.sort(
+                    key=lambda x: _get_nested(x, key, None),
+                    reverse=(direction or 1) < 0
+                )
         if limit:
             rows = rows[:limit]
-        if projection:
-            rows = [_include_projection(d, projection) for d in rows]
         return rows
 
     def find_one(
         self,
-        filter: Optional[Dict[str, Any]] = None,
-        projection: Optional[Dict[str, int]] = None,
+        filt: Optional[Dict[str, Any]] = None,
         sort: Optional[List[Tuple[str, int]]] = None,
     ) -> Optional[Dict[str, Any]]:
-        rows = list(self.find(filter=filter, projection=projection, sort=sort, limit=1))
+        rows = list(self.find(filt=filt, sort=sort, limit=1))
         return rows[0] if rows else None
 
-    def update_one(self, filter: Dict[str, Any], update: Dict[str, Any], upsert: bool = False) -> None:
+    def update_one(self, filt: Dict[str, Any], update: Dict[str, Any], upsert: bool = False) -> None:
         with _LOCK:
             rows = _STORE.get(self.name, [])
             for d in rows:
-                if self._match(d, filter):
-                    if "$set" in update and isinstance(update["$set"], dict):
-                        d.update(update["$set"])
+                if _match_simple(d, filt):
+                    if "$set" in update:
+                        # suporta set com dotted paths simples
+                        for k, v in update["$set"].items():
+                            parts = k.split(".")
+                            cur = d
+                            for p in parts[:-1]:
+                                if p not in cur or not isinstance(cur[p], dict):
+                                    cur[p] = {}
+                                cur = cur[p]
+                            cur[parts[-1]] = v
                     else:
                         d.update(update)
                     return
             if upsert:
-                doc = dict(filter)
-                if "$set" in update and isinstance(update["$set"], dict):
-                    doc.update(update["$set"])
+                doc = dict(filt)
+                if "$set" in update:
+                    # aplica $set
+                    for k, v in update["$set"].items():
+                        parts = k.split(".")
+                        cur = doc
+                        for p in parts[:-1]:
+                            if p not in cur or not isinstance(cur[p], dict):
+                                cur[p] = {}
+                            cur = cur[p]
+                        cur[parts[-1]] = v
                 self.insert_one(doc)
 
-    def delete_many(self, filter: Dict[str, Any]) -> int:
+    def delete_many(self, filt: Dict[str, Any]) -> int:
         with _LOCK:
             rows = _STORE.get(self.name, [])
             before = len(rows)
-            rows[:] = [d for d in rows if not self._match(d, filter)]
+            rows[:] = [d for d in rows if not _match_simple(d, filt)]
             return before - len(rows)
 
+# ===================== Implementação: Mongo (opcional) =====================
+_MONGO_OK = False
+_mongo_client = None
+_mongo_db = None
 
-# ===================== SELEÇÃO DO BACKEND =====================
-def _try_connect_mongo() -> bool:
-    global _CLIENT, _REASON
-    if not HAVE_PYMONGO:
-        _REASON = "pymongo não instalado"
-        return False
+def _ensure_mongo():
+    global _MONGO_OK, _mongo_client, _mongo_db
+    if _mongo_db is not None:
+        return
     uri = settings.mongo_uri()
     if not uri:
-        _REASON = "mongo_uri vazio (falta DB_BACKEND=mongo ou credenciais)"
-        return False
+        _MONGO_OK = False
+        return
     try:
-        timeout = float(os.getenv("LLM_HTTP_TIMEOUT", settings.LLM_HTTP_TIMEOUT or "60"))
+        from pymongo import MongoClient
+        _mongo_client = MongoClient(uri)
+        _mongo_db = _mongo_client.get_database(settings.APP_NAME)
+        _MONGO_OK = True
     except Exception:
-        timeout = 60.0
-    try:
-        _CLIENT = MongoClient(uri, serverSelectionTimeoutMS=int(timeout * 1000))
-        # Sanity ping
-        _CLIENT.admin.command("ping")
-        _REASON = "conectado"
-        return True
-    except Exception as e:
-        _CLIENT = None
-        _REASON = f"falha de conexão: {e}"
-        return False
+        _MONGO_OK = False
+        _mongo_client = None
+        _mongo_db = None
 
+class MongoCollection:
+    def __init__(self, name: str):
+        _ensure_mongo()
+        if not _MONGO_OK:
+            raise RuntimeError("Mongo não inicializado.")
+        self._col = _mongo_db.get_collection(name)
 
-def _choose_backend() -> str:
-    global _BACKEND
-    if _BACKEND:
-        return _BACKEND
-    if (settings.DB_BACKEND or "").lower() == "mongo":
-        if _try_connect_mongo():
-            _BACKEND = "mongo"
-            return _BACKEND
-        # se não conectar, cai para memória
-    _BACKEND = "memory"
-    return _BACKEND
+    def insert_one(self, doc: Dict[str, Any]) -> Dict[str, Any]:
+        d = dict(doc)
+        d.setdefault("ts", _dt.datetime.utcnow())
+        r = self._col.insert_one(d)
+        return {"inserted_id": str(r.inserted_id)}
 
+    def find(
+        self,
+        filt: Optional[Dict[str, Any]] = None,
+        sort: Optional[List[Tuple[str, int]]] = None,
+        limit: Optional[int] = None,
+    ) -> Iterable[Dict[str, Any]]:
+        cur = self._col.find(filt or {})
+        if sort:
+            cur = cur.sort(sort)
+        if limit:
+            cur = cur.limit(limit)
+        return list(cur)
 
-# ===================== API PÚBLICA =====================
+    def find_one(
+        self,
+        filt: Optional[Dict[str, Any]] = None,
+        sort: Optional[List[Tuple[str, int]]] = None,
+    ) -> Optional[Dict[str, Any]]:
+        if sort:
+            cur = self._col.find(filt or {}).sort(sort).limit(1)
+            rows = list(cur)
+            return rows[0] if rows else None
+        return self._col.find_one(filt or {})
+
+    def update_one(self, filt: Dict[str, Any], update: Dict[str, Any], upsert: bool = False) -> None:
+        self._col.update_one(filt, update, upsert=upsert)
+
+    def delete_many(self, filt: Dict[str, Any]) -> int:
+        return self._col.delete_many(filt or {}).deleted_count
+
+# ===================== API pública =====================
 def get_col(name: str):
-    """
-    Retorna Collection (PyMongo) ou MemoryCollection (fallback).
-    A API usada no projeto (insert_one, find, find_one, update_one, delete_many)
-    está coberta em ambos.
-    """
-    if _choose_backend() == "mongo" and _CLIENT is not None:
-        db = _CLIENT.get_database(settings.APP_NAME)
-        return db.get_collection(name)
+    """Retorna uma coleção de acordo com o backend atual."""
+    if get_backend() == "mongo":
+        try:
+            return MongoCollection(name)
+        except Exception:
+            # fallback duro para memória se Mongo falhar
+            return MemoryCollection(name)
     return MemoryCollection(name)
 
-
 def db_status() -> Tuple[str, str]:
-    """
-    Retorna (backend, detalhe). Útil para mostrar no sidebar.
-    """
-    backend = _choose_backend()
-    detail = "Mongo — " + _REASON if backend == "mongo" else "Memory — " + (_REASON or "fallback")
-    return backend, detail
+    """(backend, detalhe)"""
+    b = get_backend()
+    if b == "mongo":
+        _ensure_mongo()
+        return ("mongo", "OK" if _MONGO_OK else "indisponível")
+    return ("memory", "memória local")
+
+def ping_db() -> Tuple[str, bool, str]:
+    """(backend, ok, detalhe) — faz um insert+read+delete na coleção 'diagnostic'."""
+    b = get_backend()
+    try:
+        col = get_col("diagnostic")
+        rid = col.insert_one({"marker": "ping", "ts": _dt.datetime.utcnow()}).get("inserted_id")
+        last = col.find_one(sort=[("ts", -1)])
+        col.delete_many({"marker": "ping"})
+        return (b, True, f"OK (id={rid}) — last_ts={last.get('ts') if last else '—'}")
+    except Exception as e:
+        return (b, False, f"{type(e).__name__}: {e}")
