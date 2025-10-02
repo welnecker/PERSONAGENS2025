@@ -1,5 +1,7 @@
-streamlit>=1.37
 pymongo[srv]>=4.6
 dnspython>=2.4   # (vem com [srv], mas deixar explícito evita surpresas)
 requests>=2.31
 pydantic>=2
+streamlit>=1.35.0
+httpx>=0.27.0
+python-dotenv>=1.0.1
