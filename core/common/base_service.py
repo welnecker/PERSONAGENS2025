@@ -1,47 +1,26 @@
-from abc import ABC, abstractmethod
-from typing import Any, Dict, List, Tuple
-from core.common.sidebar_types import FieldSpec
+# core/common/base_service.py
+from __future__ import annotations
+from typing import List
 
-class BaseCharacter(ABC):
-    name: str = "Character"
-    aliases: Tuple[str, ...] = ()
+class BaseCharacter:
+    """Base concreta com defaults seguros (no-op)."""
 
-    # Persona
-    @abstractmethod
-    def persona_text(self) -> str:
-        pass
+    title: str = "Personagem"
 
-    @abstractmethod
-    def history_boot(self) -> List[Dict[str, str]]:
-        pass
+    def render_sidebar(self, sb) -> None:
+        """Default: sem opções específicas."""
+        try:
+            sb.caption("Sem preferências para esta personagem.")
+        except Exception:
+            # Em ambientes sem UI (ex.: testes), apenas ignore
+            pass
 
-    # Estilo e few-shots
-    def style_guide(self, nsfw_on: bool, flirt_mode: bool, romance_on: bool) -> str:
-        return "ESTILO: primeira pessoa. Frases curtas. 3–5 parágrafos. Sem metacena."
+    def available_models(self) -> List[str]:
+        """Default: retorna uma lista de modelos padrão."""
+        return ["gpt-5"]
 
-    def fewshots(self, flirt_mode: bool, nsfw_on: bool, romance_on: bool) -> List[Dict[str, str]]:
-        return []
-
-    # Sidebar
-    def sidebar_schema(self) -> List[FieldSpec]:
-        return []
-
-    def on_sidebar_change(self, usuario_key: str, values: Dict[str, Any]) -> None:
-        pass
-
-    # Geração (delegado ao pipeline comum)
-    def gerar_resposta(self, usuario: str, prompt: str, model: str) -> str:
-        from core.engine.pipeline import generate_response
-        return generate_response(self, usuario, prompt, model)
-
-    # Hooks opcionais do pipeline
-    def refine_post(self, text: str, user_prompt: str, nsfw_on: bool) -> str:
-        return text
-
-    def enforce_scope(self, text: str, user_prompt: str) -> str:
-        return text
-
-    def post_generation(self, text: str, user_prompt: str, usuario_key: str) -> str:
-        return text
+    def reply(self, user: str, model: str) -> str:
+        """Obrigatório sobrescrever nas personagens."""
+        raise NotImplementedError("reply() não implementado para esta personagem.")
 
 
