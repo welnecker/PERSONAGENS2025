@@ -23,9 +23,21 @@ except Exception:
         return txt, []
 
 
+# characters/mary/service.py (trecho)
+
 class MaryService(BaseCharacter):
-    id: str = "mary"
-    display_name: str = "Mary"
+    # ...
+    def reply(self, user: str, model: str, provider: str, prompt: str) -> str:
+        payload = {
+            "messages": self._build_messages(user, prompt),
+            "max_tokens": 2048,
+            "temperature": 0.6,
+            "top_p": 0.9,
+            "provider": provider,  # <<< importante!
+        }
+        data, used, prov = route_chat_strict(model, payload)
+        return (data.get("choices", [{}])[0].get("message", {}) or {}).get("content", "") or ""
+
 
     # ===== utilidades internas =====
     def _load_persona(self) -> (str, List[Dict[str, str]]):
