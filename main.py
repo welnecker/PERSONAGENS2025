@@ -8,7 +8,7 @@ import hmac
 import hashlib
 import traceback
 from pathlib import Path
-from typing import Optional, List, Tuple, Any
+from typing import Optional, List, Tuple
 
 import streamlit as st
 
@@ -92,19 +92,17 @@ except Exception as e:
 
 
 # ============ Router de provedores/modelos ============
-# Funções oficiais (com fallback caso o módulo não exista)
 try:
     from core.service_router import available_providers as _avail_providers, list_models as _list_models  # noqa: E402
 except Exception:
     _avail_providers = None
     _list_models = None
 
+
 def _available_providers_norm() -> List[Tuple[str, bool, str]]:
     """
-    Normaliza o retorno para uma lista de tuplas (nome, habilitado, detalhe).
-    Aceita:
-      - core.service_router.available_providers() → List[Tuple[str, bool, str]]
-      - Fallback: list[str]
+    Normaliza para lista de tuplas (nome, habilitado, detalhe).
+    Aceita retorno oficial (lista de tuplas) ou fallback (lista de strings).
     """
     if callable(_avail_providers):
         try:
@@ -121,7 +119,6 @@ def _available_providers_norm() -> List[Tuple[str, bool, str]]:
     norm: List[Tuple[str, bool, str]] = []
     for p in provs:
         if isinstance(p, (list, tuple)):
-            # (name, enabled[, detail])
             name = str(p[0])
             enabled = bool(p[1]) if len(p) >= 2 else True
             detail = str(p[2]) if len(p) >= 3 else ""
@@ -129,7 +126,6 @@ def _available_providers_norm() -> List[Tuple[str, bool, str]]:
         else:
             norm.append((str(p), True, ""))
     if not norm:
-        # Nenhum provedor configurado → exibe placeholders
         norm = [("OpenRouter", False, "sem chave"), ("Together", False, "sem chave")]
     return norm
 
@@ -171,7 +167,7 @@ default_idx = characters.index("Mary") if "Mary" in characters else 0
 choice = st.sidebar.selectbox("Escolha", characters, index=default_idx)
 service = get_service(choice)
 
-# Render do sidebar específico da personagem (propriedades próprias)
+# Render do sidebar específico da personagem
 render_sidebar = getattr(service, "render_sidebar", None)
 if callable(render_sidebar):
     try:
@@ -188,7 +184,7 @@ st.sidebar.markdown("---")
 provs = _available_providers_norm()
 prov_labels = [f"{name} {'✅' if ok else '⛔'}" + (f" · {detail}" if detail else "")
                for (name, ok, detail) in provs]
-# default: primeiro habilitado; senão primeiro da lista
+
 default_provider_idx = 0
 for i, (_, ok, _) in enumerate(provs):
     if ok:
@@ -218,7 +214,7 @@ st.title(getattr(service, "title", choice))
 user_id = st.text_input("👤 Usuário", value=st.session_state["user_id"])
 st.session_state["user_id"] = user_id.strip() or "Visitante"
 
-# ============ Corpo / Histórico ============
+# ============ Histórico ============
 for role, content in st.session_state["history"]:
     with st.chat_message("user" if role == "user" else "assistant", avatar=("💬" if role == "user" else "💚")):
         st.markdown(content)
@@ -239,17 +235,62 @@ if continuar and not user_prompt:
 elif user_prompt:
     prompt = user_prompt
 
+
+# ============ Compat: chamar reply() em qualquer formato ============
+def _call_reply_any(service_obj, *, user: str, model: str, prompt: str) -> str:
+    """
+    Tenta várias assinaturas de reply():
+      1) reply(user=..., model=..., prompt=...)
+      2) reply(user=..., model=..., text=...)
+      3) reply(user=..., model=..., message=...)
+      4) (atributo) service.user_prompt = prompt; reply(user=..., model=...)
+      5) fallback posicional
+    """
+    tried = []
+
+    # 1) nova assinatura
+    try:
+        return service_obj.reply(user=user, model=model, prompt=prompt)
+    except TypeError as e:
+        tried.append(f"prompt kw: {e}")
+
+    # 2) variantes de nome
+    for alt_kw in ("text", "message", "input_text"):
+        try:
+            return service_obj.reply(user=user, model=model, **{alt_kw: prompt})
+        except TypeError as e:
+            tried.append(f"{alt_kw} kw: {e}")
+
+    # 3) atributo para serviços legados
+    try:
+        setattr(service_obj, "user_prompt", prompt)
+        return service_obj.reply(user=user, model=model)
+    except TypeError as e:
+        tried.append(f"attr+2args: {e}")
+
+    # 4) fallback posicional
+    try:
+        return service_obj.reply(user, model, prompt)  # type: ignore[misc]
+    except TypeError as e:
+        tried.append(f"pos3: {e}")
+    try:
+        return service_obj.reply(user, model)  # type: ignore[misc]
+    except Exception as e:
+        tried.append(f"pos2: {e}")
+
+    raise TypeError("Formato de reply() incompatível. Tentativas: " + " | ".join(tried))
+
+
 # ============ Geração ============
 if prompt:
-    # adiciona mensagem do usuário ao histórico local
     st.session_state["history"].append(("user", "🔁 Continuar" if (continuar and not user_prompt) else prompt))
     with st.chat_message("user"):
         st.markdown("🔁 **Continuar**" if (continuar and not user_prompt) else prompt)
 
     with st.spinner("Gerando…"):
         try:
-            # Todas as services expõem reply(user, model, prompt)
-            reply = service.reply(
+            reply = _call_reply_any(
+                service,
                 user=st.session_state["user_id"],
                 model=st.session_state["model"],
                 prompt=prompt,
@@ -262,12 +303,11 @@ if prompt:
     st.session_state["history"].append(("assistant", reply))
 
 
-# ============ Rodapé / Ajuda ============
+# ============ Rodapé / Diagnóstico ============
 with st.expander("⚙️ Diagnóstico rápido"):
     st.write("**Provedores detectados:**")
     for name, ok, detail in provs:
         st.write(f"- {name}: {'OK' if ok else 'NÃO CONFIGURADO'} {f'({detail})' if detail else ''}")
-
     st.write("**Modelo atual:**", model)
     st.write("**Personagem:**", choice)
     st.write("**Usuário:**", st.session_state["user_id"])
