@@ -202,86 +202,6 @@ if choice_backend == "mongo":
 
 st.sidebar.markdown("---")
 
-# ---------- Sidebar: Manutenção ----------
-st.sidebar.markdown("---")
-st.sidebar.subheader("🧹 Manutenção")
-
-def _force_reload_history():
-    # força recarga do histórico na próxima render
-    st.session_state["history"] = []
-    st.session_state["history_loaded_for"] = ""
-
-# chaves alvo (por personagem e legado)
-_user_id = str(st.session_state.get("user_id", ""))
-_char    = str(st.session_state.get("character", "")).strip().lower()
-_key_primary = f"{_user_id}::{_char}" if _user_id and _char else _user_id
-_key_legacy  = _user_id
-
-colA, colB = st.sidebar.columns(2)
-
-# Apagar último turno (tenta por-personagem; se não houver, tenta legado)
-if colA.button("⏪ Apagar último turno"):
-    try:
-        deleted = False
-        try:
-            deleted = delete_last_interaction(_key_primary)
-        except Exception:
-            pass
-        if not deleted:
-            try:
-                deleted = delete_last_interaction(_key_legacy)
-            except Exception:
-                pass
-
-        if deleted:
-            st.sidebar.success("Último turno apagado.")
-            _force_reload_history()
-            st.rerun()
-        else:
-            st.sidebar.info("Não havia interações para apagar.")
-    except Exception as e:
-        st.sidebar.error(f"Falha ao apagar último turno: {e}")
-
-# Resetar histórico (apaga TODAS as interações, mantém memórias/fatos/eventos)
-if colB.button("🔄 Resetar histórico"):
-    try:
-        n1 = 0
-        n2 = 0
-        try:
-            n1 = delete_user_history(_key_primary)
-        except Exception:
-            pass
-        try:
-            n2 = delete_user_history(_key_legacy)
-        except Exception:
-            pass
-        total = int(n1 or 0) + int(n2 or 0)
-        st.sidebar.success(f"Histórico apagado ({total} itens).")
-        _force_reload_history()
-        st.rerun()
-    except Exception as e:
-        st.sidebar.error(f"Falha ao resetar histórico: {e}")
-
-# Apagar TUDO (interações + fatos + eventos)
-if st.sidebar.button("🧨 Apagar TUDO (chat + memórias)"):
-    try:
-        # Executa para ambas as chaves (personagem e legado)
-        try:
-            delete_all_user_data(_key_primary)
-        except Exception:
-            pass
-        try:
-            delete_all_user_data(_key_legacy)
-        except Exception:
-            pass
-
-        st.sidebar.success("Tudo apagado para este usuário/personagem.")
-        _force_reload_history()
-        st.rerun()
-    except Exception as e:
-        st.sidebar.error(f"Falha ao apagar TUDO: {e}")
-
-
 # ---------- Estado base ----------
 st.session_state.setdefault("user_id", "Janio Donisete")
 st.session_state.setdefault("character", "Mary")
@@ -289,6 +209,7 @@ all_models = list_models(None)
 st.session_state.setdefault("model", (all_models[0] if all_models else "deepseek/deepseek-chat-v3-0324"))
 st.session_state.setdefault("history", [])  # List[Tuple[str, str]]
 st.session_state.setdefault("history_loaded_for", "")
+st.session_state.setdefault("_active_key", "")  # <- para detectar troca de thread
 
 # ---------- Controles topo ----------
 c1, c2 = st.columns([2, 2])
@@ -300,6 +221,51 @@ with c2:
     st.selectbox("🎭 Personagem", names, index=default_idx, key="character")
 
 st.selectbox("🧠 Modelo", list_models(None), key="model")
+
+# ---------- Helpers de histórico ----------
+def _user_keys_for_history(user_id: str, character_name: str) -> List[str]:
+    """
+    Retorna as chaves a consultar no histórico.
+    - Para Mary: inclui chave legada (user_id).
+    - Para demais personagens: SOMENTE a chave por-personagem (user_id::personagem).
+    """
+    ch = (character_name or "").strip().lower()
+    primary = f"{user_id}::{ch}"
+    if ch == "mary":
+        return [primary, user_id]  # inclui legado
+    return [primary]
+
+def _reload_history(force: bool = False):
+    user_id = str(st.session_state["user_id"])
+    char = str(st.session_state["character"])
+    # chave única da thread ativa, incluindo backend (para evitar “cache” cruzado)
+    key = f"{user_id}|{char}|{get_backend()}"
+    if not force and st.session_state["history_loaded_for"] == key:
+        return
+    try:
+        keys = _user_keys_for_history(user_id, char)
+        docs = get_history_docs_multi(keys, limit=400) or []
+        hist: List[Tuple[str, str]] = []
+        for d in docs:
+            u = (d.get("mensagem_usuario") or "").strip()
+            a = (d.get("resposta_mary") or "").strip()
+            if u:
+                hist.append(("user", u))
+            if a:
+                hist.append(("assistant", a))
+        st.session_state["history"] = hist
+        st.session_state["history_loaded_for"] = key
+    except Exception as e:
+        st.sidebar.warning(f"Não foi possível carregar o histórico: {e}")
+
+# ---------- Troca de thread ao mudar usuário/personagem ----------
+_current_active = f"{st.session_state['user_id']}::{str(st.session_state['character']).lower()}"
+if st.session_state["_active_key"] != _current_active:
+    st.session_state["_active_key"] = _current_active
+    # limpa tela e força recarga do histórico certo
+    st.session_state["history"] = []
+    st.session_state["history_loaded_for"] = ""
+    _reload_history(force=True)
 
 # ---------- Instancia serviço ----------
 try:
@@ -318,34 +284,85 @@ if callable(render_sidebar):
 else:
     st.sidebar.caption("Sem preferências para esta personagem.")
 
-# ---------- Helpers de histórico ----------
-def _user_keys_for_history(user_id: str, character_name: str) -> List[str]:
-    # chave principal por personagem + legado simples
-    ch = (character_name or "").strip().lower()
-    return [f"{user_id}::{ch}", user_id]
+# ---------- Sidebar: Manutenção ----------
+st.sidebar.markdown("---")
+st.sidebar.subheader("🧹 Manutenção")
 
-def _reload_history():
-    user_id = str(st.session_state["user_id"])
-    char = str(st.session_state["character"])
-    key = f"{user_id}|{char}|{get_backend()}"
-    if st.session_state["history_loaded_for"] == key:
-        return
+def _force_reload_history_ui():
+    st.session_state["history"] = []
+    st.session_state["history_loaded_for"] = ""
+    _reload_history(force=True)
+
+_user_id = str(st.session_state.get("user_id", ""))
+_char    = str(st.session_state.get("character", "")).strip().lower()
+_key_primary = f"{_user_id}::{_char}" if _user_id and _char else _user_id
+# chave legada só para Mary
+_key_legacy  = _user_id if _char == "mary" else None
+
+colA, colB = st.sidebar.columns(2)
+
+# Apagar último turno
+if colA.button("⏪ Apagar último turno"):
     try:
-        keys = _user_keys_for_history(user_id, char)
-        docs = get_history_docs_multi(keys, limit=400) or []
-        hist: List[Tuple[str, str]] = []
-        for d in docs:
-            u = (d.get("mensagem_usuario") or "").strip()
-            a = (d.get("resposta_mary") or "").strip()
-            if u:
-                hist.append(("user", u))
-            if a:
-                hist.append(("assistant", a))
-        st.session_state["history"] = hist
-        st.session_state["history_loaded_for"] = key
-    except Exception as e:
-        st.sidebar.warning(f"Não foi possível carregar o histórico: {e}")
+        deleted = False
+        try:
+            deleted = delete_last_interaction(_key_primary)
+        except Exception:
+            pass
+        if not deleted and _key_legacy:
+            try:
+                deleted = delete_last_interaction(_key_legacy)
+            except Exception:
+                pass
 
+        if deleted:
+            st.sidebar.success("Último turno apagado.")
+            _force_reload_history_ui()
+            st.rerun()
+        else:
+            st.sidebar.info("Não havia interações para apagar.")
+    except Exception as e:
+        st.sidebar.error(f"Falha ao apagar último turno: {e}")
+
+# Resetar histórico
+if colB.button("🔄 Resetar histórico"):
+    try:
+        total = 0
+        try:
+            total += int(delete_user_history(_key_primary) or 0)
+        except Exception:
+            pass
+        if _key_legacy:
+            try:
+                total += int(delete_user_history(_key_legacy) or 0)
+            except Exception:
+                pass
+        st.sidebar.success(f"Histórico apagado ({total} itens).")
+        _force_reload_history_ui()
+        st.rerun()
+    except Exception as e:
+        st.sidebar.error(f"Falha ao resetar histórico: {e}")
+
+# Apagar TUDO
+if st.sidebar.button("🧨 Apagar TUDO (chat + memórias)"):
+    try:
+        try:
+            delete_all_user_data(_key_primary)
+        except Exception:
+            pass
+        if _key_legacy:
+            try:
+                delete_all_user_data(_key_legacy)
+            except Exception:
+                pass
+
+        st.sidebar.success("Tudo apagado para este usuário/personagem.")
+        _force_reload_history_ui()
+        st.rerun()
+    except Exception as e:
+        st.sidebar.error(f"Falha ao apagar TUDO: {e}")
+
+# ---------- Carrega histórico (primeiro render / pós-ops) ----------
 _reload_history()
 
 # ---------- Render histórico ----------
