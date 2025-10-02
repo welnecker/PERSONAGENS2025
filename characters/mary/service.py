@@ -1,9 +1,7 @@
 # characters/mary/service.py
 from __future__ import annotations
 
-import streamlit as st
 from typing import List, Dict
-
 from core.common.base_service import BaseCharacter
 from core.service_router import route_chat_strict
 from core.repositories import save_interaction, get_history_docs
@@ -11,7 +9,7 @@ from core.tokens import toklen
 
 try:
     # Persona específica da Mary (ideal se existir characters/mary/persona.py)
-    from .persona import get_persona  # -> retorna (persona_text: str, history_boot: List[Dict[str,str]])
+    from .persona import get_persona  # -> (persona_text: str, history_boot: List[Dict[str, str]])
 except Exception:
     # Fallback simples
     def get_persona() -> (str, List[Dict[str, str]]):
@@ -23,34 +21,61 @@ except Exception:
         return txt, []
 
 
-# characters/mary/service.py (trecho)
-
 class MaryService(BaseCharacter):
-    # ...
-    def reply(self, user: str, model: str, provider: str, prompt: str) -> str:
+    title = "Mary"
+
+    # ===== API exigida pelo app =====
+    def available_models(self):
+        # Deixe None para o main listar todos os modelos disponíveis
+        return None
+
+    def render_sidebar(self, container) -> None:
+        container.markdown("**Mary** — madura, leve, flerte com humor. 1–2 frases por parágrafo.")
+
+    def reply(self, user: str, model: str, prompt: str) -> str:
+        """
+        Assinatura compatível com main.py:
+        reply(user=..., model=..., prompt=...)
+        """
+        prompt = (prompt or "").strip()
+        if not prompt:
+            return ""
+
+        persona_text, history_boot = self._load_persona()
+
+        # 🔑 Para Mary usamos a chave simples (compatível com seu main.py)
+        usuario_key = user
+
+        messages: List[Dict[str, str]] = (
+            [{"role": "system", "content": persona_text}]
+            + self._montar_historico(usuario_key, history_boot)
+            + [{"role": "user", "content": prompt}]
+        )
+
         payload = {
-            "messages": self._build_messages(user, prompt),
-            "max_tokens": 2048,
+            "model": model,
+            "messages": messages,
+            "max_tokens": 1024,
             "temperature": 0.6,
             "top_p": 0.9,
-            "provider": provider,  # <<< importante!
         }
-        data, used, prov = route_chat_strict(model, payload)
-        return (data.get("choices", [{}])[0].get("message", {}) or {}).get("content", "") or ""
 
+        data, used_model, provider = route_chat_strict(model, payload)
+        texto = (data.get("choices", [{}])[0].get("message", {}) or {}).get("content", "") or ""
+
+        # Fallback suave caso retorne vazio
+        if not texto.strip():
+            payload2 = {**payload, "temperature": 0.4}
+            data2, used_model, provider = route_chat_strict(model, payload2)
+            texto = (data2.get("choices", [{}])[0].get("message", {}) or {}).get("content", "") or ""
+
+        # Persistência
+        save_interaction(usuario_key, prompt, texto, f"{provider}:{used_model}")
+        return texto
 
     # ===== utilidades internas =====
     def _load_persona(self) -> (str, List[Dict[str, str]]):
         return get_persona()
-
-    def _get_user_prompt(self) -> str:
-        return (
-            st.session_state.get("chat_input")
-            or st.session_state.get("user_input")
-            or st.session_state.get("last_user_message")
-            or st.session_state.get("prompt")
-            or ""
-        ).strip()
 
     def _montar_historico(
         self,
@@ -65,7 +90,7 @@ class MaryService(BaseCharacter):
         out: List[Dict[str, str]] = []
         for d in reversed(docs):
             u = d.get("mensagem_usuario") or ""
-            a = d.get("resposta_mary") or ""  # mantemos o mesmo campo usado no restante do app
+            a = d.get("resposta_mary") or ""
             t = toklen(u) + toklen(a)
             if total + t > limite_tokens:
                 break
@@ -73,33 +98,3 @@ class MaryService(BaseCharacter):
             out.append({"role": "assistant", "content": a})
             total += t
         return list(reversed(out)) if out else history_boot[:]
-
-    # ===== API exigida por BaseCharacter =====
-    def reply(self, user: str, model: str) -> str:
-        prompt = self._get_user_prompt()
-        if not prompt:
-            return ""
-
-        persona_text, history_boot = self._load_persona()
-        # ⚠️ NÃO usar self.session_user_key (não existe). Use o argumento user:
-        usuario_key = f"{user}::mary"
-
-        messages: List[Dict[str, str]] = (
-            [{"role": "system", "content": persona_text}]
-            + self._montar_historico(usuario_key, history_boot)
-            + [{"role": "user", "content": prompt}]
-        )
-
-        data, used_model, provider = route_chat_strict(model, {
-            "model": model,
-            "messages": messages,
-            "max_tokens": 1024,
-            "temperature": 0.6,
-            "top_p": 0.9,
-        })
-        texto = (data.get("choices", [{}])[0].get("message", {}) or {}).get("content", "") or ""
-        save_interaction(usuario_key, prompt, texto, f"{provider}:{used_model}")
-        return texto
-
-    def render_sidebar(self, container) -> None:
-        container.markdown("**Mary** — madura, leve, flerte com humor. 1–2 frases por parágrafo.")
