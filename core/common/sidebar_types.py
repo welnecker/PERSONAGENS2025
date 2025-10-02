@@ -1,8 +1,3 @@
-# 🧱 Core comum
-
-## `core/common/sidebar_types.py`
-
-```python
 from dataclasses import dataclass
 from typing import Any, List, Optional, Dict, Callable
 
@@ -12,7 +7,7 @@ FieldType = str  # "bool" | "text" | "select" | "datetime" | "note" | "int" | "f
 class FieldSpec:
     key: str
     label: str
-    type: FieldType
+    kind: FieldType = "text"      # <-- era 'type'
     help: str = ""
     default: Any = None
     choices: Optional[List[str]] = None
