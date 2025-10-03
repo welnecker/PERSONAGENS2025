@@ -18,7 +18,23 @@ ROOT = Path(__file__).resolve().parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-st.set_page_config(page_title="PERSONAGENS 2025", page_icon="🎭", layout="wide")
+st.set_page_config(page_title="PERSONAGENS 2025", page_icon="🎭", layout="centered")
+
+# limite de largura do conteúdo (ex.: 820px)
+st.markdown(
+    """
+    <style>
+      .block-container {
+        max-width: 820px;
+        padding-top: 1rem;
+        padding-bottom: 4rem;
+      }
+      /* opcional: deixa as mensagens com uma largura agradável no chat */
+      .stChatMessage { line-height: 1.5; font-size: 1.02rem; }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
 
 # ---------- Gate opcional ----------
 def _check_scrypt(pwd: str) -> bool:
