@@ -12,16 +12,22 @@ from core.repositories import (
 )
 from core.tokens import toklen
 
+# NSFW (opcional)
 try:
-    # Persona específica da Mary (ideal se existir characters/mary/persona.py)
+    from core.nsfw import nsfw_enabled
+except Exception:  # fallback seguro
+    def nsfw_enabled(_user: str) -> bool:
+        return False
+
+# Persona específica (ideal: characters/mary/persona.py)
+try:
     from .persona import get_persona  # -> (persona_text: str, history_boot: List[Dict[str,str]])
 except Exception:
-    # Fallback simples
     def get_persona() -> (str, List[Dict[str, str]]):
         txt = (
-            "Você é MARY. Fale em primeira pessoa (eu). Tom leve e maduro, com humor sutil. "
-            "Sensualidade direta quando apropriado, sempre com consentimento. "
-            "Use 1–2 frases por parágrafo; 3–5 parágrafos; sem metacena."
+            "Você é MARY. Fale em primeira pessoa (eu). Tom adulto, afetuoso e leve, com humor sutil. "
+            "Sensorial obrigatório: traga 1 traço físico concreto no 1º ou 2º parágrafo. "
+            "Sem metacena, sem listas. 2–4 frases por parágrafo; 4–7 parágrafos."
         )
         return txt, []
 
@@ -39,15 +45,52 @@ class MaryService(BaseCharacter):
         persona_text, history_boot = self._load_persona()
         usuario_key = f"{user}::mary"
 
-        # --- pinos de memória e local ---
+        # ---- memória e local ----
         local_atual = self._safe_get_local(usuario_key)
         memoria_pin = self._build_memory_pin(usuario_key, user)
 
+        # ---- foco sensorial rotativo (evita repetir sempre o mesmo atributo) ----
+        pool = [
+            "cabelo", "olhos", "lábios/boca", "mãos/toque", "respiração",
+            "perfume", "pele/temperatura", "quadril/coxas", "voz/timbre", "sorriso"
+        ]
+        idx = int(st.session_state.get("mary_attr_idx", -1))
+        idx = (idx + 1) % len(pool)
+        st.session_state["mary_attr_idx"] = idx
+        foco = pool[idx]
+
+        length_hint = "COMPRIMENTO: gere 4–7 parágrafos; cada um com 2–4 frases naturais."
+        sensory_hint = (
+            f"SENSORIAL_FOCO: no 1º ou 2º parágrafo, inclua 1–2 pistas físicas envolvendo **{foco}**, "
+            "integradas à ação/gesto (nunca em lista). Evite repetir o mesmo foco de turnos consecutivos."
+        )
+
+        # ---- NSFW guardrails (dinâmico por usuário) ----
+        nsfw_on = False
+        try:
+            nsfw_on = bool(nsfw_enabled(usuario_key))
+        except Exception:
+            nsfw_on = False
+
+        if nsfw_on:
+            nsfw_hint = (
+                "NSFW: LIBERADO. Use erotismo consensual e progressivo quando o usuário sinalizar desejo. "
+                "Detalhe sensorial com tato e bom gosto; evite violência, coerção e termos explícitos excessivos. "
+                "Pare e valide conforto sempre que a cena subir de intensidade."
+            )
+        else:
+            nsfw_hint = (
+                "NSFW: BLOQUEADO. Não descreva ato sexual explícito. "
+                "Pode flertar, sugerir, e usar fade-to-black quando necessário."
+            )
+
+        system_block = "\n\n".join([persona_text, length_hint, sensory_hint, nsfw_hint])
+
         messages: List[Dict[str, str]] = (
-            [{"role": "system", "content": persona_text}]
+            [{"role": "system", "content": system_block}]
             + ([{"role": "system", "content": memoria_pin}] if memoria_pin else [])
-            + ([{"role": "system", "content": f"LOCAL_ATUAL: {local_atual or '—'}. "
-                                               f"Regra dura: NÃO mude o cenário salvo sem pedido explícito do usuário."}])
+            + [{"role": "system", "content": f"LOCAL_ATUAL: {local_atual or '—'}. "
+                                              f"Regra dura: NÃO mude o cenário salvo sem pedido explícito do usuário."}]
             + self._montar_historico(usuario_key, history_boot)
             + [{"role": "user", "content": prompt}]
         )
@@ -55,9 +98,9 @@ class MaryService(BaseCharacter):
         data, used_model, provider = route_chat_strict(model, {
             "model": model,
             "messages": messages,
-            "max_tokens": 1024,
-            "temperature": 0.6,
-            "top_p": 0.9,
+            "max_tokens": 1536,
+            "temperature": 0.7,
+            "top_p": 0.95,
         })
         texto = (data.get("choices", [{}])[0].get("message", {}) or {}).get("content", "") or ""
         save_interaction(usuario_key, prompt, texto, f"{provider}:{used_model}")
@@ -86,6 +129,7 @@ class MaryService(BaseCharacter):
     def _build_memory_pin(self, usuario_key: str, user_display: str) -> str:
         """
         Constrói um resumo curto das memórias canônicas relevantes e fixa em 'system'.
+        Inclui regra explícita para nomear corretamente o usuário quando perguntado.
         """
         try:
             f = get_facts(usuario_key) or {}
@@ -93,8 +137,13 @@ class MaryService(BaseCharacter):
             f = {}
 
         blocos: List[str] = []
-        if f.get("parceiro_atual"):
-            blocos.append(f"parceiro_atual={f['parceiro_atual']}")
+
+        parceiro = f.get("parceiro_atual") or f.get("parceiro") or ""
+        # Nome preferencial do usuário: parceiro_atual (se existir) senão o display informado
+        nome_usuario = parceiro or user_display
+
+        if parceiro:
+            blocos.append(f"parceiro_atual={parceiro}")
         if "virgem" in f:
             blocos.append(f"virgem={bool(f['virgem'])}")
         if f.get("primeiro_encontro"):
@@ -110,15 +159,14 @@ class MaryService(BaseCharacter):
             quando = ts.strftime("%Y-%m-%d %H:%M") if hasattr(ts, "strftime") else str(ts)
             blocos.append(f"primeira_vez@{quando}")
 
-        # PIN só se houver algo útil
-        mem_str = "; ".join(blocos)
+        mem_str = "; ".join(blocos) if blocos else "—"
+
         pin = (
             "MEMÓRIA_PIN: "
-            f"USUÁRIO={user_display}. "
-            f"FATOS={{ {mem_str} }}. "
-            "Regras duras: use essas memórias para consistência. "
-            "Se perguntarem 'qual é meu nome?', responda com parceiro_atual quando fizer sentido. "
-            "NÃO contradiga memórias fixas."
+            f"NOME_USUARIO={nome_usuario}. FATOS={{ {mem_str} }}. "
+            "Regras duras: use essas memórias para consistência narrativa. "
+            "Se o usuário perguntar 'qual é meu nome?' ou similar, responda com NOME_USUARIO. "
+            "NUNCA invente outro nome; não hesite em confirmar se houver ambiguidade."
         )
         return pin
 
@@ -134,15 +182,20 @@ class MaryService(BaseCharacter):
         total = 0
         out: List[Dict[str, str]] = []
         for d in reversed(docs):
-            u = d.get("mensagem_usuario") or ""
-            a = d.get("resposta_mary") or ""  # campo legado consumido pela UI
+            u = (d.get("mensagem_usuario") or "").strip()
+            a = (d.get("resposta_mary") or "").strip()  # campo legado consumido pela UI
             t = toklen(u) + toklen(a)
             if total + t > limite_tokens:
                 break
-            out.append({"role": "user", "content": u})
-            out.append({"role": "assistant", "content": a})
+            if u:
+                out.append({"role": "user", "content": u})
+            if a:
+                out.append({"role": "assistant", "content": a})
             total += t
         return list(reversed(out)) if out else history_boot[:]
 
     def render_sidebar(self, container) -> None:
-        container.markdown("**Mary** — madura, leve, flerte com humor. 1–2 frases por parágrafo.")
+        container.markdown(
+            "**Mary** — resposta longa (4–7 parágrafos), foco sensorial obrigatório com atributo físico rotativo; "
+            "NSFW controlado por memória do usuário."
+        )
