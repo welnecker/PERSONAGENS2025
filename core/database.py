@@ -10,7 +10,7 @@ import datetime as _dt
 from .config import settings
 
 # ===================== Estado global do backend =====================
-_BACKEND = os.getenv("DB_BACKEND", "").strip().lower() or "memory"
+_BACKEND = (os.getenv("DB_BACKEND", "").strip().lower() or "memory")
 
 def get_backend() -> str:
     return _BACKEND
@@ -20,38 +20,64 @@ def set_backend(kind: str) -> None:
     kind = (kind or "").strip().lower()
     _BACKEND = "mongo" if kind == "mongo" else "memory"
 
-# Se houver credenciais de Mongo, defaulta para mongo
+# Se houver credenciais de Mongo e DB_BACKEND não foi explicitado, defaulta para mongo
 if settings.mongo_uri():
-    _BACKEND = os.getenv("DB_BACKEND", _BACKEND)
-    if _BACKEND not in ("memory", "mongo"):
+    env_choice = os.getenv("DB_BACKEND", "").strip().lower()
+    if env_choice == "":
         _BACKEND = "mongo"
 
 # ===================== Implementação: Memória =====================
 _STORE: Dict[str, List[Dict[str, Any]]] = {}
 _LOCK = RLock()
 
-def _match_simple(doc: Dict[str, Any], filt: Optional[Dict[str, Any]]) -> bool:
-    if not filt:
-        return True
-    for k, v in filt.items():
-        # suporte mínimo a $in
-        if isinstance(v, dict) and "$in" in v:
-            if doc.get(k) not in v["$in"]:
-                return False
-        else:
-            if doc.get(k) != v:
-                return False
-    return True
-
 def _get_nested(d: Dict[str, Any], dotted: str, default=None):
     cur = d
     for part in dotted.split("."):
         if not isinstance(cur, dict):
             return default
-        cur = cur.get(part)
-        if cur is None:
+        if part not in cur:
             return default
+        cur = cur[part]
     return cur
+
+def _set_nested(d: Dict[str, Any], dotted: str, value: Any) -> None:
+    parts = dotted.split(".")
+    cur = d
+    for p in parts[:-1]:
+        if p not in cur or not isinstance(cur[p], dict):
+            cur[p] = {}
+        cur = cur[p]
+    cur[parts[-1]] = value
+
+def _unset_nested(d: Dict[str, Any], dotted: str) -> None:
+    parts = dotted.split(".")
+    cur = d
+    for p in parts[:-1]:
+        if p not in cur or not isinstance(cur[p], dict):
+            return
+        cur = cur[p]
+    cur.pop(parts[-1], None)
+
+def _match_simple(doc: Dict[str, Any], filt: Optional[Dict[str, Any]]) -> bool:
+    if not filt:
+        return True
+    for k, v in filt.items():
+        # suporte mínimo a $in e chaves pontilhadas
+        if isinstance(v, dict) and "$in" in v:
+            if "." in k:
+                value = _get_nested(doc, k, None)
+            else:
+                value = doc.get(k)
+            if value not in v["$in"]:
+                return False
+        else:
+            if "." in k:
+                if _get_nested(doc, k, object()) != v:
+                    return False
+            else:
+                if doc.get(k) != v:
+                    return False
+    return True
 
 class MemoryCollection:
     def __init__(self, name: str):
@@ -94,36 +120,47 @@ class MemoryCollection:
         return rows[0] if rows else None
 
     def update_one(self, filt: Dict[str, Any], update: Dict[str, Any], upsert: bool = False) -> None:
+        """
+        Suporta:
+          - $set com chaves pontilhadas
+          - $unset com chaves pontilhadas
+          - upsert
+        """
         with _LOCK:
             rows = _STORE.get(self.name, [])
+
+            # tenta atualizar documento existente
             for d in rows:
                 if _match_simple(d, filt):
-                    if "$set" in update:
-                        # suporta set com dotted paths simples
-                        for k, v in update["$set"].items():
-                            parts = k.split(".")
-                            cur = d
-                            for p in parts[:-1]:
-                                if p not in cur or not isinstance(cur[p], dict):
-                                    cur[p] = {}
-                                cur = cur[p]
-                            cur[parts[-1]] = v
+                    if "$set" in update or "$unset" in update:
+                        if "$set" in update:
+                            for k, v in update["$set"].items():
+                                if "." in k:
+                                    _set_nested(d, k, v)
+                                else:
+                                    d[k] = v
+                        if "$unset" in update:
+                            for k in update["$unset"].keys():
+                                if "." in k:
+                                    _unset_nested(d, k)
+                                else:
+                                    d.pop(k, None)
                     else:
                         d.update(update)
                     return
+
+            # se não encontrou e for upsert → cria
             if upsert:
-                doc = dict(filt)
+                new_doc: Dict[str, Any] = dict(filt)
                 if "$set" in update:
-                    # aplica $set
                     for k, v in update["$set"].items():
-                        parts = k.split(".")
-                        cur = doc
-                        for p in parts[:-1]:
-                            if p not in cur or not isinstance(cur[p], dict):
-                                cur[p] = {}
-                            cur = cur[p]
-                        cur[parts[-1]] = v
-                self.insert_one(doc)
+                        if "." in k:
+                            _set_nested(new_doc, k, v)
+                        else:
+                            new_doc[k] = v
+                else:
+                    new_doc.update(update)
+                self.insert_one(new_doc)
 
     def delete_many(self, filt: Dict[str, Any]) -> int:
         with _LOCK:
@@ -214,7 +251,8 @@ def db_status() -> Tuple[str, str]:
     b = get_backend()
     if b == "mongo":
         _ensure_mongo()
-        return ("mongo", "OK" if _MONGO_OK else "indisponível")
+        detail = "OK" if _MONGO_OK else "indisponível"
+        return ("mongo", detail)
     return ("memory", "memória local")
 
 def ping_db() -> Tuple[str, bool, str]:
