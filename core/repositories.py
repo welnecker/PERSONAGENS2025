@@ -50,14 +50,14 @@ def save_interaction(usuario: str, mensagem_usuario: str, resposta_mary: str, mo
         "mensagem_usuario": mensagem_usuario,
         "resposta_mary": resposta_mary,
         "model": model_tag,
-        "ts": datetime.utcnow(),  # <-- ordenação estável
+        "ts": datetime.utcnow(),  # ordenação estável (memória e Mongo)
     })
 
 
 def get_history_docs(usuario: str, limit: int = 400) -> List[Dict[str, Any]]:
     """
     Histórico por uma única chave de usuário/personagem.
-    Ordena por ts asc (fallback _id asc).
+    Ordena por ts asc; fallback _id asc.
     """
     return list(_hist().find(
         {"usuario": usuario},
@@ -110,7 +110,7 @@ def register_event(
         "descricao": descricao,
         "local": local,
         "extra": extra or {},
-        "ts": datetime.utcnow(),  # <-- ordenação/consulta
+        "ts": datetime.utcnow(),  # ordenação/consulta
     })
 
 
