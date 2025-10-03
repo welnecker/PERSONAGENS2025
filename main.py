@@ -461,6 +461,74 @@ with st.sidebar.expander("🗂️ Memória por personagem"):
     except Exception:
         st.caption("Não foi possível listar personagens.")
 
+# ---------- Sidebar: NSFW & Primeira vez ----------
+st.sidebar.markdown("---")
+st.sidebar.subheader("🔞 NSFW & Primeira vez")
+
+# imports locais p/ evitar quebrar o topo
+try:
+    from core.nsfw import nsfw_enabled  # usa fatos/overrides para decidir
+except Exception:
+    def nsfw_enabled(_k: str) -> bool:
+        return str(get_fact(_k, "nsfw_override", "")).lower() == "on"
+
+from core.repositories import set_fact, get_fact, register_event
+
+_user_id = str(st.session_state.get("user_id", "")).strip()
+_char    = str(st.session_state.get("character", "")).strip().lower()
+user_key = f"{_user_id}::{_char}" if _user_id and _char else _user_id
+
+# Estado atual
+try:
+    NSFW_ON = bool(nsfw_enabled(user_key))
+except Exception:
+    NSFW_ON = False
+
+virgem_val = get_fact(user_key, "virgem", None)
+virg_caption = "—"
+if virgem_val is True:
+    virg_caption = "Sim"
+elif virgem_val is False:
+    virg_caption = "Não"
+
+st.sidebar.caption(f"Status NSFW: **{'✅ ON' if NSFW_ON else '🔒 OFF'}**")
+st.sidebar.caption(f"Virgindade: **{virg_caption}**")
+
+c_on, c_off = st.sidebar.columns(2)
+
+# Libera NSFW e registra "primeira_vez" (se fizer sentido)
+if c_on.button("🔓 Liberar NSFW"):
+    try:
+        # marca como não-virgem e força override ON
+        set_fact(user_key, "virgem", False, {"fonte": "sidebar"})
+        set_fact(user_key, "nsfw_override", "on", {"fonte": "sidebar"})
+        # registra evento canônico (usando local salvo, se houver)
+        local_atual = get_fact(user_key, "local_cena_atual", None)
+        register_event(
+            user_key,
+            "primeira_vez",
+            f"{st.session_state.get('character','?')} teve sua primeira vez.",
+            local_atual,
+            {"origin": "sidebar"}
+        )
+        st.sidebar.success("NSFW liberado e 'primeira_vez' registrado.")
+        # força recarregar histórico/memórias visuais
+        st.session_state["history_loaded_for"] = ""
+        st.rerun()
+    except Exception as e:
+        st.sidebar.error(f"Falha ao liberar NSFW: {e}")
+
+# Bloqueia NSFW via override
+if c_off.button("🔒 Bloquear NSFW"):
+    try:
+        set_fact(user_key, "nsfw_override", "off", {"fonte": "sidebar"})
+        st.sidebar.success("NSFW bloqueado para esta personagem/usuário.")
+        st.session_state["history_loaded_for"] = ""
+        st.rerun()
+    except Exception as e:
+        st.sidebar.error(f"Falha ao bloquear NSFW: {e}")
+
+
 
 # ---------- Carrega histórico (primeiro render / pós-ops) ----------
 _reload_history()
