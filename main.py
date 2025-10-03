@@ -362,6 +362,79 @@ if st.sidebar.button("🧨 Apagar TUDO (chat + memórias)"):
     except Exception as e:
         st.sidebar.error(f"Falha ao apagar TUDO: {e}")
 
+# ---------- Sidebar: Memória Canônica ----------
+from core.repositories import set_fact, get_facts, delete_fact  # garante import
+
+st.sidebar.subheader("🧠 Memória Canônica")
+
+_user_id = str(st.session_state.get("user_id", ""))
+_char    = str(st.session_state.get("character", "")).strip().lower()
+user_key_primary = f"{_user_id}::{_char}" if _user_id and _char else _user_id
+
+# 1) Listagem das memórias atuais
+facts = {}
+try:
+    facts = get_facts(user_key_primary) or {}
+except Exception as e:
+    st.sidebar.warning(f"Não foi possível ler memórias: {e}")
+
+if facts:
+    for k, v in facts.items():
+        st.sidebar.write(f"- `{k}` → {v}")
+else:
+    st.sidebar.caption("_Sem memórias salvas para esta personagem._")
+
+# 2) Adicionar/atualizar memória
+with st.sidebar.form("form_add_fact", clear_on_submit=True):
+    st.markdown("**Adicionar/Atualizar memória**")
+    f_key = st.text_input("Chave", placeholder="ex.: parceiro_atual")
+    f_val = st.text_input("Valor", placeholder="ex.: Janio")
+    ok = st.form_submit_button("💾 Salvar")
+    if ok:
+        if not f_key.strip():
+            st.error("Informe a chave da memória.")
+        else:
+            try:
+                set_fact(user_key_primary, f_key.strip(), f_val.strip(), {"fonte": "sidebar"})
+                st.success("Memória salva/atualizada.")
+                st.session_state["history_loaded_for"] = ""  # força recarga visual
+                st.rerun()
+            except Exception as e:
+                st.error(f"Falha ao salvar: {e}")
+
+# 3) Remover memória existente
+if facts:
+    with st.sidebar.form("form_del_fact", clear_on_submit=True):
+        st.markdown("**Remover memória**")
+        del_key = st.selectbox("Chave", sorted(facts.keys()))
+        ok2 = st.form_submit_button("🗑️ Remover")
+        if ok2 and del_key:
+            try:
+                delete_fact(user_key_primary, del_key)
+                st.success("Memória removida.")
+                st.session_state["history_loaded_for"] = ""  # força recarga
+                st.rerun()
+            except Exception as e:
+                st.error(f"Falha ao remover: {e}")
+
+# 4) Visão geral por personagem (diagnóstico rápido)
+with st.sidebar.expander("🗂️ Memória por personagem"):
+    try:
+        from characters.registry import list_characters
+        for name in list_characters():
+            k = f"{_user_id}::{name.lower()}"
+            try:
+                f = get_facts(k) or {}
+                st.write(f"**{name}** — {len(f)} memórias")
+                # mostra só algumas entradas para não poluir
+                for kk, vv in list(f.items())[:8]:
+                    st.caption(f"`{kk}` → {vv}")
+            except Exception:
+                st.caption(f"**{name}** — erro ao ler")
+    except Exception:
+        st.caption("Não foi possível listar personagens.")
+
+
 # ---------- Carrega histórico (primeiro render / pós-ops) ----------
 _reload_history()
 
