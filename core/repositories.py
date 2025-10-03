@@ -78,6 +78,40 @@ def set_fact(usuario: str, key: str, value: Any, meta: Optional[Dict[str, Any]] 
     )
 
 
+def _delete_dotted(root: Dict[str, Any], dotted_key: str) -> bool:
+    """
+    Remove a chave `dotted_key` (ex.: "perfil.endereco.rua") de um dict aninhado,
+    modificando `root` in-place. Faz prune de dicts vazios no caminho.
+    Retorna True se removeu algo.
+    """
+    if not dotted_key:
+        return False
+    parts = dotted_key.split(".")
+    stack = []
+    cur = root
+    for p in parts[:-1]:
+        if not isinstance(cur, dict) or p not in cur:
+            return False
+        stack.append((cur, p))
+        cur = cur[p]
+    leaf = parts[-1]
+    if not isinstance(cur, dict) or leaf not in cur:
+        return False
+
+    # remove a folha
+    del cur[leaf]
+
+    # prune dicts vazios, de baixo pra cima
+    while stack:
+        parent, key = stack.pop()
+        child = parent.get(key)
+        if isinstance(child, dict) and not child:
+            del parent[key]
+        else:
+            break
+    return True
+
+
 def delete_fact(usuario: str, key: str) -> bool:
     """
     Remove uma memória canônica (suporta chave pontilhada).
@@ -88,8 +122,7 @@ def delete_fact(usuario: str, key: str) -> bool:
         return False
 
     facts = dict(doc.get("fatos", {}) or {})
-    changed = _delete_dotted(facts, key)
-    if not changed:
+    if not _delete_dotted(facts, key):
         return False
 
     # Atualiza 'fatos' como bloco (evita depender de $unset no backend memória)
