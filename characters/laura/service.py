@@ -168,68 +168,67 @@ class LauraService(BaseCharacter):
         except Exception:
             return ""
 
-def _build_memory_pin(self, usuario_key: str, user_display: str) -> str:
-    """
-    Memória local da Laura (NÃO mistura com Mary).
-    Campos:
-      - namorado_de_mary (string): quem é o namorado da Mary no cenário da Laura (default: Janio Donisete)
-      - affair_com_janio (bool): se Laura e Janio têm um caso secreto
-      - sigilo_affair (bool): se True, ocultar/ambiguidade quando 'Mary' for mencionada
-      - flirt_mode (bool): preferência de flerte
-    """
-    try:
-        f = get_facts(usuario_key) or {}
-    except Exception:
-        f = {}
+    def _build_memory_pin(self, usuario_key: str, user_display: str) -> str:
+        """
+        Memória local da Laura (NÃO mistura com Mary).
+        Campos:
+          - namorado_de_mary (string): quem é o namorado da Mary no cenário da Laura (default: Janio Donisete)
+          - affair_com_janio (bool): se Laura e Janio têm um caso secreto
+          - sigilo_affair (bool): se True, ocultar/ambiguidade quando 'Mary' for mencionada
+          - flirt_mode (bool): preferência de flerte
+        """
+        try:
+            f = get_facts(usuario_key) or {}
+        except Exception:
+            f = {}
 
-    namorado_de_mary = (f.get("namorado_de_mary") or "Janio Donisete")
-    affair_flag      = bool(f.get("affair_com_janio", False))
-    sigilo_flag      = bool(f.get("sigilo_affair", True))
-    flirt_flag       = bool(f.get("flirt_mode", True))
+        namorado_de_mary = (f.get("namorado_de_mary") or "Janio Donisete")
+        affair_flag      = bool(f.get("affair_com_janio", False))
+        sigilo_flag      = bool(f.get("sigilo_affair", True))
+        flirt_flag       = bool(f.get("flirt_mode", True))
 
-    # Nome preferido do usuário (se houver 'parceiro_atual' nessa thread; senão display)
-    parceiro = f.get("parceiro_atual") or f.get("parceiro") or user_display
-    nome_usuario = (parceiro or user_display).strip()
+        # Nome preferido do usuário (se houver 'parceiro_atual' nessa thread; senão display)
+        parceiro = f.get("parceiro_atual") or f.get("parceiro") or user_display
+        nome_usuario = (parceiro or user_display).strip()
 
-    # Heurística: o usuário atual é o namorado da Mary neste cenário?
-    usuario_eh_namorado = (nome_usuario.lower() == str(namorado_de_mary).strip().lower())
+        # Heurística: o usuário atual é o namorado da Mary neste cenário?
+        usuario_eh_namorado = (nome_usuario.lower() == str(namorado_de_mary).strip().lower())
 
-    blocos = [
-        f"namorado_de_mary={namorado_de_mary}",
-        f"affair_com_janio={affair_flag}",
-        f"sigilo_affair={sigilo_flag}",
-        f"flirt_mode={flirt_flag}",
-        f"nome_usuario={nome_usuario}",
-        f"usuario_eh_namorado={usuario_eh_namorado}",
-    ]
-    mem_str = "; ".join(blocos)
+        blocos = [
+            f"namorado_de_mary={namorado_de_mary}",
+            f"affair_com_janio={affair_flag}",
+            f"sigilo_affair={sigilo_flag}",
+            f"flirt_mode={flirt_flag}",
+            f"nome_usuario={nome_usuario}",
+            f"usuario_eh_namorado={usuario_eh_namorado}",
+        ]
+        mem_str = "; ".join(blocos)
 
-    # Regras operacionais claras para o modelo
-    regras = [
-        f"No CENÁRIO DA LAURA: Mary namora {namorado_de_mary}. Laura sabe disso.",
-        "Laura é dançarina (NUNCA faz programa, não é prostituta).",
-        "Se perguntarem 'qual é meu nome?', responda com NOME_USUARIO.",
-        "Use as memórias para consistência e não as contradiga.",
-        "Se o usuário for o namorado_de_mary:",
-        "  - Trate com intimidade condizente ao histórico;",
-        "  - Se 'affair_com_janio' for True, mantenha clima de caso secreto; avance em privado;",
-        "  - Se 'sigilo_affair' for True e 'Mary' for citada/presente, NÃO revele o caso; responda com ambiguidade, mude de assunto, proteja o sigilo.",
-        "Se o usuário NÃO for o namorado_de_mary:",
-        "  - Flertar depende de 'flirt_mode'; respeite limites; sem expor o affair.",
-    ]
-    regras_texto = "\n".join(f"- {r}" if not r.startswith("  ") else f"  {r}" for r in regras)
+        # Regras operacionais claras para o modelo
+        regras = [
+            f"No CENÁRIO DA LAURA: Mary namora {namorado_de_mary}. Laura sabe disso.",
+            "Laura é dançarina (NUNCA faz programa, não é prostituta).",
+            "Se perguntarem 'qual é meu nome?', responda com NOME_USUARIO.",
+            "Use as memórias para consistência e não as contradiga.",
+            "Se o usuário for o namorado_de_mary:",
+            "  - Trate com intimidade condizente ao histórico;",
+            "  - Se 'affair_com_janio' for True, mantenha clima de caso secreto; avance em privado;",
+            "  - Se 'sigilo_affair' for True e 'Mary' for citada/presente, NÃO revele o caso; responda com ambiguidade, mude de assunto, proteja o sigilo.",
+            "Se o usuário NÃO for o namorado_de_mary:",
+            "  - Flertar depende de 'flirt_mode'; respeite limites; sem expor o affair.",
+        ]
+        regras_texto = "\n".join(f"- {r}" if not r.startswith("  ") else f"  {r}" for r in regras)
 
-    pin = (
-        "MEMÓRIA_PIN_LAURA:\n"
-        f"FATOS: {{ {mem_str} }}\n"
-        f"NOME_USUARIO: {nome_usuario}\n"
-        f"USUARIO_EH_NAMORADO: {usuario_eh_namorado}\n"
-        "REGRAS:\n"
-        f"{regras_texto}\n"
-        "Nunca invente nomes/relacionamentos diferentes dos acima; confirme com delicadeza se houver ambiguidade."
-    )
-    return pin
-
+        pin = (
+            "MEMÓRIA_PIN_LAURA:\n"
+            f"FATOS: {{ {mem_str} }}\n"
+            f"NOME_USUARIO: {nome_usuario}\n"
+            f"USUARIO_EH_NAMORADO: {usuario_eh_namorado}\n"
+            "REGRAS:\n"
+            f"{regras_texto}\n"
+            "Nunca invente nomes/relacionamentos diferentes dos acima; confirme com delicadeza se houver ambiguidade."
+        )
+        return pin
 
     def _montar_historico(
         self,
@@ -256,84 +255,89 @@ def _build_memory_pin(self, usuario_key: str, user_display: str) -> str:
         return list(reversed(out)) if out else history_boot[:]
 
     def render_sidebar(self, container) -> None:
-    container.markdown(
-        "**Laura** — resposta longa (4–7 parágrafos), foco sensorial obrigatório com atributo rotativo; "
-        "não faz programa; romântica; NSFW controlado por memória do usuário."
-    )
-
-    # chave do usuário/Laura
-    user = str(st.session_state.get("user_id", "") or "")
-    usuario_key = f"{user}::laura" if user else "anon::laura"
-
-    # Carrega valores atuais
-    try:
-        fatos = get_facts(usuario_key) or {}
-    except Exception:
-        fatos = {}
-
-    # ====================
-    # 💃 Preferências (flerte)
-    # ====================
-    with container.expander("💃 Preferências", expanded=False):
-        flirt_val = bool(fatos.get("flirt_mode", True))
-        # key único por thread do usuário
-        k_flirt = f"ui_laura_flirt_{usuario_key}"
-        ui_flirt = container.checkbox("Flerte liberado", value=flirt_val, key=k_flirt)
-        if ui_flirt != flirt_val:
-            try:
-                set_fact(usuario_key, "flirt_mode", bool(ui_flirt), {"fonte": "sidebar"})
-                st.toast("Preferência de flerte salva.", icon="✅")
-                # força recarregar histórico/pinos na próxima render
-                st.session_state["history_loaded_for"] = ""
-                st.rerun()
-            except Exception as e:
-                container.warning(f"Falha ao salvar flerte: {e}")
-
-    # ====================
-    # ❤️ Caso com Janio (Laura)
-    # ====================
-    with container.expander("❤️ Caso com Janio (Laura)", expanded=False):
-        affair_val   = bool(fatos.get("affair_com_janio", False))
-        sigilo_val   = bool(fatos.get("sigilo_affair", True))
-        namorado_val = str(fatos.get("namorado_de_mary", "Janio Donisete"))
-
-        k_affair   = f"ui_laura_affair_{usuario_key}"
-        k_sigilo   = f"ui_laura_sigilo_{usuario_key}"
-        k_namorado = f"ui_laura_namary_{usuario_key}"
-
-        ui_affair = container.checkbox(
-            "Caso secreto com Janio (ATIVAR)",
-            value=affair_val,
-            key=k_affair,
-            help="Quando ativo, Laura tem um caso com Janio neste cenário."
-        )
-        ui_sigilo = container.checkbox(
-            "Sigilo do caso (ocultar da Mary)",
-            value=sigilo_val,
-            key=k_sigilo,
-            help="Se 'Mary' for mencionada, Laura evita revelar o caso."
-        )
-        ui_namorado = container.text_input(
-            "Namorado da Mary (neste cenário)",
-            value=namorado_val,
-            key=k_namorado,
-            help="Nome que Laura reconhece como namorado de Mary neste cenário."
+        container.markdown(
+            "**Laura** — resposta longa (4–7 parágrafos), foco sensorial obrigatório com atributo rotativo; "
+            "não faz programa; romântica; NSFW controlado por memória do usuário."
         )
 
-        changed = (
-            bool(ui_affair) != affair_val or
-            bool(ui_sigilo) != sigilo_val or
-            (ui_namorado or "").strip() != (namorado_val or "").strip()
-        )
-        if changed:
-            try:
-                set_fact(usuario_key, "affair_com_janio", bool(ui_affair), {"fonte": "sidebar"})
-                set_fact(usuario_key, "sigilo_affair", bool(ui_sigilo), {"fonte": "sidebar"})
-                set_fact(usuario_key, "namorado_de_mary", (ui_namorado or "Janio Donisete").strip(), {"fonte": "sidebar"})
-                st.toast("Relação da Laura atualizada.", icon="✅")
-                st.session_state["history_loaded_for"] = ""  # força recarga do histórico/pin
-                st.rerun()
-            except Exception as e:
-                container.error(f"Falha ao salvar: {e}")
+        # chave do usuário/Laura
+        user = str(st.session_state.get("user_id", "") or "")
+        usuario_key = f"{user}::laura" if user else "anon::laura"
 
-    container.caption("Memórias desta aba valem **somente** para `user::laura` (não afetam a Mary).")
+        # Carrega valores atuais
+        try:
+            fatos = get_facts(usuario_key) or {}
+        except Exception:
+            fatos = {}
+
+        # ====================
+        # 💃 Preferências (flerte)
+        # ====================
+        with container.expander("💃 Preferências", expanded=False):
+            flirt_val = bool(fatos.get("flirt_mode", True))
+            # key único por thread do usuário
+            k_flirt = f"ui_laura_flirt_{usuario_key}"
+            ui_flirt = container.checkbox("Flerte liberado", value=flirt_val, key=k_flirt)
+            if ui_flirt != flirt_val:
+                try:
+                    set_fact(usuario_key, "flirt_mode", bool(ui_flirt), {"fonte": "sidebar"})
+                    try:
+                        st.toast("Preferência de flerte salva.", icon="✅")
+                    except Exception:
+                        container.success("Preferência de flerte salva.")
+                    st.session_state["history_loaded_for"] = ""
+                    st.rerun()
+                except Exception as e:
+                    container.warning(f"Falha ao salvar flerte: {e}")
+
+        # ====================
+        # ❤️ Caso com Janio (Laura)
+        # ====================
+        with container.expander("❤️ Caso com Janio (Laura)", expanded=False):
+            affair_val   = bool(fatos.get("affair_com_janio", False))
+            sigilo_val   = bool(fatos.get("sigilo_affair", True))
+            namorado_val = str(fatos.get("namorado_de_mary", "Janio Donisete"))
+
+            k_affair   = f"ui_laura_affair_{usuario_key}"
+            k_sigilo   = f"ui_laura_sigilo_{usuario_key}"
+            k_namorado = f"ui_laura_namary_{usuario_key}"
+
+            ui_affair = container.checkbox(
+                "Caso secreto com Janio (ATIVAR)",
+                value=affair_val,
+                key=k_affair,
+                help="Quando ativo, Laura tem um caso com Janio neste cenário."
+            )
+            ui_sigilo = container.checkbox(
+                "Sigilo do caso (ocultar da Mary)",
+                value=sigilo_val,
+                key=k_sigilo,
+                help="Se 'Mary' for mencionada, Laura evita revelar o caso."
+            )
+            ui_namorado = container.text_input(
+                "Namorado da Mary (neste cenário)",
+                value=namorado_val,
+                key=k_namorado,
+                help="Nome que Laura reconhece como namorado de Mary neste cenário."
+            )
+
+            changed = (
+                bool(ui_affair) != affair_val or
+                bool(ui_sigilo) != sigilo_val or
+                (ui_namorado or "").strip() != (namorado_val or "").strip()
+            )
+            if changed:
+                try:
+                    set_fact(usuario_key, "affair_com_janio", bool(ui_affair), {"fonte": "sidebar"})
+                    set_fact(usuario_key, "sigilo_affair", bool(ui_sigilo), {"fonte": "sidebar"})
+                    set_fact(usuario_key, "namorado_de_mary", (ui_namorado or "Janio Donisete").strip(), {"fonte": "sidebar"})
+                    try:
+                        st.toast("Relação da Laura atualizada.", icon="✅")
+                    except Exception:
+                        container.success("Relação da Laura atualizada.")
+                    st.session_state["history_loaded_for"] = ""  # força recarga
+                    st.rerun()
+                except Exception as e:
+                    container.error(f"Falha ao salvar: {e}")
+
+        container.caption("Memórias desta aba valem **somente** para `user::laura` (não afetam a Mary).")
