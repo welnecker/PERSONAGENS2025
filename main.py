@@ -461,6 +461,47 @@ with st.sidebar.expander("🗂️ Memória por personagem"):
     except Exception:
         st.caption("Não foi possível listar personagens.")
 
+# --- Seed rápido: Laura + Janio ---
+with st.sidebar.expander("⚡ Seed rápido: Laura + Janio", expanded=False):
+    u = (st.session_state.get("user_id") or "Janio Donisete").strip()
+    target = f"{u}::laura"
+
+    st.caption(
+        "Grava memórias canônicas da Laura para o usuário atual e registra o "
+        "primeiro encontro no Posto 6."
+    )
+    if st.button("Aplicar seed (Laura ❤️ Janio)"):
+        try:
+            set_fact(target, "parceiro_atual", u, {"fonte": "seed"})
+            set_fact(target, "status_relacao", "paixao_secreta", {"fonte": "seed"})
+            set_fact(target, "sonho", "casar_e_formar_familia", {"fonte": "seed"})
+            set_fact(target, "nao_faz_programa", True, {"fonte": "seed"})
+            set_fact(target, "local_cena_atual", "Quiosque Posto 6", {"fonte": "seed"})
+
+            register_event(
+                target,
+                "primeiro_encontro",
+                "Drinks e petiscos no Posto 6.",
+                "Posto 6",
+                {"iniciado_por": u}
+            )
+
+            st.success("Seed aplicado para Laura. Abra o chat com a Laura para ver o efeito.")
+            # força recarregar histórico/memórias na UI
+            st.session_state["history_loaded_for"] = ""
+            st.rerun()
+        except Exception as e:
+            st.error(f"Falha ao aplicar seed: {e}")
+
+with st.sidebar.expander("🔓 NSFW rápido: Laura", expanded=False):
+    if st.button("Ativar NSFW para Laura"):
+        try:
+            set_fact(target, "nsfw_override", "on", {"fonte": "seed"})
+            st.success("NSFW ON para Laura.")
+        except Exception as e:
+            st.error(f"Falha ao ativar NSFW: {e}")
+
+
 # ---------- Sidebar: NSFW & Primeira vez ----------
 st.sidebar.markdown("---")
 st.sidebar.subheader("🔞 NSFW & Primeira vez")
