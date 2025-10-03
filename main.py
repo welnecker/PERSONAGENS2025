@@ -89,7 +89,8 @@ def _load_env_from_secrets():
         "MONGO_CLUSTER":      sec.get("MONGO_CLUSTER", ""),
         "APP_NAME":           sec.get("APP_NAME", "personagens2025"),
         "APP_PUBLIC_URL":     sec.get("APP_PUBLIC_URL", ""),
-        "DB_BACKEND":         sec.get("DB_BACKEND", "memory"),
+        # >>> Mongo como padrão <<<
+        "DB_BACKEND":         sec.get("DB_BACKEND", "mongo"),
     }
     for k, v in mapping.items():
         if v and not os.environ.get(k):
@@ -136,6 +137,16 @@ except Exception:
     def ping_db(): return ("memory", True, "memória local")
     def get_col(_name: str): raise RuntimeError("DB indisponível")
     def db_status(): return ("unknown", "core.database ausente")
+
+# --- Força Mongo como padrão se nada tiver sido escolhido explicitamente
+try:
+    if os.environ.get("DB_BACKEND", "").strip() == "":
+        os.environ["DB_BACKEND"] = "mongo"
+    if get_backend() != "mongo":
+        set_backend("mongo")
+except Exception:
+    pass
+
 
 # Repositório (histórico/fatos) — safe fallback
 try:
