@@ -12,6 +12,44 @@ _hist   = lambda: get_col("history")
 _events = lambda: get_col("events")
 
 
+# ---------- helpers internos ----------
+def _delete_dotted(d: Dict[str, Any], dotted: str) -> bool:
+    """
+    Remove a chave 'a.b.c' de um dict aninhado, limpando dicts vazios no caminho.
+    Retorna True se removeu algo.
+    """
+    parts = [p for p in (dotted or "").split(".") if p]
+    if not parts:
+        return False
+
+    stack = [d]
+    cur = d
+    for p in parts[:-1]:
+        if not isinstance(cur, dict) or p not in cur or not isinstance(cur[p], dict):
+            return False
+        cur = cur[p]
+        stack.append(cur)
+
+    last = parts[-1]
+    if not isinstance(cur, dict) or last not in cur:
+        return False
+
+    # remove a folha
+    del cur[last]
+
+    # cleanup: remove dicts vazios do fim para o início (exceto a raiz)
+    for i in range(len(stack) - 1, 0, -1):
+        node = stack[i]
+        parent = stack[i - 1]
+        # nome da chave deste node dentro do parent
+        for k, v in list(parent.items()):
+            if v is node and isinstance(v, dict) and not v:
+                del parent[k]
+                break
+
+    return True
+
+
 # ---------- Fatos ----------
 def get_facts(usuario: str) -> Dict[str, Any]:
     d = _state().find_one({"usuario": usuario})
@@ -40,6 +78,25 @@ def set_fact(usuario: str, key: str, value: Any, meta: Optional[Dict[str, Any]] 
     )
 
 
+def delete_fact(usuario: str, key: str) -> bool:
+    """
+    Remove uma memória canônica (suporta chave pontilhada).
+    Compatível com backend de memória e Mongo.
+    """
+    doc = _state().find_one({"usuario": usuario})
+    if not doc:
+        return False
+
+    facts = dict(doc.get("fatos", {}) or {})
+    changed = _delete_dotted(facts, key)
+    if not changed:
+        return False
+
+    # Atualiza 'fatos' como bloco (evita depender de $unset no backend memória)
+    _state().update_one({"usuario": usuario}, {"$set": {"fatos": facts}}, upsert=True)
+    return True
+
+
 # ---------- Histórico ----------
 def save_interaction(usuario: str, mensagem_usuario: str, resposta_mary: str, model_tag: str) -> None:
     """
@@ -50,7 +107,7 @@ def save_interaction(usuario: str, mensagem_usuario: str, resposta_mary: str, mo
         "mensagem_usuario": mensagem_usuario,
         "resposta_mary": resposta_mary,
         "model": model_tag,
-        "ts": datetime.utcnow(),  # ordenação estável (memória e Mongo)
+        "ts": datetime.utcnow(),  # ordenação estável
     })
 
 
@@ -110,7 +167,7 @@ def register_event(
         "descricao": descricao,
         "local": local,
         "extra": extra or {},
-        "ts": datetime.utcnow(),  # ordenação/consulta
+        "ts": datetime.utcnow(),
     })
 
 
