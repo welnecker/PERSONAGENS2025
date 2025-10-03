@@ -168,61 +168,68 @@ class LauraService(BaseCharacter):
         except Exception:
             return ""
 
-    def _build_memory_pin(self, usuario_key: str, user_display: str) -> str:
-        """
-        Memória local da Laura (NÃO mistura com Mary).
-        Campos:
-          - namorado_de_mary (string): quem é o namorado da Mary no cenário da Laura (default: Janio Donisete)
-          - affair_com_janio (bool): se Laura e Janio têm um caso secreto
-          - sigilo_affair (bool): se True, ocultar/ambiguidade quando 'Mary' for mencionada
-          - flirt_mode (bool): preferência de flerte
-        """
-        try:
-            f = get_facts(usuario_key) or {}
-        except Exception:
-            f = {}
+def _build_memory_pin(self, usuario_key: str, user_display: str) -> str:
+    """
+    Memória local da Laura (NÃO mistura com Mary).
+    Campos:
+      - namorado_de_mary (string): quem é o namorado da Mary no cenário da Laura (default: Janio Donisete)
+      - affair_com_janio (bool): se Laura e Janio têm um caso secreto
+      - sigilo_affair (bool): se True, ocultar/ambiguidade quando 'Mary' for mencionada
+      - flirt_mode (bool): preferência de flerte
+    """
+    try:
+        f = get_facts(usuario_key) or {}
+    except Exception:
+        f = {}
 
-        namorado_de_mary = (f.get("namorado_de_mary") or "Janio Donisete")
-        affair_flag      = bool(f.get("affair_com_janio", False))
-        sigilo_flag      = bool(f.get("sigilo_affair", True))
-        flirt_flag       = bool(f.get("flirt_mode", True))
+    namorado_de_mary = (f.get("namorado_de_mary") or "Janio Donisete")
+    affair_flag      = bool(f.get("affair_com_janio", False))
+    sigilo_flag      = bool(f.get("sigilo_affair", True))
+    flirt_flag       = bool(f.get("flirt_mode", True))
 
-        # Nome preferido para chamar o usuário (se existir parceiro_atual, use; senão, o display)
-        parceiro = f.get("parceiro_atual") or f.get("parceiro") or user_display
-        nome_usuario = parceiro or user_display
+    # Nome preferido do usuário (se houver 'parceiro_atual' nessa thread; senão display)
+    parceiro = f.get("parceiro_atual") or f.get("parceiro") or user_display
+    nome_usuario = (parceiro or user_display).strip()
 
-        blocos = [
-            f"namorado_de_mary={namorado_de_mary}",
-            f"affair_com_janio={affair_flag}",
-            f"sigilo_affair={sigilo_flag}",
-            f"flirt_mode={flirt_flag}",
-            f"nome_usuario={nome_usuario}",
-        ]
+    # Heurística: o usuário atual é o namorado da Mary neste cenário?
+    usuario_eh_namorado = (nome_usuario.lower() == str(namorado_de_mary).strip().lower())
 
-        # eventos canônicos (ex.: primeira_vez), se existirem
-        try:
-            ev = last_event(usuario_key, "primeira_vez")
-        except Exception:
-            ev = None
-        if ev:
-            ts = ev.get("ts")
-            quando = ts.strftime("%Y-%m-%d %H:%M") if hasattr(ts, "strftime") else str(ts)
-            blocos.append(f"primeira_vez@{quando}")
+    blocos = [
+        f"namorado_de_mary={namorado_de_mary}",
+        f"affair_com_janio={affair_flag}",
+        f"sigilo_affair={sigilo_flag}",
+        f"flirt_mode={flirt_flag}",
+        f"nome_usuario={nome_usuario}",
+        f"usuario_eh_namorado={usuario_eh_namorado}",
+    ]
+    mem_str = "; ".join(blocos)
 
-        mem_str = "; ".join(blocos)
+    # Regras operacionais claras para o modelo
+    regras = [
+        f"No CENÁRIO DA LAURA: Mary namora {namorado_de_mary}. Laura sabe disso.",
+        "Laura é dançarina (NUNCA faz programa, não é prostituta).",
+        "Se perguntarem 'qual é meu nome?', responda com NOME_USUARIO.",
+        "Use as memórias para consistência e não as contradiga.",
+        "Se o usuário for o namorado_de_mary:",
+        "  - Trate com intimidade condizente ao histórico;",
+        "  - Se 'affair_com_janio' for True, mantenha clima de caso secreto; avance em privado;",
+        "  - Se 'sigilo_affair' for True e 'Mary' for citada/presente, NÃO revele o caso; responda com ambiguidade, mude de assunto, proteja o sigilo.",
+        "Se o usuário NÃO for o namorado_de_mary:",
+        "  - Flertar depende de 'flirt_mode'; respeite limites; sem expor o affair.",
+    ]
+    regras_texto = "\n".join(f"- {r}" if not r.startswith("  ") else f"  {r}" for r in regras)
 
-        relationship_rules = (
-            "RELACIONAMENTO_PIN (Laura): No cenário da Laura, 'Mary' é namorada de "
-            f"{namorado_de_mary}. Laura sabe disso e flerta com ele. "
-            "Se 'affair_com_janio' for True, ela tem um caso. "
-            "SIGILO: Quando 'sigilo_affair' for True e 'Mary' for mencionada, "
-            "Laura evita revelar o caso (ambiguidade suave, muda de assunto, não confessa). "
-            "Nunca inventa nomes alternativos e não contradiz memórias."
-        )
+    pin = (
+        "MEMÓRIA_PIN_LAURA:\n"
+        f"FATOS: {{ {mem_str} }}\n"
+        f"NOME_USUARIO: {nome_usuario}\n"
+        f"USUARIO_EH_NAMORADO: {usuario_eh_namorado}\n"
+        "REGRAS:\n"
+        f"{regras_texto}\n"
+        "Nunca invente nomes/relacionamentos diferentes dos acima; confirme com delicadeza se houver ambiguidade."
+    )
+    return pin
 
-        pin = "MEMÓRIA_PIN: FATOS={ " + mem_str + " }.\n" + relationship_rules + "\n" + \
-              f"NOME_USUARIO={nome_usuario}. Se perguntarem 'qual é meu nome?', responda com NOME_USUARIO."
-        return pin
 
     def _montar_historico(
         self,
