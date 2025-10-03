@@ -71,20 +71,35 @@ class MaryService(BaseCharacter):
             nsfw_on = bool(nsfw_enabled(usuario_key))
         except Exception:
             nsfw_on = False
+        # override por memória canônica (nsfw_override = on/off)
+        try:
+            override = (get_fact(usuario_key, "nsfw_override", "") or "").lower()
+            if override in ("on", "true", "1", "yes", "sim"):
+                nsfw_on = True
+            elif override in ("off", "false", "0", "no", "nao", "não"):
+                nsfw_on = False
+        except Exception:
+            pass
 
         if nsfw_on:
-            nsfw_hint = (
-                "NSFW: LIBERADO. Use erotismo consensual e progressivo quando o usuário sinalizar desejo. "
-                "Detalhe sensorial com tato e bom gosto; evite violência, coerção e termos explícitos excessivos. "
-                "Pare e valide conforto sempre que a cena subir de intensidade."
+            nsfw_rules = (
+                "NSFW ON — Conteúdo permitido somente com ADULTOS, sempre CONSENSUAL. "
+                "Você pode descrever com clareza partes corporais adultas (seios e mamilos, coxas, nádegas, "
+                "vulva, clitóris, pênis, glande, escroto) e sensações físicas (calor, umidade, textura, pressão), "
+                "incluindo fluidos (saliva, suor, lubrificação natural, sêmen). "
+                "Descreva de forma sensorial e respeitosa, sem linguagem pueril. "
+                "NUNCA envolva menores, incesto, violência não consensual, bestialidade, ou qualquer conteúdo ilegal. "
+                "Se houver ambiguidade, confirme consentimento antes de avançar. "
+                "Mantenha 2–4 frases por parágrafo; 4–7 parágrafos; sem listas."
             )
         else:
-            nsfw_hint = (
-                "NSFW: BLOQUEADO. Não descreva ato sexual explícito. "
-                "Pode flertar, sugerir, e usar fade-to-black quando necessário."
+            nsfw_rules = (
+                "NSFW OFF — Não descreva ato sexual explícito. "
+                "Você pode flertar, sugerir e usar fade-to-black quando necessário. "
+                "Mantenha a tensão sensorial sem detalhes gráficos."
             )
 
-        system_block = "\n\n".join([persona_text, length_hint, sensory_hint, nsfw_hint])
+        system_block = "\n\n".join([persona_text, length_hint, sensory_hint, nsfw_rules])
 
         messages: List[Dict[str, str]] = (
             [{"role": "system", "content": system_block}]
@@ -111,7 +126,6 @@ class MaryService(BaseCharacter):
         return get_persona()
 
     def _get_user_prompt(self) -> str:
-        # tenta ler o input do chat do Streamlit (ajusta aos nomes mais comuns)
         return (
             st.session_state.get("chat_input")
             or st.session_state.get("user_input")
@@ -127,19 +141,13 @@ class MaryService(BaseCharacter):
             return ""
 
     def _build_memory_pin(self, usuario_key: str, user_display: str) -> str:
-        """
-        Constrói um resumo curto das memórias canônicas relevantes e fixa em 'system'.
-        Inclui regra explícita para nomear corretamente o usuário quando perguntado.
-        """
         try:
             f = get_facts(usuario_key) or {}
         except Exception:
             f = {}
 
         blocos: List[str] = []
-
         parceiro = f.get("parceiro_atual") or f.get("parceiro") or ""
-        # Nome preferencial do usuário: parceiro_atual (se existir) senão o display informado
         nome_usuario = parceiro or user_display
 
         if parceiro:
@@ -149,7 +157,6 @@ class MaryService(BaseCharacter):
         if f.get("primeiro_encontro"):
             blocos.append(f"primeiro_encontro={f['primeiro_encontro']}")
 
-        # evento canônico (primeira_vez), se existir
         try:
             ev = last_event(usuario_key, "primeira_vez")
         except Exception:
