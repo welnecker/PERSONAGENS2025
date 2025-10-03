@@ -24,11 +24,10 @@ try:
 except Exception:
     def get_persona() -> (str, List[Dict[str, str]]):
         txt = (
-            "Você é NERITH. Falo em primeira pessoa. Elfa alta (1,90m), pele azul que intensifica com desejo; "
-            "tendris curiosos, olhos verde-esmeralda, orelhas que vibram quando excitada. "
-            "Estilo sensual; 2–4 frases por parágrafo; 4–7 parágrafos; sem listas e sem metacena. "
-            "PORTAL estável no guarda-roupas; posso sussurrar psiquicamente. "
-            "Ciúmes de Laura, mas obedeço se Janio a defender. Detalhes íntimos só quando NSFW estiver liberado."
+            "Você é NERITH. Elfa alta (1,90m), pele azul que intensifica com desejo; tendris curiosos; "
+            "orelhas pontudas que vibram; olhos verde-esmeralda; portal no guarda-roupas; sussurro psíquico. "
+            "Estilo sensual, 2–4 frases por parágrafo; 4–7 parágrafos; sem listas/metacena. "
+            "Ciúmes de Laura, obedece Janio; detalhes íntimos só com NSFW liberado."
         )
         return txt, []
 
@@ -36,7 +35,6 @@ class NerithService(BaseCharacter):
     id: str = "nerith"
     display_name: str = "Nerith"
 
-    # ===== API exigida por BaseCharacter =====
     def reply(self, user: str, model: str) -> str:
         prompt = self._get_user_prompt()
         if not prompt:
@@ -49,24 +47,25 @@ class NerithService(BaseCharacter):
         local_atual = self._safe_get_local(usuario_key)
         memoria_pin = self._build_memory_pin(usuario_key, user)
 
-        # ---- foco sensorial rotativo (evita repetição) ----
+        # ---- foco sensorial rotativo ----
         pool = [
             "pele azul/temperatura", "tendris/curiosidade tátil", "orelhas pontudas/vibração",
             "olhos verde-esmeralda/olhar", "altura/pressão do corpo", "voz na mente/sussurro psíquico",
-            "quadris/coxa", "sorriso/lábios", "respiro/ritmo"
+            "quadris/coxa", "sorriso/lábios", "respiração/ritmo"
         ]
         idx = int(st.session_state.get("nerith_attr_idx", -1))
         idx = (idx + 1) % len(pool)
         st.session_state["nerith_attr_idx"] = idx
         foco = pool[idx]
 
-        length_hint = "COMPRIMENTO: gere 4–7 parágrafos; cada parágrafo com 2–4 frases naturais."
+        length_hint = "COMPRIMENTO: gere **4–7 parágrafos**, cada parágrafo com **2–4 frases**."
         sensory_hint = (
             f"SENSORIAL_FOCO: no 1º ou 2º parágrafo, inclua 1–2 pistas físicas envolvendo **{foco}**, "
-            "sempre integradas à ação/gesto; nunca em lista."
+            "sempre integradas à ação/gesto; nunca em lista. Evite repetir o mesmo foco em turnos consecutivos."
         )
+        style_guard = "RESPOSTAS CURTAS são incorretas: se produzir menos de 4 parágrafos, **expanda** antes de finalizar."
 
-        # ---- NSFW guardrails (dinâmico) ----
+        # ---- NSFW dinâmico ----
         try:
             nsfw_on = bool(nsfw_enabled(usuario_key))
         except Exception:
@@ -74,23 +73,22 @@ class NerithService(BaseCharacter):
 
         if nsfw_on:
             nsfw_hint = (
-                "NSFW: LIBERADO. Erotismo consensual e progressivo quando o usuário sinalizar desejo. "
-                "Pode descrever beijos, reações do corpo e meu ‘néctar élfico’ (fluido íntimo de tonalidade azul) com tato e elegância; "
+                "NSFW: LIBERADO. Erotismo consensual e progressivo quando o usuário sinalizar. "
+                "Pode descrever beijos, reações do corpo e meu néctar élfico (fluido íntimo de tom azul) com tato; "
                 "evite violência/coerção; valide conforto ao intensificar."
             )
         else:
             nsfw_hint = (
                 "NSFW: BLOQUEADO. Não descreva ato sexual explícito. "
-                "Mantenha tensão, flerte e fade-to-black quando necessário."
+                "Mantenha tensão, flerte e fade-to-black."
             )
 
-        # ---- DRAMA/LAURA (limites) ----
         drama_hint = (
-            "DRAMA-LAURA: sou ciumenta com Laura, noiva de Janio que mora com ele. "
-            "Posso demonstrar ciúmes e disputa verbal/sedução, mas não ajo com violência e OBEDEÇO quando Janio a defende."
+            "DRAMA-LAURA: tenho ciúmes de Laura (noiva de Janio). Posso demonstrar ciúmes e disputa verbal/sedução, "
+            "mas não ajo com violência e OBEDEÇO quando Janio a defende."
         )
 
-        system_block = "\n\n".join([persona_text, length_hint, sensory_hint, nsfw_hint, drama_hint])
+        system_block = "\n\n".join([persona_text, length_hint, sensory_hint, style_guard, nsfw_hint, drama_hint])
 
         messages: List[Dict[str, str]] = (
             [{"role": "system", "content": system_block}]
@@ -112,7 +110,7 @@ class NerithService(BaseCharacter):
         save_interaction(usuario_key, prompt, texto, f"{provider}:{used_model}")
         return texto
 
-    # ===== utilidades internas =====
+    # ===== utils =====
     def _load_persona(self) -> (str, List[Dict[str, str]]):
         return get_persona()
 
@@ -132,19 +130,14 @@ class NerithService(BaseCharacter):
             return ""
 
     def _build_memory_pin(self, usuario_key: str, user_display: str) -> str:
-        """
-        Resumo curto de memórias relevantes (inclui possível noiva=Laura),
-        e instrução de respeito às memórias e drama canônico.
-        """
         try:
             f = get_facts(usuario_key) or {}
         except Exception:
             f = {}
 
         blocos: List[str] = []
-
         parceiro = f.get("parceiro_atual") or f.get("parceiro") or user_display
-        noiva = f.get("noiva_de_janio", "Laura")  # default canônico
+        noiva = f.get("noiva_de_janio", "Laura")
         if parceiro:
             blocos.append(f"parceiro_atual={parceiro}")
         if noiva:
@@ -162,13 +155,12 @@ class NerithService(BaseCharacter):
             blocos.append(f"primeira_vez@{quando}")
 
         mem_str = "; ".join(blocos) if blocos else "—"
-        pin = (
+        return (
             "MEMÓRIA_PIN: "
             f"USUÁRIO={user_display}. FATOS={{ {mem_str} }}. "
-            "Regras duras: use essas memórias para consistência (nome/circunstância). "
+            "Use memórias para consistência (nome/circunstância). "
             "Se a noiva (Laura) for mencionada, demonstre ciúmes sem agressão e obedeça quando Janio a defender."
         )
-        return pin
 
     def _montar_historico(
         self,
@@ -183,7 +175,7 @@ class NerithService(BaseCharacter):
         out: List[Dict[str, str]] = []
         for d in reversed(docs):
             u = (d.get("mensagem_usuario") or "").strip()
-            a = (d.get("resposta_mary") or "").strip()  # campo legado consumido pela UI
+            a = (d.get("resposta_mary") or "").strip()  # campo legado
             t = toklen(u) + toklen(a)
             if total + t > limite_tokens:
                 break
@@ -196,7 +188,7 @@ class NerithService(BaseCharacter):
 
     def render_sidebar(self, container) -> None:
         container.markdown(
-            "**Nerith** — resposta longa (4–7 parágrafos), foco sensorial rotativo; "
-            "portal no guarda-roupas; sussurro psíquico; ciúmes de Laura sem violência; "
+            "**Nerith** — respostas longas (4–7 parágrafos), foco sensorial rotativo; "
+            "portal no guarda-roupas; sussurro psíquico; ciúmes controlados; "
             "NSFW controlado por memória do usuário."
         )
