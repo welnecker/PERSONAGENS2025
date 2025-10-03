@@ -249,62 +249,84 @@ class LauraService(BaseCharacter):
         return list(reversed(out)) if out else history_boot[:]
 
     def render_sidebar(self, container) -> None:
-        container.markdown(
-            "**Laura** — resposta longa (4–7 parágrafos), foco sensorial obrigatório com atributo rotativo; "
-            "não faz programa; romântica; NSFW controlado por memória do usuário."
+    container.markdown(
+        "**Laura** — resposta longa (4–7 parágrafos), foco sensorial obrigatório com atributo rotativo; "
+        "não faz programa; romântica; NSFW controlado por memória do usuário."
+    )
+
+    # chave do usuário/Laura
+    user = str(st.session_state.get("user_id", "") or "")
+    usuario_key = f"{user}::laura" if user else "anon::laura"
+
+    # Carrega valores atuais
+    try:
+        fatos = get_facts(usuario_key) or {}
+    except Exception:
+        fatos = {}
+
+    # ====================
+    # 💃 Preferências (flerte)
+    # ====================
+    with container.expander("💃 Preferências", expanded=False):
+        flirt_val = bool(fatos.get("flirt_mode", True))
+        # key único por thread do usuário
+        k_flirt = f"ui_laura_flirt_{usuario_key}"
+        ui_flirt = container.checkbox("Flerte liberado", value=flirt_val, key=k_flirt)
+        if ui_flirt != flirt_val:
+            try:
+                set_fact(usuario_key, "flirt_mode", bool(ui_flirt), {"fonte": "sidebar"})
+                st.toast("Preferência de flerte salva.", icon="✅")
+                # força recarregar histórico/pinos na próxima render
+                st.session_state["history_loaded_for"] = ""
+                st.rerun()
+            except Exception as e:
+                container.warning(f"Falha ao salvar flerte: {e}")
+
+    # ====================
+    # ❤️ Caso com Janio (Laura)
+    # ====================
+    with container.expander("❤️ Caso com Janio (Laura)", expanded=False):
+        affair_val   = bool(fatos.get("affair_com_janio", False))
+        sigilo_val   = bool(fatos.get("sigilo_affair", True))
+        namorado_val = str(fatos.get("namorado_de_mary", "Janio Donisete"))
+
+        k_affair   = f"ui_laura_affair_{usuario_key}"
+        k_sigilo   = f"ui_laura_sigilo_{usuario_key}"
+        k_namorado = f"ui_laura_namary_{usuario_key}"
+
+        ui_affair = container.checkbox(
+            "Caso secreto com Janio (ATIVAR)",
+            value=affair_val,
+            key=k_affair,
+            help="Quando ativo, Laura tem um caso com Janio neste cenário."
+        )
+        ui_sigilo = container.checkbox(
+            "Sigilo do caso (ocultar da Mary)",
+            value=sigilo_val,
+            key=k_sigilo,
+            help="Se 'Mary' for mencionada, Laura evita revelar o caso."
+        )
+        ui_namorado = container.text_input(
+            "Namorado da Mary (neste cenário)",
+            value=namorado_val,
+            key=k_namorado,
+            help="Nome que Laura reconhece como namorado de Mary neste cenário."
         )
 
-        # chave do usuário/Laura
-        user = str(st.session_state.get("user_id", "") or "")
-        usuario_key = f"{user}::laura" if user else "anon::laura"
+        changed = (
+            bool(ui_affair) != affair_val or
+            bool(ui_sigilo) != sigilo_val or
+            (ui_namorado or "").strip() != (namorado_val or "").strip()
+        )
+        if changed:
+            try:
+                set_fact(usuario_key, "affair_com_janio", bool(ui_affair), {"fonte": "sidebar"})
+                set_fact(usuario_key, "sigilo_affair", bool(ui_sigilo), {"fonte": "sidebar"})
+                set_fact(usuario_key, "namorado_de_mary", (ui_namorado or "Janio Donisete").strip(), {"fonte": "sidebar"})
+                st.toast("Relação da Laura atualizada.", icon="✅")
+                st.session_state["history_loaded_for"] = ""  # força recarga do histórico/pin
+                st.rerun()
+            except Exception as e:
+                container.error(f"Falha ao salvar: {e}")
 
-        # Carrega valores atuais
-        try:
-            fatos = get_facts(usuario_key) or {}
-        except Exception:
-            fatos = {}
-
-        # Preferências de flerte
-        with container.expander("💃 Preferências"):
-            flirt_val = bool(fatos.get("flirt_mode", True))
-            new_flirt = container.checkbox("Flerte liberado", value=flirt_val)
-            if new_flirt != flirt_val:
-                try:
-                    set_fact(usuario_key, "flirt_mode", bool(new_flirt), {"fonte": "sidebar"})
-                    container.success("Preferência de flerte salva.")
-                    if hasattr(st, "rerun"): st.rerun()
-                except Exception as e:
-                    container.warning(f"Falha ao salvar flerte: {e}")
-
-        # Caso secreto + sigilo
-        with container.expander("❤️ Caso com Janio (Laura)"):
-            affair_val    = bool(fatos.get("affair_com_janio", False))
-            sigilo_val    = bool(fatos.get("sigilo_affair", True))
-            namorado_val  = fatos.get("namorado_de_mary", "Janio Donisete")
-
-            new_affair = container.checkbox(
-                "Caso secreto com Janio (ATIVAR)",
-                value=affair_val,
-                help="Quando ativo, Laura tem um caso com Janio neste cenário."
-            )
-            new_sigilo = container.checkbox(
-                "Sigilo do caso (ocultar da Mary)",
-                value=sigilo_val,
-                help="Se 'Mary' for mencionada, Laura evita revelar o caso."
-            )
-            new_namorado = container.text_input(
-                "Namorado da Mary (neste cenário)",
-                value=namorado_val
-            )
-
-            if container.button("💾 Salvar relação (Laura)"):
-                try:
-                    set_fact(usuario_key, "affair_com_janio", bool(new_affair), {"fonte": "sidebar"})
-                    set_fact(usuario_key, "sigilo_affair", bool(new_sigilo), {"fonte": "sidebar"})
-                    set_fact(usuario_key, "namorado_de_mary", new_namorado.strip() or "Janio Donisete", {"fonte": "sidebar"})
-                    container.success("Relação da Laura atualizada.")
-                    if hasattr(st, "rerun"): st.rerun()
-                except Exception as e:
-                    container.error(f"Falha ao salvar: {e}")
-
-        container.caption("Memórias desta aba valem **somente** para `user::laura` (não afetam a Mary).")
+    container.caption("Memórias desta aba valem **somente** para `user::laura` (não afetam a Mary).")
