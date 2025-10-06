@@ -74,7 +74,7 @@ class NerithService(BaseCharacter):
 
         # ---- NSFW dinâmico ----
         try:
-            nsfw_on = bool(nsfw_enabled(usuario_key))
+            nsfw_on = bool(nsfw_enabled(usuario_key))  # definido no módulo (como em Mary/Laura)
         except Exception:
             nsfw_on = False
 
@@ -93,10 +93,10 @@ class NerithService(BaseCharacter):
         fatos = get_facts(usuario_key) or {}
         ctrl_on = bool(fatos.get("controle_psiquico", True))
         alvos = str(fatos.get("alvos_controle", "pessoas próximas do ambiente")).strip()
-        ciúme_laura = bool(fatos.get("ciume_de_laura", True))
+        ciume_laura = bool(fatos.get("ciume_de_laura", True))
         obedece_defesa = bool(fatos.get("obedecer_defesa_de_laura", True))
 
-        # heurística: menções a "trabalho"/"escritório"/"aula"/"faculdade"/"reuni"
+        # heurística: menções a contexto de trabalho/externo
         pl = prompt.lower()
         contexto_remoto = any(w in pl for w in ["trabalho", "escritório", "reuni", "faculdade", "aula", "plantão"])
 
@@ -104,24 +104,23 @@ class NerithService(BaseCharacter):
             controle_hint = (
                 "CONTROLE_PSIQUICO: ATIVO. Quando distante do LOCAL_ATUAL ou em ambientes como trabalho/escritório, "
                 f"Nerith pode **assumir discretamente** alguém próximo (ex.: {alvos}) para falar com o usuário. "
-                "Regra: mantenha coerência do cenário; descreva sutis sinais físicos (olhar vidrado, micro-pausas, "
-                "palavras sussurradas que parecem 'não ser da pessoa'). Não quebre a imersão; não revele abertamente a possessão, "
-                "a menos que o usuário descubra ou consinta."
+                "Regra: mantenha a conversa NATURAL e socialmente plausível; no máximo, sinais sutis (micro-pausa, olhar que dura um segundo a mais). "
+                "Não revele a possessão a menos que o usuário perceba/consinta; não descreva efeitos sobrenaturais."
             )
             if contexto_remoto:
-                controle_hint += " (Este turno parece ‘ambiente externo’: assuma canal humano próximo com descrição sutil.)"
+                controle_hint += " (Este turno sugere ambiente externo: converse através de um humano próximo de forma natural.)"
         else:
             controle_hint = "CONTROLE_PSIQUICO: DESATIVADO. Fale apenas como você mesma, sem tomar corpos alheios."
 
         # ----- Ciúme/Laura (força, não fraqueza) -----
-        ciúme_hint = (
+        ciu_me_hint = (
             "CIÚME/LAURA: Nerith é possessiva em silêncio quando Laura é mencionada; "
-            "lê intenções, **impõe presença** com elegância. "
+            "lê intenções e **impõe presença** com elegância. "
             + ("Se Janio defende Laura, Nerith acata sem humilhação; recalibra o jogo." if obedece_defesa else "")
-        ) if ciúme_laura else "CIÚME/LAURA: atenuado neste cenário."
+        ) if ciume_laura else "CIÚME/LAURA: atenuado neste cenário."
 
         system_block = "\n\n".join([
-            persona_text, tone_hint, length_hint, sensory_hint, nsfw_hint, controle_hint, ciúme_hint
+            persona_text, tone_hint, length_hint, sensory_hint, nsfw_hint, controle_hint, ciu_me_hint
         ])
 
         messages: List[Dict[str, str]] = (
