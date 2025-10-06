@@ -1,7 +1,8 @@
+# characters/nerith/service.py
 from __future__ import annotations
 
 import streamlit as st
-from typing import List, Dict
+from typing import List, Dict, Tuple
 
 from core.common.base_service import BaseCharacter
 from core.service_router import route_chat_strict
@@ -20,9 +21,9 @@ except Exception:  # fallback seguro
 
 # Persona específica (ideal: characters/nerith/persona.py)
 try:
-    from .persona import get_persona  # -> (persona_text: str, history_boot: List[Dict[str,str]])
+    from .persona import get_persona  # -> Tuple[str, List[Dict[str,str]]]
 except Exception:
-    def get_persona() -> (str, List[Dict[str, str]]):
+    def get_persona() -> Tuple[str, List[Dict[str, str]]]:
         txt = (
             "Você é NERITH (Narith), uma elfa alta e poderosa (1,90m). Pele azul que intensifica com o desejo; "
             "olhos verde-esmeralda; orelhas pontudas que vibram quando excitada. Tendrils sensíveis exploram "
@@ -38,6 +39,7 @@ class NerithService(BaseCharacter):
     id: str = "nerith"
     display_name: str = "Nerith"
 
+    # ===== API =====
     def reply(self, user: str, model: str) -> str:
         prompt = self._get_user_prompt()
         if not prompt:
@@ -98,7 +100,7 @@ class NerithService(BaseCharacter):
         ciume_laura = bool(fatos.get("ciume_de_laura", True))
         obedece_defesa = bool(fatos.get("obedecer_defesa_de_laura", True))
         pl = prompt.lower()
-        contexto_remoto = any(w in pl for w in ["trabalho", "escritório", "reuni", "faculdade", "aula", "plantão"])
+        contexto_remoto = any(w in pl for w in ["trabalho", "escritorio", "escritório", "reuni", "faculdade", "aula", "plantão", "plantao"])
         if ctrl_on:
             controle_hint = (
                 "CONTROLE_PSIQUICO: ATIVO. Quando distante do LOCAL_ATUAL ou em ambientes como trabalho/escritório, "
@@ -112,7 +114,7 @@ class NerithService(BaseCharacter):
             controle_hint = "CONTROLE_PSIQUICO: DESATIVADO. Fale apenas como você mesma."
 
         # ---- Ciúme/Laura ----
-        ciu_me_hint = (
+        ciume_hint = (
             "CIÚME/LAURA: presença elegante e assertiva quando Laura é mencionada; "
             + ("acate com elegância se Janio a defender; recalibre o jogo." if obedece_defesa else "")
         ) if ciume_laura else "CIÚME/LAURA: atenuado."
@@ -120,19 +122,19 @@ class NerithService(BaseCharacter):
         # ---- Ferrão onírico e guia lúcida (reforço) ----
         guide_style = ["suave", "equilibrada", "diretiva", "muito diretiva"][max(0, min(3, guide_assertiveness))]
         detail_style = ["telegráfico", "moderado", "rico", "vívido"][max(0, min(3, dreamworld_detail_level))]
-        ferrão_hint = (
-            "FERRÃO ONÍRICO: o portal só abre via ferrão e apenas após Nerith sentir prazer estando de quatro. "
+        ferrao_hint = (
+            "FERRAO_ONIRICO: o portal só abre via ferrão e apenas após Nerith sentir prazer estando de quatro. "
             "Nerith pode expressar vontade intensa de usá-lo, mas SEMPRE pergunta e só procede com consentimento explícito. "
             "O ferrão induz sonho lúcido seguro: atravessa ao mundo élfico além do guarda-roupas, sem química, sem dano, retorno pleno ao despertar. "
             f"NO SONHO: Nerith atua como guia lúcida {guide_style}, descrevendo o cenário em nível {detail_style}, "
-            "oferecendo checks de realidade (ex.: ler duas vezes um letreiro) e âncoras (aromas/palavras) para reentrada futura. "
+            "oferecendo checks de realidade e âncoras para reentrada futura. "
             "Nunca abrir o portal por outros meios. Não quebrar LOCAL_ATUAL fora do consentimento para o sonho."
         )
 
         # ---- Monta system ----
         system_block = "\n\n".join([
             persona_text, tone_hint, length_hint, sensory_hint,
-            nsfw_hint, ferrão_hint, controle_hint, ciu_me_hint
+            nsfw_hint, ferrao_hint, controle_hint, ciume_hint
         ])
 
         messages: List[Dict[str, str]] = (
@@ -161,7 +163,7 @@ class NerithService(BaseCharacter):
         return texto
 
     # ===== utils =====
-    def _load_persona(self) -> (str, List[Dict[str, str]]):
+    def _load_persona(self) -> Tuple[str, List[Dict[str, str]]]:
         return get_persona()
 
     def _get_user_prompt(self) -> str:
@@ -269,7 +271,8 @@ class NerithService(BaseCharacter):
             fatos = get_facts(usuario_key) or {}
         except Exception:
             fatos = {}
-            
+
+        # Controle psíquico
         with container.expander("🧠 Controle psíquico", expanded=False):
             ctrl_val = bool(fatos.get("controle_psiquico", True))
             alvos_val = str(fatos.get("alvos_controle", "pessoas próximas do ambiente"))
@@ -277,8 +280,11 @@ class NerithService(BaseCharacter):
             k_alvos = f"ui_nerith_alvos_{usuario_key}"
 
             ui_ctrl = container.checkbox("Ativar controle/possessão de pessoas próximas", value=ctrl_val, key=k_ctrl)
-            ui_alvos = container.text_input("Alvos preferidos (descrição curta)", value=alvos_val, key=k_alvos,
-                                            help="Ex.: 'colega de trabalho, atendente do café, segurança do prédio'")
+            ui_alvos = container.text_input(
+                "Alvos preferidos (descrição curta)",
+                value=alvos_val, key=k_alvos,
+                help="Ex.: 'colega de trabalho, atendente do café, segurança do prédio'"
+            )
 
             if ui_ctrl != ctrl_val or (ui_alvos or "").strip() != (alvos_val or "").strip():
                 try:
@@ -293,6 +299,7 @@ class NerithService(BaseCharacter):
                 except Exception as e:
                     container.warning(f"Falha ao salvar: {e}")
 
+        # Dinâmica com Laura
         with container.expander("💚 Dinâmica com Laura", expanded=False):
             ciume_val = bool(fatos.get("ciume_de_laura", True))
             obedece_val = bool(fatos.get("obedecer_defesa_de_laura", True))
@@ -315,6 +322,7 @@ class NerithService(BaseCharacter):
                 except Exception as e:
                     container.warning(f"Falha ao salvar: {e}")
 
+        # Parâmetros do sonho
         with container.expander("🌙 Sonho élfico (guia)", expanded=False):
             lvl = int(fatos.get("dreamworld_detail_level", 1))
             ga = int(fatos.get("guide_assertiveness", 1))
@@ -322,8 +330,7 @@ class NerithService(BaseCharacter):
             k_ga = f"ui_nerith_guide_{usuario_key}"
 
             ui_lvl = container.slider("Detalhe do mundo (0–3)", 0, 3, lvl, key=k_lvl)
-            ui_ga = container.slider("Diretividade da guia (0–3)", 0, 3, ga, key=k_ga,
-                                     help="0=sutil, 3=muito diretiva")
+            ui_ga = container.slider("Diretividade da guia (0–3)", 0, 3, ga, key=k_ga, help="0=sutil, 3=muito diretiva")
 
             if ui_lvl != lvl or ui_ga != ga:
                 try:
