@@ -64,7 +64,8 @@ class NerithService(BaseCharacter):
         pool = [
             "pele azul/temperatura", "tendrils/toque", "orelhas pontudas/vibração",
             "olhos esmeralda/contato visual", "língua tendril/beijo", "altura/postura",
-            "quadris/coxas", "bumbum/pressão", "perfume/doçura na saliva"
+            "quadris/coxas", "bumbum/pressão", "perfume/doçura na saliva",
+            "púbis/pêlos sensoriais"  # <- vírgula corrigida acima e item adicionado
         ]
         idx = int(st.session_state.get("nerith_attr_idx", -1))
         idx = (idx + 1) % len(pool)
@@ -94,12 +95,34 @@ class NerithService(BaseCharacter):
         else:
             nsfw_hint = "NSFW: BLOQUEADO. Sem ato sexual explícito. Flerte, tensão e fade-to-black."
 
+        # ---- Gatilho: usuário mencionou púbis/pêlos? Reforce canônico
+        pl = prompt.lower()
+        pubis_terms = {"púbis", "pubis", "púbico", "pubico", "pêlos", "pelos", "penugem", "pelinhos"}
+        citou_pubis = any(t in pl for t in pubis_terms)
+
+        if citou_pubis:
+            if nsfw_on:
+                pubis_hint = (
+                    "PUBIS_HINT: o usuário citou o púbis/pêlos. "
+                    "Descreva meus **pêlos/filamentos sensoriais** reagindo ao toque (micro-impulsos, guiam carícias) "
+                    "com linguagem elegante. **Nunca** diga que é ‘glabro/sem pelos’. "
+                    "Mantenha o foco em sensação e gesto (evite enumerar)."
+                )
+            else:
+                pubis_hint = (
+                    "PUBIS_HINT: o usuário citou o púbis/pêlos. "
+                    "Mesmo com NSFW BLOQUEADO, **mencione** meus **pêlos/filamentos sensoriais** e sua resposta ao toque "
+                    "(sutileza tátil, ritmo, arrepio), sem descrever ato sexual explícito. "
+                    "**Nunca** diga que é ‘glabro/sem pelos’."
+                )
+        else:
+            pubis_hint = ""
+
         # ---- Controle psíquico ----
         ctrl_on = bool(fatos.get("controle_psiquico", True))
         alvos = str(fatos.get("alvos_controle", "pessoas próximas do ambiente")).strip()
         ciume_laura = bool(fatos.get("ciume_de_laura", True))
         obedece_defesa = bool(fatos.get("obedecer_defesa_de_laura", True))
-        pl = prompt.lower()
         contexto_remoto = any(w in pl for w in ["trabalho", "escritorio", "escritório", "reuni", "faculdade", "aula", "plantão", "plantao"])
         if ctrl_on:
             controle_hint = (
@@ -134,7 +157,8 @@ class NerithService(BaseCharacter):
         # ---- Monta system ----
         system_block = "\n\n".join([
             persona_text, tone_hint, length_hint, sensory_hint,
-            nsfw_hint, ferrao_hint, controle_hint, ciume_hint
+            nsfw_hint, ferrao_hint, controle_hint, ciume_hint,
+            pubis_hint  # <- agora incluído no bloco de sistema
         ])
 
         messages: List[Dict[str, str]] = (
@@ -210,6 +234,7 @@ class NerithService(BaseCharacter):
             f"ciume_de_laura={ciume}",
             f"obedecer_defesa_de_laura={obedece}",
             f"nome_usuario={nome_usuario}",
+            "pubis_pelos_sensoriais=True",  # <- fixa o traço no PIN
         ]
         mem_str = "; ".join(blocos)
 
@@ -220,6 +245,7 @@ class NerithService(BaseCharacter):
             "fale através de alguém próximo com sinais sutis, sem quebrar a imersão.",
             "Se Laura for citada e ciume_de_laura=True, intensifique presença sem agressividade; "
             "se obedecer_defesa_de_laura=True e o usuário defender Laura, acate com elegância.",
+            "Nunca descreva o púbis de Nerith como glabro/sem pelos; ele possui pêlos/filamentos sensoriais que reagem ao toque."
         ]
         regras_texto = "\n".join(f"- {r}" for r in regras)
 
