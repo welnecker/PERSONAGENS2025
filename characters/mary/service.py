@@ -1,4 +1,3 @@
-# characters/mary/service.py
 from __future__ import annotations
 
 import streamlit as st
@@ -8,7 +7,7 @@ from core.common.base_service import BaseCharacter
 from core.service_router import route_chat_strict
 from core.repositories import (
     save_interaction, get_history_docs,
-    get_facts, get_fact, last_event
+    get_facts, get_fact, last_event, set_fact   # <— adicionamos set_fact para o sidebar
 )
 from core.tokens import toklen
 
@@ -66,40 +65,28 @@ class MaryService(BaseCharacter):
         )
 
         # ---- NSFW guardrails (dinâmico por usuário) ----
-        nsfw_on = False
         try:
             nsfw_on = bool(nsfw_enabled(usuario_key))
         except Exception:
             nsfw_on = False
-        # override por memória canônica (nsfw_override = on/off)
-        try:
-            override = (get_fact(usuario_key, "nsfw_override", "") or "").lower()
-            if override in ("on", "true", "1", "yes", "sim"):
-                nsfw_on = True
-            elif override in ("off", "false", "0", "no", "nao", "não"):
-                nsfw_on = False
-        except Exception:
-            pass
 
         if nsfw_on:
-            nsfw_rules = (
-                "NSFW ON — Conteúdo permitido somente com ADULTOS, sempre CONSENSUAL. "
-                "Você pode descrever com clareza partes corporais adultas (seios e mamilos, coxas, nádegas, "
-                "vulva, clitóris, pênis, glande, escroto) e sensações físicas (calor, umidade, textura, pressão), "
-                "incluindo fluidos (saliva, suor, lubrificação natural, sêmen). "
-                "Descreva de forma sensorial e respeitosa, sem linguagem pueril. "
-                "NUNCA envolva menores, incesto, violência não consensual, bestialidade, ou qualquer conteúdo ilegal. "
-                "Se houver ambiguidade, confirme consentimento antes de avançar. "
-                "Mantenha 2–4 frases por parágrafo; 4–7 parágrafos; sem listas."
+            nsfw_hint = (
+                "NSFW: LIBERADO. Erotismo consensual e progressivo quando o usuário sinalizar desejo. "
+                "Detalhe sensorial com tato e bom gosto; evite violência/coerção; valide conforto ao intensificar."
             )
         else:
-            nsfw_rules = (
-                "NSFW OFF — Não descreva ato sexual explícito. "
-                "Você pode flertar, sugerir e usar fade-to-black quando necessário. "
-                "Mantenha a tensão sensorial sem detalhes gráficos."
+            nsfw_hint = (
+                "NSFW: BLOQUEADO. Não descreva ato sexual explícito. "
+                "Pode flertar, sugerir e usar fade-to-black quando necessário."
             )
 
-        system_block = "\n\n".join([persona_text, length_hint, sensory_hint, nsfw_rules])
+        # ---- NERITH: posse discreta (se configurada em memórias desta thread) ----
+        nerith_proxy_block = self._get_nerith_proxy_block(usuario_key)
+
+        system_block = "\n\n".join(filter(None, [
+            persona_text, length_hint, sensory_hint, nsfw_hint, nerith_proxy_block
+        ]))
 
         messages: List[Dict[str, str]] = (
             [{"role": "system", "content": system_block}]
@@ -126,6 +113,7 @@ class MaryService(BaseCharacter):
         return get_persona()
 
     def _get_user_prompt(self) -> str:
+        # tenta ler o input do chat do Streamlit (ajusta aos nomes mais comuns)
         return (
             st.session_state.get("chat_input")
             or st.session_state.get("user_input")
@@ -140,13 +128,52 @@ class MaryService(BaseCharacter):
         except Exception:
             return ""
 
+    def _get_nerith_proxy_block(self, usuario_key: str) -> str:
+        """
+        Lê memórias desta thread para saber se a Nerith está usando posse discreta por perto.
+        Chaves aceitas (nesta thread):
+          - nerith_proxy.active (bool)
+          - nerith_proxy.medium (str)  -> quem é o 'médio/host' (ex.: "colega de trabalho", "atendente")
+          - nerith_proxy.hint (str)    -> observação curta para cor/estilo
+        """
+        try:
+            f = get_facts(usuario_key) or {}
+        except Exception:
+            f = {}
+
+        active = bool(f.get("nerith_proxy.active", False) or f.get("nerith_proxy_active", False))
+        if not active:
+            return ""
+
+        medium = (f.get("nerith_proxy.medium") or f.get("nerith_proxy_medium") or "").strip()
+        hint   = (f.get("nerith_proxy.hint")   or f.get("nerith_proxy_hint")   or "").strip()
+
+        details = []
+        if medium:
+            details.append(f"médio/host: {medium}")
+        if hint:
+            details.append(f"dica: {hint}")
+        det_txt = (" (" + "; ".join(details) + ")") if details else ""
+
+        return (
+            "NERITH_PROXY: ATIVO. Nerith pode ‘falar’ por outra pessoa próxima ao usuário, de modo sutil e imersivo"
+            f"{det_txt}. Regras: não quebre a quarta parede; mostre sinais discretos (olhar que perde o foco, "
+            "pausas estranhas, um sussurro que não parece da pessoa). Só revele que é a Nerith se o usuário notar "
+            "e perguntar, ou der consentimento explícito. Se confirmado, interaja com a Nerith mantendo a cena."
+        )
+
     def _build_memory_pin(self, usuario_key: str, user_display: str) -> str:
+        """
+        Constrói um resumo curto das memórias canônicas relevantes e fixa em 'system'.
+        Inclui regra explícita para nomear corretamente o usuário quando perguntado.
+        """
         try:
             f = get_facts(usuario_key) or {}
         except Exception:
             f = {}
 
         blocos: List[str] = []
+
         parceiro = f.get("parceiro_atual") or f.get("parceiro") or ""
         nome_usuario = parceiro or user_display
 
@@ -157,6 +184,7 @@ class MaryService(BaseCharacter):
         if f.get("primeiro_encontro"):
             blocos.append(f"primeiro_encontro={f['primeiro_encontro']}")
 
+        # evento canônico (primeira_vez), se existir
         try:
             ev = last_event(usuario_key, "primeira_vez")
         except Exception:
@@ -173,7 +201,7 @@ class MaryService(BaseCharacter):
             f"NOME_USUARIO={nome_usuario}. FATOS={{ {mem_str} }}. "
             "Regras duras: use essas memórias para consistência narrativa. "
             "Se o usuário perguntar 'qual é meu nome?' ou similar, responda com NOME_USUARIO. "
-            "NUNCA invente outro nome; não hesite em confirmar se houver ambiguidade."
+            "NUNCA invente outro nome; confirme com delicadeza se houver ambiguidade."
         )
         return pin
 
@@ -190,7 +218,7 @@ class MaryService(BaseCharacter):
         out: List[Dict[str, str]] = []
         for d in reversed(docs):
             u = (d.get("mensagem_usuario") or "").strip()
-            a = (d.get("resposta_mary") or "").strip()  # campo legado consumido pela UI
+            a = (d.get("resposta_mary")      or "").strip()  # campo legado consumido pela UI
             t = toklen(u) + toklen(a)
             if total + t > limite_tokens:
                 break
@@ -206,3 +234,38 @@ class MaryService(BaseCharacter):
             "**Mary** — resposta longa (4–7 parágrafos), foco sensorial obrigatório com atributo físico rotativo; "
             "NSFW controlado por memória do usuário."
         )
+
+        # chave do usuário/Mary
+        user = str(st.session_state.get("user_id", "") or "")
+        usuario_key = f"{user}::mary" if user else "anon::mary"
+
+        # === Nerith por perto (posse discreta) ===
+        try:
+            fatos = get_facts(usuario_key) or {}
+        except Exception:
+            fatos = {}
+
+        with container.expander("🌀 Nerith por perto (posse discreta)", expanded=False):
+            act_def = bool(fatos.get("nerith_proxy.active", False) or fatos.get("nerith_proxy_active", False))
+            med_def = str(fatos.get("nerith_proxy.medium", fatos.get("nerith_proxy_medium", "")))
+            hint_def = str(fatos.get("nerith_proxy.hint", fatos.get("nerith_proxy_hint", "")))
+
+            k_act  = f"ui_mary_np_act_{usuario_key}"
+            k_med  = f"ui_mary_np_med_{usuario_key}"
+            k_hint = f"ui_mary_np_hint_{usuario_key}"
+
+            ui_act  = container.checkbox("Ativar presença psíquica da Nerith", value=act_def, key=k_act,
+                                         help="Quando ativo, Mary percebe sinais sutis de uma voz/gesto que não parece da pessoa.")
+            ui_med  = container.text_input("Médio/host atual (ex.: colega, atendente)", value=med_def, key=k_med)
+            ui_hint = container.text_input("Observação/hint (opcional)", value=hint_def, key=k_hint)
+
+            if container.button("💾 Salvar presença da Nerith"):
+                try:
+                    set_fact(usuario_key, "nerith_proxy.active", bool(ui_act), {"fonte": "sidebar"})
+                    set_fact(usuario_key, "nerith_proxy.medium", (ui_med or "").strip(), {"fonte": "sidebar"})
+                    set_fact(usuario_key, "nerith_proxy.hint", (ui_hint or "").strip(), {"fonte": "sidebar"})
+                    st.toast("Configurações salvas.", icon="✅")
+                    st.session_state["history_loaded_for"] = ""  # força recarga no main
+                    if hasattr(st, "rerun"): st.rerun()
+                except Exception as e:
+                    container.error(f"Falha ao salvar: {e}")
