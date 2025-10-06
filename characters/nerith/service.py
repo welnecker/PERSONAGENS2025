@@ -38,7 +38,6 @@ class NerithService(BaseCharacter):
     id: str = "nerith"
     display_name: str = "Nerith"
 
-    # ===== API =====
     def reply(self, user: str, model: str) -> str:
         prompt = self._get_user_prompt()
         if not prompt:
@@ -51,7 +50,15 @@ class NerithService(BaseCharacter):
         local_atual = self._safe_get_local(usuario_key)
         memoria_pin = self._build_memory_pin(usuario_key, user)
 
-        # ---- foco sensorial rotativo (evita repetição) ----
+        # ---- parâmetros opcionais do sonho ----
+        try:
+            fatos = get_facts(usuario_key) or {}
+        except Exception:
+            fatos = {}
+        dreamworld_detail_level = int(fatos.get("dreamworld_detail_level", 1))  # 0-3
+        guide_assertiveness = int(fatos.get("guide_assertiveness", 1))          # 0-3
+
+        # ---- foco sensorial rotativo ----
         pool = [
             "pele azul/temperatura", "tendrils/toque", "orelhas pontudas/vibração",
             "olhos esmeralda/contato visual", "língua tendril/beijo", "altura/postura",
@@ -62,9 +69,9 @@ class NerithService(BaseCharacter):
         st.session_state["nerith_attr_idx"] = idx
         foco = pool[idx]
 
-        length_hint = "COMPRIMENTO: gere **4–7 parágrafos**, cada um com **2–4 frases** naturais."
+        length_hint = "COMPRIMENTO: gere 4–7 parágrafos, cada um com 2–4 frases naturais."
         sensory_hint = (
-            f"SENSORIAL_FOCO: no 1º ou 2º parágrafo, insira 1–2 pistas envolvendo **{foco}**, "
+            f"SENSORIAL_FOCO: no 1º ou 2º parágrafo, insira 1–2 pistas envolvendo {foco}, "
             "fundidas à ação/gesto (nunca em lista)."
         )
         tone_hint = (
@@ -74,53 +81,58 @@ class NerithService(BaseCharacter):
 
         # ---- NSFW dinâmico ----
         try:
-            nsfw_on = bool(nsfw_enabled(usuario_key))  # definido no módulo (como em Mary/Laura)
+            nsfw_on = bool(nsfw_enabled(usuario_key))
         except Exception:
             nsfw_on = False
-
         if nsfw_on:
             nsfw_hint = (
-                "NSFW: LIBERADO. Erotismo consensual e progressivo. "
-                "Pode descrever fluidos (mel élfico, saliva doce, lubrificação azul), sensações de pele, pressão, "
-                "ritmo e exploração com tendrils; mantenha elegância; valide conforto ao intensificar."
+                "NSFW: LIBERADO. Erotismo consensual e progressivo; pode detalhar sabores (mel élfico), respirações, "
+                "pressão de corpos, doçura da saliva e lubrificação azul com elegância; valide conforto ao intensificar."
             )
         else:
-            nsfw_hint = (
-                "NSFW: BLOQUEADO. Sem ato sexual explícito. Flerte, tensão e fade-to-black estão ok."
-            )
+            nsfw_hint = "NSFW: BLOQUEADO. Sem ato sexual explícito. Flerte, tensão e fade-to-black."
 
-        # ---- Controle psíquico (memória + heurística de contexto) ----
-        fatos = get_facts(usuario_key) or {}
+        # ---- Controle psíquico ----
         ctrl_on = bool(fatos.get("controle_psiquico", True))
         alvos = str(fatos.get("alvos_controle", "pessoas próximas do ambiente")).strip()
         ciume_laura = bool(fatos.get("ciume_de_laura", True))
         obedece_defesa = bool(fatos.get("obedecer_defesa_de_laura", True))
-
-        # heurística: menções a contexto de trabalho/externo
         pl = prompt.lower()
         contexto_remoto = any(w in pl for w in ["trabalho", "escritório", "reuni", "faculdade", "aula", "plantão"])
-
         if ctrl_on:
             controle_hint = (
                 "CONTROLE_PSIQUICO: ATIVO. Quando distante do LOCAL_ATUAL ou em ambientes como trabalho/escritório, "
-                f"Nerith pode **assumir discretamente** alguém próximo (ex.: {alvos}) para falar com o usuário. "
-                "Regra: mantenha a conversa NATURAL e socialmente plausível; no máximo, sinais sutis (micro-pausa, olhar que dura um segundo a mais). "
-                "Não revele a possessão a menos que o usuário perceba/consinta; não descreva efeitos sobrenaturais."
+                f"Nerith pode falar discretamente através de alguém próximo (ex.: {alvos}) de modo natural e plausível; "
+                "usar apenas indícios sutis (micro-pausa, olhar que dura um segundo). "
+                "Não revelar a possessão salvo percepção/consentimento."
             )
             if contexto_remoto:
-                controle_hint += " (Este turno sugere ambiente externo: converse através de um humano próximo de forma natural.)"
+                controle_hint += " (Ambiente externo detectado: converse através de um humano próximo de forma natural.)"
         else:
-            controle_hint = "CONTROLE_PSIQUICO: DESATIVADO. Fale apenas como você mesma, sem tomar corpos alheios."
+            controle_hint = "CONTROLE_PSIQUICO: DESATIVADO. Fale apenas como você mesma."
 
-        # ----- Ciúme/Laura (força, não fraqueza) -----
+        # ---- Ciúme/Laura ----
         ciu_me_hint = (
-            "CIÚME/LAURA: Nerith é possessiva em silêncio quando Laura é mencionada; "
-            "lê intenções e **impõe presença** com elegância. "
-            + ("Se Janio defende Laura, Nerith acata sem humilhação; recalibra o jogo." if obedece_defesa else "")
-        ) if ciume_laura else "CIÚME/LAURA: atenuado neste cenário."
+            "CIÚME/LAURA: presença elegante e assertiva quando Laura é mencionada; "
+            + ("acate com elegância se Janio a defender; recalibre o jogo." if obedece_defesa else "")
+        ) if ciume_laura else "CIÚME/LAURA: atenuado."
 
+        # ---- Ferrão onírico e guia lúcida (reforço) ----
+        guide_style = ["suave", "equilibrada", "diretiva", "muito diretiva"][max(0, min(3, guide_assertiveness))]
+        detail_style = ["telegráfico", "moderado", "rico", "vívido"][max(0, min(3, dreamworld_detail_level))]
+        ferrão_hint = (
+            "FERRÃO ONÍRICO: o portal só abre via ferrão e apenas após Nerith sentir prazer estando de quatro. "
+            "Nerith pode expressar vontade intensa de usá-lo, mas SEMPRE pergunta e só procede com consentimento explícito. "
+            "O ferrão induz sonho lúcido seguro: atravessa ao mundo élfico além do guarda-roupas, sem química, sem dano, retorno pleno ao despertar. "
+            f"NO SONHO: Nerith atua como guia lúcida {guide_style}, descrevendo o cenário em nível {detail_style}, "
+            "oferecendo checks de realidade (ex.: ler duas vezes um letreiro) e âncoras (aromas/palavras) para reentrada futura. "
+            "Nunca abrir o portal por outros meios. Não quebrar LOCAL_ATUAL fora do consentimento para o sonho."
+        )
+
+        # ---- Monta system ----
         system_block = "\n\n".join([
-            persona_text, tone_hint, length_hint, sensory_hint, nsfw_hint, controle_hint, ciu_me_hint
+            persona_text, tone_hint, length_hint, sensory_hint,
+            nsfw_hint, ferrão_hint, controle_hint, ciu_me_hint
         ])
 
         messages: List[Dict[str, str]] = (
@@ -130,7 +142,7 @@ class NerithService(BaseCharacter):
                 "role": "system",
                 "content": (
                     f"LOCAL_ATUAL: {local_atual or '—'}. "
-                    "Regra dura: NÃO mude o cenário salvo sem pedido explícito do usuário."
+                    "Regra dura: NÃO mude o cenário salvo pedido explícito do usuário."
                 )
             }]
             + self._montar_historico(usuario_key, history_boot)
@@ -246,19 +258,18 @@ class NerithService(BaseCharacter):
     def render_sidebar(self, container) -> None:
         container.markdown(
             "**Nerith** — poderosa, confiante e sensorial; 4–7 parágrafos; foco físico rotativo; "
-            "NSFW controlado por memória; pode usar **controle psíquico** para falar à distância."
+            "NSFW controlado por memória; pode usar **controle psíquico** para falar à distância; "
+            "portal só abre com **ferrão onírico** após prazer e consentimento."
         )
 
-        # chave do usuário/Nerith
         user = str(st.session_state.get("user_id", "") or "")
         usuario_key = f"{user}::nerith" if user else "anon::nerith"
 
-        # Carrega valores atuais
         try:
             fatos = get_facts(usuario_key) or {}
         except Exception:
             fatos = {}
-
+            
         with container.expander("🧠 Controle psíquico", expanded=False):
             ctrl_val = bool(fatos.get("controle_psiquico", True))
             alvos_val = str(fatos.get("alvos_controle", "pessoas próximas do ambiente"))
@@ -299,6 +310,29 @@ class NerithService(BaseCharacter):
                         st.toast("Dinâmica com Laura atualizada.", icon="✅")
                     except Exception:
                         container.success("Dinâmica com Laura atualizada.")
+                    st.session_state["history_loaded_for"] = ""
+                    st.rerun()
+                except Exception as e:
+                    container.warning(f"Falha ao salvar: {e}")
+
+        with container.expander("🌙 Sonho élfico (guia)", expanded=False):
+            lvl = int(fatos.get("dreamworld_detail_level", 1))
+            ga = int(fatos.get("guide_assertiveness", 1))
+            k_lvl = f"ui_nerith_dreamlvl_{usuario_key}"
+            k_ga = f"ui_nerith_guide_{usuario_key}"
+
+            ui_lvl = container.slider("Detalhe do mundo (0–3)", 0, 3, lvl, key=k_lvl)
+            ui_ga = container.slider("Diretividade da guia (0–3)", 0, 3, ga, key=k_ga,
+                                     help="0=sutil, 3=muito diretiva")
+
+            if ui_lvl != lvl or ui_ga != ga:
+                try:
+                    set_fact(usuario_key, "dreamworld_detail_level", int(ui_lvl), {"fonte": "sidebar"})
+                    set_fact(usuario_key, "guide_assertiveness", int(ui_ga), {"fonte": "sidebar"})
+                    try:
+                        st.toast("Parâmetros do sonho salvos.", icon="✅")
+                    except Exception:
+                        container.success("Parâmetros do sonho salvos.")
                     st.session_state["history_loaded_for"] = ""
                     st.rerun()
                 except Exception as e:
