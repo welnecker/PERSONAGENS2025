@@ -48,11 +48,14 @@ class NerithService(BaseCharacter):
         persona_text, history_boot = self._load_persona()
         usuario_key = f"{user}::nerith"
 
-        # ---- memória e local ----
+        # 0) Aplique intenções (texto → memórias) ANTES de ler memórias
+        state_msgs = self._apply_world_choice_intent(usuario_key, prompt)
+
+        # 1) memória e local
         local_atual = self._safe_get_local(usuario_key)
         memoria_pin = self._build_memory_pin(usuario_key, user)
 
-        # ---- parâmetros opcionais do sonho ----
+        # 2) recarrega fatos agora que intenções podem ter alterado o estado
         try:
             fatos = get_facts(usuario_key) or {}
         except Exception:
@@ -65,7 +68,7 @@ class NerithService(BaseCharacter):
             "pele azul/temperatura", "tendrils/toque", "orelhas pontudas/vibração",
             "olhos esmeralda/contato visual", "língua tendril/beijo", "altura/postura",
             "quadris/coxas", "bumbum/pressão", "perfume/doçura na saliva",
-            "púbis/pêlos sensoriais"  # <- vírgula corrigida acima e item adicionado
+            "púbis/pêlos sensoriais"
         ]
         idx = int(st.session_state.get("nerith_attr_idx", -1))
         idx = (idx + 1) % len(pool)
@@ -154,15 +157,37 @@ class NerithService(BaseCharacter):
             "Nunca abrir o portal por outros meios. Não quebrar LOCAL_ATUAL fora do consentimento para o sonho."
         )
 
+        # ---- Elysarix (gravidez/decisão de mundo) ----
+        gravidez   = bool(fatos.get("gravidez_elysarix", False))
+        mundo      = str(fatos.get("mundo_escolhido", "") or "").strip().lower()  # "", "humano", "elysarix"
+        portal_on  = bool(fatos.get("portal_ativo", True))
+        if mundo in {"humano", "elysarix"} and not portal_on:
+            elysarix_hint = (
+                f"ELYSARIX: MUNDO_ESCOLHIDO={mundo.upper()} • PORTAL=ENCERRADO. "
+                "Trate o cenário e continuidade **apenas** neste mundo; o portal existe apenas como lembrança. "
+                "Nunca ofereça reabrir o portal."
+            )
+        elif gravidez and portal_on:
+            elysarix_hint = (
+                "ELYSARIX: Gravidez confirmada **em Elysarix**. A **escolha de mundo** está disponível. "
+                "Ofereça a decisão com consentimento explícito e explique consequências (portal encerra). "
+                "Não escolha por conta própria; aguarde a resposta."
+            )
+        else:
+            elysarix_hint = "ELYSARIX: Sem escolha ativa. Portal segue disponível conforme regras já definidas."
+
         # ---- Monta system ----
         system_block = "\n\n".join([
             persona_text, tone_hint, length_hint, sensory_hint,
             nsfw_hint, ferrao_hint, controle_hint, ciume_hint,
-            pubis_hint  # <- agora incluído no bloco de sistema
+            pubis_hint, elysarix_hint
         ])
 
+        pre_msgs = state_msgs if state_msgs else []
+
         messages: List[Dict[str, str]] = (
-            [{"role": "system", "content": system_block}]
+            pre_msgs
+            + [{"role": "system", "content": system_block}]
             + ([{"role": "system", "content": memoria_pin}] if memoria_pin else [])
             + [{
                 "role": "system",
@@ -205,6 +230,49 @@ class NerithService(BaseCharacter):
         except Exception:
             return ""
 
+    def _apply_world_choice_intent(self, usuario_key: str, prompt: str) -> List[Dict[str, str]]:
+        """
+        Pequeno detector de intenção por texto para atualizar memórias:
+        - confirmar gravidez em Elysarix
+        - escolher 'elysarix' ou 'humano'
+        - fechar/encerrar portal
+        Retorna mensagens 'system' descrevendo a mudança para a rodada atual.
+        """
+        pl = (prompt or "").lower()
+        sys_msgs: List[Dict[str, str]] = []
+
+        try:
+            fatos = get_facts(usuario_key) or {}
+        except Exception:
+            fatos = {}
+
+        # confirmar gravidez (em Elysarix)
+        if any(k in pl for k in ["confirmo a gravidez", "gravidez confirmada", "engravid", "confirma a gravidez"]):
+            if not bool(fatos.get("gravidez_elysarix", False)):
+                set_fact(usuario_key, "gravidez_elysarix", True, {"fonte": "intent"})
+                sys_msgs.append({"role": "system", "content": "STATE_CHANGE: gravidez_elysarix=True"})
+
+        # escolha de mundo
+        escolhe_ely = any(k in pl for k in ["escolho elysarix", "vamos para elysarix", "ficar em elysarix"])
+        escolhe_hum = any(k in pl for k in ["escolho o mundo humano", "ficar no mundo humano", "ficar no humano", "vamos ficar aqui no humano"])
+
+        if escolhe_ely:
+            set_fact(usuario_key, "mundo_escolhido", "elysarix", {"fonte": "intent"})
+            set_fact(usuario_key, "portal_ativo", False, {"fonte": "intent"})
+            sys_msgs.append({"role": "system", "content": "STATE_CHANGE: mundo_escolhido=elysarix; portal_ativo=False"})
+
+        if escolhe_hum:
+            set_fact(usuario_key, "mundo_escolhido", "humano", {"fonte": "intent"})
+            set_fact(usuario_key, "portal_ativo", False, {"fonte": "intent"})
+            sys_msgs.append({"role": "system", "content": "STATE_CHANGE: mundo_escolhido=humano; portal_ativo=False"})
+
+        # fechar portal explicitamente
+        if any(k in pl for k in ["fechar o portal", "encerrar o portal", "portal fechado"]):
+            set_fact(usuario_key, "portal_ativo", False, {"fonte": "intent"})
+            sys_msgs.append({"role": "system", "content": "STATE_CHANGE: portal_ativo=False"})
+
+        return sys_msgs
+
     def _build_memory_pin(self, usuario_key: str, user_display: str) -> str:
         """
         Memória da Nerith (não mistura com Laura/Mary).
@@ -214,18 +282,24 @@ class NerithService(BaseCharacter):
           - ciume_de_laura (bool): ciúme silencioso quando Laura é citada (default: True)
           - obedecer_defesa_de_laura (bool): acata quando o usuário defende Laura (default: True)
           - parceiro_atual (str opcional): nome que Nerith usa para o usuário se houver vínculo
+          - gravidez_elysarix (bool): gravidez confirmada no mundo de Nerith
+          - mundo_escolhido (str): "", "humano" ou "elysarix"
+          - portal_ativo (bool): True=ativo, False=encerrado (pós-escolha)
         """
         try:
             f = get_facts(usuario_key) or {}
         except Exception:
             f = {}
 
-        ctrl = bool(f.get("controle_psiquico", True))
-        alvos = f.get("alvos_controle", "pessoas próximas do ambiente")
-        ciume = bool(f.get("ciume_de_laura", True))
-        obedece = bool(f.get("obedecer_defesa_de_laura", True))
+        ctrl     = bool(f.get("controle_psiquico", True))
+        alvos    = f.get("alvos_controle", "pessoas próximas do ambiente")
+        ciume    = bool(f.get("ciume_de_laura", True))
+        obedece  = bool(f.get("obedecer_defesa_de_laura", True))
+        gravida  = bool(f.get("gravidez_elysarix", False))
+        mundo    = str(f.get("mundo_escolhido", "") or "").strip().lower()  # "", "humano", "elysarix"
+        portal   = bool(f.get("portal_ativo", True))
 
-        parceiro = f.get("parceiro_atual") or f.get("parceiro") or user_display
+        parceiro     = f.get("parceiro_atual") or f.get("parceiro") or user_display
         nome_usuario = (parceiro or user_display).strip()
 
         blocos = [
@@ -233,8 +307,11 @@ class NerithService(BaseCharacter):
             f"alvos_controle={alvos}",
             f"ciume_de_laura={ciume}",
             f"obedecer_defesa_de_laura={obedece}",
+            f"gravidez_elysarix={gravida}",
+            f"mundo_escolhido={mundo or '—'}",
+            f"portal_ativo={portal}",
             f"nome_usuario={nome_usuario}",
-            "pubis_pelos_sensoriais=True",  # <- fixa o traço no PIN
+            "pubis_pelos_sensoriais=True",
         ]
         mem_str = "; ".join(blocos)
 
@@ -245,7 +322,9 @@ class NerithService(BaseCharacter):
             "fale através de alguém próximo com sinais sutis, sem quebrar a imersão.",
             "Se Laura for citada e ciume_de_laura=True, intensifique presença sem agressividade; "
             "se obedecer_defesa_de_laura=True e o usuário defender Laura, acate com elegância.",
-            "Nunca descreva o púbis de Nerith como glabro/sem pelos; ele possui pêlos/filamentos sensoriais que reagem ao toque."
+            "Nunca descreva o púbis de Nerith como glabro/sem pelos; ele possui pêlos/filamentos sensoriais que reagem ao toque.",
+            "ESCOLHA DE MUNDO: se gravidez_elysarix=True e portal_ativo=True, ofereça a escolha (humano vs Elysarix) com consentimento e consequências.",
+            "Se mundo_escolhido definido e portal_ativo=False: trate o cenário apenas no mundo escolhido; não reabra o portal."
         ]
         regras_texto = "\n".join(f"- {r}" for r in regras)
 
@@ -370,5 +449,42 @@ class NerithService(BaseCharacter):
                     st.rerun()
                 except Exception as e:
                     container.warning(f"Falha ao salvar: {e}")
+
+        # Escolha de mundo (Elysarix)
+        with container.expander("🌍 Elysarix — Escolha de Mundo", expanded=False):
+            gravida_val = bool(fatos.get("gravidez_elysarix", False))
+            mundo_val   = str(fatos.get("mundo_escolhido", "") or "")
+            portal_val  = bool(fatos.get("portal_ativo", True))
+
+            k_g = f"ui_nerith_grav_{usuario_key}"
+            k_m = f"ui_nerith_world_{usuario_key}"
+            k_p = f"ui_nerith_portal_{usuario_key}"
+
+            ui_grav = container.checkbox("Gravidez confirmada em Elysarix", value=gravida_val, key=k_g)
+            ui_mundo = container.selectbox(
+                "Mundo escolhido (após confirmar gravidez)",
+                options=["—", "humano", "elysarix"],
+                index=(["—", "humano", "elysarix"].index(mundo_val) if mundo_val in ["humano", "elysarix"] else 0),
+                key=k_m
+            )
+            ui_portal = container.checkbox("Portal ativo", value=portal_val, key=k_p,
+                                           help="Ao concluir a escolha de mundo, desative o portal.")
+
+            if container.button("💾 Salvar escolha de mundo"):
+                try:
+                    set_fact(usuario_key, "gravidez_elysarix", bool(ui_grav), {"fonte": "sidebar"})
+                    if ui_mundo in ("humano", "elysarix"):
+                        set_fact(usuario_key, "mundo_escolhido", ui_mundo, {"fonte": "sidebar"})
+                    else:
+                        set_fact(usuario_key, "mundo_escolhido", "", {"fonte": "sidebar"})
+                    set_fact(usuario_key, "portal_ativo", bool(ui_portal), {"fonte": "sidebar"})
+                    try:
+                        st.toast("Escolha de mundo atualizada.", icon="✅")
+                    except Exception:
+                        container.success("Escolha de mundo atualizada.")
+                    st.session_state["history_loaded_for"] = ""
+                    st.rerun()
+                except Exception as e:
+                    container.error(f"Falha ao salvar: {e}")
 
         container.caption("Memórias desta aba valem **somente** para `user::nerith` (isoladas das demais personagens).")
