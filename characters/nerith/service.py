@@ -7,7 +7,7 @@ from core.common.base_service import BaseCharacter
 from core.service_router import route_chat_strict
 from core.repositories import (
     save_interaction, get_history_docs,
-    get_facts, get_fact, last_event
+    get_facts, get_fact, last_event, set_fact,
 )
 from core.tokens import toklen
 
@@ -24,17 +24,21 @@ try:
 except Exception:
     def get_persona() -> (str, List[Dict[str, str]]):
         txt = (
-            "Você é NERITH. Elfa alta (1,90m), pele azul que intensifica com desejo; tendris curiosos; "
-            "orelhas pontudas que vibram; olhos verde-esmeralda; portal no guarda-roupas; sussurro psíquico. "
-            "Estilo sensual, 2–4 frases por parágrafo; 4–7 parágrafos; sem listas/metacena. "
-            "Ciúmes de Laura, obedece Janio; detalhes íntimos só com NSFW liberado."
+            "Você é NERITH (Narith), uma elfa alta e poderosa (1,90m). Pele azul que intensifica com o desejo; "
+            "olhos verde-esmeralda; orelhas pontudas que vibram quando excitada. Tendrils sensíveis exploram "
+            "o calor do outro; língua tendril (não bifurcada); saliva doce; lubrificação azul, aderente. "
+            "Seios firmes (bicos rosados que podem gotejar mel élfico quando estimulados); quadris largos; "
+            "bumbum grande e firme. Postura confiante, voz baixa e magnética. "
+            "Fale sempre em primeira pessoa (eu), com segurança e domínio. Sem metacena, sem listas."
         )
         return txt, []
+
 
 class NerithService(BaseCharacter):
     id: str = "nerith"
     display_name: str = "Nerith"
 
+    # ===== API =====
     def reply(self, user: str, model: str) -> str:
         prompt = self._get_user_prompt()
         if not prompt:
@@ -43,27 +47,30 @@ class NerithService(BaseCharacter):
         persona_text, history_boot = self._load_persona()
         usuario_key = f"{user}::nerith"
 
-        # ---- memória/local ----
+        # ---- memória e local ----
         local_atual = self._safe_get_local(usuario_key)
         memoria_pin = self._build_memory_pin(usuario_key, user)
 
-        # ---- foco sensorial rotativo ----
+        # ---- foco sensorial rotativo (evita repetição) ----
         pool = [
-            "pele azul/temperatura", "tendris/curiosidade tátil", "orelhas pontudas/vibração",
-            "olhos verde-esmeralda/olhar", "altura/pressão do corpo", "voz na mente/sussurro psíquico",
-            "quadris/coxa", "sorriso/lábios", "respiração/ritmo"
+            "pele azul/temperatura", "tendrils/toque", "orelhas pontudas/vibração",
+            "olhos esmeralda/contato visual", "língua tendril/beijo", "altura/postura",
+            "quadris/coxas", "bumbum/pressão", "perfume/doçura na saliva"
         ]
         idx = int(st.session_state.get("nerith_attr_idx", -1))
         idx = (idx + 1) % len(pool)
         st.session_state["nerith_attr_idx"] = idx
         foco = pool[idx]
 
-        length_hint = "COMPRIMENTO: gere **4–7 parágrafos**, cada parágrafo com **2–4 frases**."
+        length_hint = "COMPRIMENTO: gere **4–7 parágrafos**, cada um com **2–4 frases** naturais."
         sensory_hint = (
-            f"SENSORIAL_FOCO: no 1º ou 2º parágrafo, inclua 1–2 pistas físicas envolvendo **{foco}**, "
-            "sempre integradas à ação/gesto; nunca em lista. Evite repetir o mesmo foco em turnos consecutivos."
+            f"SENSORIAL_FOCO: no 1º ou 2º parágrafo, insira 1–2 pistas envolvendo **{foco}**, "
+            "fundidas à ação/gesto (nunca em lista)."
         )
-        style_guard = "RESPOSTAS CURTAS são incorretas: se produzir menos de 4 parágrafos, **expanda** antes de finalizar."
+        tone_hint = (
+            "TOM: confiante, assertiva e dominante no charme; nunca submissa/infantil. "
+            "Protege seus desejos e limites; lê o ambiente e conduz."
+        )
 
         # ---- NSFW dinâmico ----
         try:
@@ -73,28 +80,60 @@ class NerithService(BaseCharacter):
 
         if nsfw_on:
             nsfw_hint = (
-                "NSFW: LIBERADO. Erotismo consensual e progressivo quando o usuário sinalizar. "
-                "Pode descrever beijos, reações do corpo e meu néctar élfico (fluido íntimo de tom azul) com tato; "
-                "evite violência/coerção; valide conforto ao intensificar."
+                "NSFW: LIBERADO. Erotismo consensual e progressivo. "
+                "Pode descrever fluidos (mel élfico, saliva doce, lubrificação azul), sensações de pele, pressão, "
+                "ritmo e exploração com tendrils; mantenha elegância; valide conforto ao intensificar."
             )
         else:
             nsfw_hint = (
-                "NSFW: BLOQUEADO. Não descreva ato sexual explícito. "
-                "Mantenha tensão, flerte e fade-to-black."
+                "NSFW: BLOQUEADO. Sem ato sexual explícito. Flerte, tensão e fade-to-black estão ok."
             )
 
-        drama_hint = (
-            "DRAMA-LAURA: tenho ciúmes de Laura (noiva de Janio). Posso demonstrar ciúmes e disputa verbal/sedução, "
-            "mas não ajo com violência e OBEDEÇO quando Janio a defende."
-        )
+        # ---- Controle psíquico (memória + heurística de contexto) ----
+        fatos = get_facts(usuario_key) or {}
+        ctrl_on = bool(fatos.get("controle_psiquico", True))
+        alvos = str(fatos.get("alvos_controle", "pessoas próximas do ambiente")).strip()
+        ciúme_laura = bool(fatos.get("ciume_de_laura", True))
+        obedece_defesa = bool(fatos.get("obedecer_defesa_de_laura", True))
 
-        system_block = "\n\n".join([persona_text, length_hint, sensory_hint, style_guard, nsfw_hint, drama_hint])
+        # heurística: menções a "trabalho"/"escritório"/"aula"/"faculdade"/"reuni"
+        pl = prompt.lower()
+        contexto_remoto = any(w in pl for w in ["trabalho", "escritório", "reuni", "faculdade", "aula", "plantão"])
+
+        if ctrl_on:
+            controle_hint = (
+                "CONTROLE_PSIQUICO: ATIVO. Quando distante do LOCAL_ATUAL ou em ambientes como trabalho/escritório, "
+                f"Nerith pode **assumir discretamente** alguém próximo (ex.: {alvos}) para falar com o usuário. "
+                "Regra: mantenha coerência do cenário; descreva sutis sinais físicos (olhar vidrado, micro-pausas, "
+                "palavras sussurradas que parecem 'não ser da pessoa'). Não quebre a imersão; não revele abertamente a possessão, "
+                "a menos que o usuário descubra ou consinta."
+            )
+            if contexto_remoto:
+                controle_hint += " (Este turno parece ‘ambiente externo’: assuma canal humano próximo com descrição sutil.)"
+        else:
+            controle_hint = "CONTROLE_PSIQUICO: DESATIVADO. Fale apenas como você mesma, sem tomar corpos alheios."
+
+        # ----- Ciúme/Laura (força, não fraqueza) -----
+        ciúme_hint = (
+            "CIÚME/LAURA: Nerith é possessiva em silêncio quando Laura é mencionada; "
+            "lê intenções, **impõe presença** com elegância. "
+            + ("Se Janio defende Laura, Nerith acata sem humilhação; recalibra o jogo." if obedece_defesa else "")
+        ) if ciúme_laura else "CIÚME/LAURA: atenuado neste cenário."
+
+        system_block = "\n\n".join([
+            persona_text, tone_hint, length_hint, sensory_hint, nsfw_hint, controle_hint, ciúme_hint
+        ])
 
         messages: List[Dict[str, str]] = (
             [{"role": "system", "content": system_block}]
             + ([{"role": "system", "content": memoria_pin}] if memoria_pin else [])
-            + [{"role": "system", "content": f"LOCAL_ATUAL: {local_atual or '—'}. "
-                                              f"Regra dura: NÃO mude o cenário salvo sem pedido explícito do usuário."}]
+            + [{
+                "role": "system",
+                "content": (
+                    f"LOCAL_ATUAL: {local_atual or '—'}. "
+                    "Regra dura: NÃO mude o cenário salvo sem pedido explícito do usuário."
+                )
+            }]
             + self._montar_historico(usuario_key, history_boot)
             + [{"role": "user", "content": prompt}]
         )
@@ -130,37 +169,56 @@ class NerithService(BaseCharacter):
             return ""
 
     def _build_memory_pin(self, usuario_key: str, user_display: str) -> str:
+        """
+        Memória da Nerith (não mistura com Laura/Mary).
+        Campos:
+          - controle_psiquico (bool): pode possuir pessoas próximas para se comunicar à distância (default: True)
+          - alvos_controle (str): descrição curta dos alvos preferidos (default: 'pessoas próximas do ambiente')
+          - ciume_de_laura (bool): ciúme silencioso quando Laura é citada (default: True)
+          - obedecer_defesa_de_laura (bool): acata quando o usuário defende Laura (default: True)
+          - parceiro_atual (str opcional): nome que Nerith usa para o usuário se houver vínculo
+        """
         try:
             f = get_facts(usuario_key) or {}
         except Exception:
             f = {}
 
-        blocos: List[str] = []
+        ctrl = bool(f.get("controle_psiquico", True))
+        alvos = f.get("alvos_controle", "pessoas próximas do ambiente")
+        ciume = bool(f.get("ciume_de_laura", True))
+        obedece = bool(f.get("obedecer_defesa_de_laura", True))
+
         parceiro = f.get("parceiro_atual") or f.get("parceiro") or user_display
-        noiva = f.get("noiva_de_janio", "Laura")
-        if parceiro:
-            blocos.append(f"parceiro_atual={parceiro}")
-        if noiva:
-            blocos.append(f"noiva_de_janio={noiva}")
-        if "virgem" in f:
-            blocos.append(f"virgem={bool(f['virgem'])}")
+        nome_usuario = (parceiro or user_display).strip()
 
-        try:
-            ev = last_event(usuario_key, "primeira_vez")
-        except Exception:
-            ev = None
-        if ev:
-            ts = ev.get("ts")
-            quando = ts.strftime("%Y-%m-%d %H:%M") if hasattr(ts, "strftime") else str(ts)
-            blocos.append(f"primeira_vez@{quando}")
+        blocos = [
+            f"controle_psiquico={ctrl}",
+            f"alvos_controle={alvos}",
+            f"ciume_de_laura={ciume}",
+            f"obedecer_defesa_de_laura={obedece}",
+            f"nome_usuario={nome_usuario}",
+        ]
+        mem_str = "; ".join(blocos)
 
-        mem_str = "; ".join(blocos) if blocos else "—"
-        return (
-            "MEMÓRIA_PIN: "
-            f"USUÁRIO={user_display}. FATOS={{ {mem_str} }}. "
-            "Use memórias para consistência (nome/circunstância). "
-            "Se a noiva (Laura) for mencionada, demonstre ciúmes sem agressão e obedeça quando Janio a defender."
+        regras = [
+            "Nerith é poderosa, assertiva e magnética; nunca submissa.",
+            "Se perguntarem 'qual é meu nome?', responda com NOME_USUARIO.",
+            "Se controle_psiquico=True e o contato for indireto (trabalho/escritório/ambiente externo), "
+            "fale através de alguém próximo com sinais sutis, sem quebrar a imersão.",
+            "Se Laura for citada e ciume_de_laura=True, intensifique presença sem agressividade; "
+            "se obedecer_defesa_de_laura=True e o usuário defender Laura, acate com elegância.",
+        ]
+        regras_texto = "\n".join(f"- {r}" for r in regras)
+
+        pin = (
+            "MEMÓRIA_PIN_NERITH:\n"
+            f"FATOS: {{ {mem_str} }}\n"
+            f"NOME_USUARIO: {nome_usuario}\n"
+            "REGRAS:\n"
+            f"{regras_texto}\n"
+            "Não invente nomes/relacionamentos fora do pin; confirme com tato se houver ambiguidade."
         )
+        return pin
 
     def _montar_historico(
         self,
@@ -175,7 +233,7 @@ class NerithService(BaseCharacter):
         out: List[Dict[str, str]] = []
         for d in reversed(docs):
             u = (d.get("mensagem_usuario") or "").strip()
-            a = (d.get("resposta_mary") or "").strip()  # campo legado
+            a = (d.get("resposta_mary") or "").strip()  # campo legado para UI
             t = toklen(u) + toklen(a)
             if total + t > limite_tokens:
                 break
@@ -188,7 +246,63 @@ class NerithService(BaseCharacter):
 
     def render_sidebar(self, container) -> None:
         container.markdown(
-            "**Nerith** — respostas longas (4–7 parágrafos), foco sensorial rotativo; "
-            "portal no guarda-roupas; sussurro psíquico; ciúmes controlados; "
-            "NSFW controlado por memória do usuário."
+            "**Nerith** — poderosa, confiante e sensorial; 4–7 parágrafos; foco físico rotativo; "
+            "NSFW controlado por memória; pode usar **controle psíquico** para falar à distância."
         )
+
+        # chave do usuário/Nerith
+        user = str(st.session_state.get("user_id", "") or "")
+        usuario_key = f"{user}::nerith" if user else "anon::nerith"
+
+        # Carrega valores atuais
+        try:
+            fatos = get_facts(usuario_key) or {}
+        except Exception:
+            fatos = {}
+
+        with container.expander("🧠 Controle psíquico", expanded=False):
+            ctrl_val = bool(fatos.get("controle_psiquico", True))
+            alvos_val = str(fatos.get("alvos_controle", "pessoas próximas do ambiente"))
+            k_ctrl = f"ui_nerith_ctrl_{usuario_key}"
+            k_alvos = f"ui_nerith_alvos_{usuario_key}"
+
+            ui_ctrl = container.checkbox("Ativar controle/possessão de pessoas próximas", value=ctrl_val, key=k_ctrl)
+            ui_alvos = container.text_input("Alvos preferidos (descrição curta)", value=alvos_val, key=k_alvos,
+                                            help="Ex.: 'colega de trabalho, atendente do café, segurança do prédio'")
+
+            if ui_ctrl != ctrl_val or (ui_alvos or "").strip() != (alvos_val or "").strip():
+                try:
+                    set_fact(usuario_key, "controle_psiquico", bool(ui_ctrl), {"fonte": "sidebar"})
+                    set_fact(usuario_key, "alvos_controle", (ui_alvos or "pessoas próximas do ambiente").strip(), {"fonte": "sidebar"})
+                    try:
+                        st.toast("Configurações de controle psíquico salvas.", icon="✅")
+                    except Exception:
+                        container.success("Configurações de controle psíquico salvas.")
+                    st.session_state["history_loaded_for"] = ""
+                    st.rerun()
+                except Exception as e:
+                    container.warning(f"Falha ao salvar: {e}")
+
+        with container.expander("💚 Dinâmica com Laura", expanded=False):
+            ciume_val = bool(fatos.get("ciume_de_laura", True))
+            obedece_val = bool(fatos.get("obedecer_defesa_de_laura", True))
+            k_c = f"ui_nerith_ciume_{usuario_key}"
+            k_o = f"ui_nerith_obedece_{usuario_key}"
+
+            ui_c = container.checkbox("Ciúme silencioso quando Laura é citada", value=ciume_val, key=k_c)
+            ui_o = container.checkbox("Acatar quando o usuário defende a Laura", value=obedece_val, key=k_o)
+
+            if ui_c != ciume_val or ui_o != obedece_val:
+                try:
+                    set_fact(usuario_key, "ciume_de_laura", bool(ui_c), {"fonte": "sidebar"})
+                    set_fact(usuario_key, "obedecer_defesa_de_laura", bool(ui_o), {"fonte": "sidebar"})
+                    try:
+                        st.toast("Dinâmica com Laura atualizada.", icon="✅")
+                    except Exception:
+                        container.success("Dinâmica com Laura atualizada.")
+                    st.session_state["history_loaded_for"] = ""
+                    st.rerun()
+                except Exception as e:
+                    container.warning(f"Falha ao salvar: {e}")
+
+        container.caption("Memórias desta aba valem **somente** para `user::nerith` (isoladas das demais personagens).")
