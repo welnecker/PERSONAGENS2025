@@ -120,8 +120,11 @@ class LauraService(BaseCharacter):
                 "Laura apenas flerta com elegância e respeita o relacionamento, a menos que o usuário peça outra direção."
             )
 
+        # ---- NERITH: posse discreta (se configurada em memórias desta thread) ----
+        nerith_proxy_block = self._get_nerith_proxy_block(usuario_key)
+
         system_block = "\n\n".join([
-            persona_text, length_hint, sensory_hint, style_guard, nsfw_hint, social_hint, affair_hint
+            persona_text, length_hint, sensory_hint, style_guard, nsfw_hint, social_hint, affair_hint, nerith_proxy_block
         ])
 
         messages: List[Dict[str, str]] = (
@@ -168,6 +171,39 @@ class LauraService(BaseCharacter):
         except Exception:
             return ""
 
+    def _get_nerith_proxy_block(self, usuario_key: str) -> str:
+        """
+        Lê memórias desta thread para saber se a Nerith está usando posse discreta por perto.
+        Chaves aceitas:
+          - nerith_proxy.active (bool)
+          - nerith_proxy.medium (str)
+          - nerith_proxy.hint (str)
+        """
+        try:
+            f = get_facts(usuario_key) or {}
+        except Exception:
+            f = {}
+
+        active = bool(f.get("nerith_proxy.active", False) or f.get("nerith_proxy_active", False))
+        if not active:
+            return ""
+
+        medium = (f.get("nerith_proxy.medium") or f.get("nerith_proxy_medium") or "").strip()
+        hint   = (f.get("nerith_proxy.hint")   or f.get("nerith_proxy_hint")   or "").strip()
+
+        details = []
+        if medium:
+            details.append(f"médio/host: {medium}")
+        if hint:
+            details.append(f"dica: {hint}")
+        det_txt = (" (" + "; ".join(details) + ")") if details else ""
+
+        return (
+            "NERITH_PROXY: ATIVO. Nerith pode falar através de alguém próximo, de modo sutil"
+            f"{det_txt}. Regras: não quebrar imersão; sinais discretos (olhar desfocado, pausas, um timbre ‘estranho’). "
+            "Só assuma que é a Nerith se o usuário notar/perguntar ou consentir. Se confirmado, mantenha a cena e a elegância."
+        )
+
     def _build_memory_pin(self, usuario_key: str, user_display: str) -> str:
         """
         Memória local da Laura (NÃO mistura com Mary).
@@ -187,11 +223,9 @@ class LauraService(BaseCharacter):
         sigilo_flag      = bool(f.get("sigilo_affair", True))
         flirt_flag       = bool(f.get("flirt_mode", True))
 
-        # Nome preferido do usuário (se houver 'parceiro_atual' nessa thread; senão display)
         parceiro = f.get("parceiro_atual") or f.get("parceiro") or user_display
         nome_usuario = (parceiro or user_display).strip()
 
-        # Heurística: o usuário atual é o namorado da Mary neste cenário?
         usuario_eh_namorado = (nome_usuario.lower() == str(namorado_de_mary).strip().lower())
 
         blocos = [
@@ -204,7 +238,6 @@ class LauraService(BaseCharacter):
         ]
         mem_str = "; ".join(blocos)
 
-        # Regras operacionais claras para o modelo
         regras = [
             f"No CENÁRIO DA LAURA: Mary namora {namorado_de_mary}. Laura sabe disso.",
             "Laura é dançarina (NUNCA faz programa, não é prostituta).",
@@ -270,29 +303,21 @@ class LauraService(BaseCharacter):
         except Exception:
             fatos = {}
 
-        # ====================
         # 💃 Preferências (flerte)
-        # ====================
         with container.expander("💃 Preferências", expanded=False):
             flirt_val = bool(fatos.get("flirt_mode", True))
-            # key único por thread do usuário
             k_flirt = f"ui_laura_flirt_{usuario_key}"
             ui_flirt = container.checkbox("Flerte liberado", value=flirt_val, key=k_flirt)
             if ui_flirt != flirt_val:
                 try:
                     set_fact(usuario_key, "flirt_mode", bool(ui_flirt), {"fonte": "sidebar"})
-                    try:
-                        st.toast("Preferência de flerte salva.", icon="✅")
-                    except Exception:
-                        container.success("Preferência de flerte salva.")
+                    st.toast("Preferência de flerte salva.", icon="✅")
                     st.session_state["history_loaded_for"] = ""
                     st.rerun()
                 except Exception as e:
                     container.warning(f"Falha ao salvar flerte: {e}")
 
-        # ====================
         # ❤️ Caso com Janio (Laura)
-        # ====================
         with container.expander("❤️ Caso com Janio (Laura)", expanded=False):
             affair_val   = bool(fatos.get("affair_com_janio", False))
             sigilo_val   = bool(fatos.get("sigilo_affair", True))
@@ -331,12 +356,35 @@ class LauraService(BaseCharacter):
                     set_fact(usuario_key, "affair_com_janio", bool(ui_affair), {"fonte": "sidebar"})
                     set_fact(usuario_key, "sigilo_affair", bool(ui_sigilo), {"fonte": "sidebar"})
                     set_fact(usuario_key, "namorado_de_mary", (ui_namorado or "Janio Donisete").strip(), {"fonte": "sidebar"})
-                    try:
-                        st.toast("Relação da Laura atualizada.", icon="✅")
-                    except Exception:
-                        container.success("Relação da Laura atualizada.")
-                    st.session_state["history_loaded_for"] = ""  # força recarga
+                    st.toast("Relação da Laura atualizada.", icon="✅")
+                    st.session_state["history_loaded_for"] = ""
                     st.rerun()
+                except Exception as e:
+                    container.error(f"Falha ao salvar: {e}")
+
+        # 🌀 Nerith por perto (posse discreta)
+        with container.expander("🌀 Nerith por perto (posse discreta)", expanded=False):
+            act_def = bool(fatos.get("nerith_proxy.active", False) or fatos.get("nerith_proxy_active", False))
+            med_def = str(fatos.get("nerith_proxy.medium", fatos.get("nerith_proxy_medium", "")))
+            hint_def = str(fatos.get("nerith_proxy.hint", fatos.get("nerith_proxy_hint", "")))
+
+            k_act  = f"ui_laura_np_act_{usuario_key}"
+            k_med  = f"ui_laura_np_med_{usuario_key}"
+            k_hint = f"ui_laura_np_hint_{usuario_key}"
+
+            ui_act  = container.checkbox("Ativar presença psíquica da Nerith", value=act_def, key=k_act,
+                                         help="Quando ativo, Laura percebe sinais sutis de uma voz/gesto que não parece da pessoa.")
+            ui_med  = container.text_input("Médio/host atual (ex.: cliente, segurança, atendente)", value=med_def, key=k_med)
+            ui_hint = container.text_input("Observação/hint (opcional)", value=hint_def, key=k_hint)
+
+            if container.button("💾 Salvar presença da Nerith"):
+                try:
+                    set_fact(usuario_key, "nerith_proxy.active", bool(ui_act), {"fonte": "sidebar"})
+                    set_fact(usuario_key, "nerith_proxy.medium", (ui_med or "").strip(), {"fonte": "sidebar"})
+                    set_fact(usuario_key, "nerith_proxy.hint", (ui_hint or "").strip(), {"fonte": "sidebar"})
+                    st.toast("Configurações salvas.", icon="✅")
+                    st.session_state["history_loaded_for"] = ""
+                    if hasattr(st, "rerun"): st.rerun()
                 except Exception as e:
                     container.error(f"Falha ao salvar: {e}")
 
