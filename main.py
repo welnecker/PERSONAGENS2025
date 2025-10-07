@@ -45,18 +45,22 @@ def _encode_image_b64(p: Path) -> str:
     with p.open("rb") as f:
         return base64.b64encode(f.read()).decode("utf-8")
 
+# --- substitua sua função set_background por esta ---
 def set_background(image_path: Path, *, darken: float = 0.25, blur_px: int = 0,
                    attach_fixed: bool = True, size_mode: str = "cover") -> None:
-    """
-    Injeta CSS para usar a imagem como fundo.
-    - darken: 0.0 a 0.9 (overlay escuro p/ legibilidade)
-    - blur_px: desfoque em pixels (0 a 20)
-    - attach_fixed: True=fixo, False=rola com a página
-    - size_mode: 'cover' | 'contain'
-    """
     if not image_path.exists():
         return
-    b64 = _encode_image_b64(image_path)
+
+    # MIME correto para o data URL
+    ext = image_path.suffix.lower()
+    mime = {
+        ".jpg": "jpeg", ".jpeg": "jpeg",
+        ".png": "png", ".webp": "webp", ".gif": "gif"
+    }.get(ext, "jpeg")
+
+    with image_path.open("rb") as f:
+        b64 = base64.b64encode(f.read()).decode("utf-8")
+
     att = "fixed" if attach_fixed else "scroll"
     darken = max(0.0, min(0.9, float(darken)))
     blur_px = max(0, min(40, int(blur_px)))
@@ -64,25 +68,36 @@ def set_background(image_path: Path, *, darken: float = 0.25, blur_px: int = 0,
 
     st.markdown(f"""
     <style>
-    .stApp::before {{
-        content: "";
-        position: fixed;
-        inset: 0;
-        background-image: url("data:image;base64,{b64}");
-        background-position: center center;
-        background-repeat: no-repeat;
-        background-size: {size_mode};
-        background-attachment: {att};
-        filter: blur({blur_px}px);
-        z-index: -1;
-        transform: translateZ(0);
+    /* deixe o app translúcido e o conteúdo acima do fundo */
+    .stApp {{
+      background: transparent !important;
     }}
+    .block-container {{
+      position: relative;
+      z-index: 1;
+    }}
+
+    /* camada da imagem */
+    .stApp::before {{
+      content: "";
+      position: fixed;
+      inset: 0;
+      background-image: url("data:image/{mime};base64,{b64}");
+      background-position: center center;
+      background-repeat: no-repeat;
+      background-size: {size_mode};
+      background-attachment: {att};
+      filter: blur({blur_px}px);
+      z-index: 0;
+    }}
+    /* overlay para escurecer e dar contraste ao texto */
     .stApp::after {{
-        content: "";
-        position: fixed; inset: 0;
-        background: rgba(0,0,0,{darken});
-        z-index: -1;
-        pointer-events: none;
+      content: "";
+      position: fixed;
+      inset: 0;
+      background: rgba(0,0,0,{darken});
+      z-index: 0; /* ::after empilha acima de ::before por padrão */
+      pointer-events: none;
     }}
     </style>
     """, unsafe_allow_html=True)
@@ -627,10 +642,13 @@ st.sidebar.markdown("---")
 st.sidebar.subheader("🖼️ Plano de fundo")
 
 # lista arquivos imagem/nerith*.{jpg,jpeg,png,webp}
+# --- substitua o bloco que monta bg_files ---
 bg_files = []
-for ext in ("*.jpg", "*.jpeg", "*.png", "*.webp"):
-    bg_files += list(IMG_DIR.glob(f"nerith{ext[1:]}"))  # mantém padrão 'nerith*.ext'
-bg_files += list(IMG_DIR.glob("nerith*.*"))  # fallback geral
+for pattern in ("nerith*.jpg","nerith*.jpeg","nerith*.png","nerith*.webp"):
+    bg_files += list(IMG_DIR.glob(pattern))
+# fallback geral
+bg_files = sorted({p.name: p for p in bg_files}.values(), key=lambda p: p.name)
+
 
 # remove duplicatas e ordena por nome
 bg_files = sorted({p.name: p for p in bg_files}.values(), key=lambda p: p.name)
