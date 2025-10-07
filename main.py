@@ -49,10 +49,18 @@ st.markdown(
         margin: .5rem 0;
         border-radius: .5rem;
         line-height: 1.55;
+        color: #fff;                            /* 👈 texto branco */
+      }
+      .assistant-paragraph a {
+        color: #ffffff;                         /* links brancos */
+        text-decoration: underline;
+      }
+      .assistant-paragraph a:hover {
+        opacity: 0.85;
       }
       .assistant-paragraph + .assistant-paragraph { margin-top: .45rem; }
 
-      /* Quando o usuário realmente seleciona o texto (arrastar o mouse), mantenha azul */
+      /* Seleção (arrastar o mouse) continua azul com texto branco */
       .stChatMessage ::selection {
         background: rgba(59,130,246,0.35);
         color: #fff;
@@ -61,6 +69,7 @@ st.markdown(
     """,
     unsafe_allow_html=True,
 )
+
 
 # --- Plano de fundo (CSS inline) ---
 IMG_DIR = (ROOT / "imagem")
