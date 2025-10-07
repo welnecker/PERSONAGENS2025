@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Optional, List, Tuple
 import streamlit as st
 import base64
+import re, html
 from pathlib import Path
 
 # ---------- Path / Page ----------
@@ -32,6 +33,30 @@ st.markdown(
       }
       /* opcional: deixa as mensagens com uma largura agradável no chat */
       .stChatMessage { line-height: 1.5; font-size: 1.02rem; }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
+
+st.markdown(
+    """
+    <style>
+      /* Destaque azul para parágrafos da assistente */
+      .assistant-paragraph {
+        background: rgba(59,130,246,0.18);      /* azul translúcido */
+        border-left: 3px solid rgba(59,130,246,0.55);
+        padding: .55rem .75rem;
+        margin: .5rem 0;
+        border-radius: .5rem;
+        line-height: 1.55;
+      }
+      .assistant-paragraph + .assistant-paragraph { margin-top: .45rem; }
+
+      /* Quando o usuário realmente seleciona o texto (arrastar o mouse), mantenha azul */
+      .stChatMessage ::selection {
+        background: rgba(59,130,246,0.35);
+        color: #fff;
+      }
     </style>
     """,
     unsafe_allow_html=True,
@@ -317,6 +342,27 @@ with c2:
 
 st.selectbox("🧠 Modelo", list_models(None), key="model")
 
+def render_assistant_bubbles(markdown_text: str) -> None:
+    """
+    Mostra o texto da assistente em parágrafos com destaque azul.
+    - Mantém blocos de código ```...``` como Markdown normal.
+    - Partes de texto são quebradas por parágrafos e renderizadas como HTML seguro.
+    """
+    if not markdown_text:
+        return
+    parts = re.split(r"(```[\s\S]*?```)", markdown_text)
+    for part in parts:
+        if part.startswith("```") and part.endswith("```"):
+            # mantém blocos de código intactos
+            st.markdown(part)
+        else:
+            # divide em parágrafos por linhas em branco
+            paras = [p.strip() for p in re.split(r"\n\s*\n", part) if p.strip()]
+            for p in paras:
+                safe = html.escape(p).replace("\n", "<br>")
+                st.markdown(f"<div class='assistant-paragraph'>{safe}</div>", unsafe_allow_html=True)
+
+
 # ---------- Helpers de histórico ----------
 def _user_keys_for_history(user_id: str, character_name: str) -> List[str]:
     """
@@ -352,6 +398,8 @@ def _reload_history(force: bool = False):
         st.session_state["history_loaded_for"] = key
     except Exception as e:
         st.sidebar.warning(f"Não foi possível carregar o histórico: {e}")
+
+
 
 # ---------- Troca de thread ao mudar usuário/personagem ----------
 _current_active = f"{st.session_state['user_id']}::{str(st.session_state['character']).lower()}"
@@ -691,7 +739,11 @@ _reload_history()
 # ---------- Render histórico ----------
 for role, content in st.session_state["history"]:
     with st.chat_message("user" if role == "user" else "assistant", avatar=("💬" if role == "user" else "💚")):
-        st.markdown(content)
+        if role == "assistant":
+            render_assistant_bubbles(content)
+        else:
+            st.markdown(content)
+
 
 # ---------- LLM Ping (diagnóstico direto no provedor) ----------
 with st.expander("🔧 Diagnóstico LLM"):
@@ -763,5 +815,6 @@ if final_prompt:
             text = f"Erro durante a geração:\n\n**{e.__class__.__name__}** — {e}\n\n```\n{traceback.format_exc()}\n```"
 
     with st.chat_message("assistant", avatar="💚"):
-        st.markdown(text)
+    render_assistant_bubbles(text)
+
     st.session_state["history"].append(("assistant", text))
