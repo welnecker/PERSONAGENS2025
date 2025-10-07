@@ -815,6 +815,6 @@ if final_prompt:
             text = f"Erro durante a geração:\n\n**{e.__class__.__name__}** — {e}\n\n```\n{traceback.format_exc()}\n```"
 
     with st.chat_message("assistant", avatar="💚"):
-    render_assistant_bubbles(text)
+        render_assistant_bubbles(text)
 
     st.session_state["history"].append(("assistant", text))
