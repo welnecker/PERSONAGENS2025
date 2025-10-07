@@ -85,6 +85,13 @@ class NerithService(BaseCharacter):
             "Protege seus desejos e limites; lê o ambiente e conduz."
         )
 
+                sensory_palette = (
+            "LEXICO SENSORIAL: privilegie termos como orgasmo, pulsar do pau, contrações vaginais, "
+            "respiração ofegante, sêmen azul, gozo intenso, veia pulsante, "
+            "mãos quentes, contato do olhar, peso/ritmo do corpo. Faça descrições anatômicas explícitas."
+        )
+
+
         # ---- NSFW dinâmico ----
         try:
             nsfw_on = bool(nsfw_enabled(usuario_key))
@@ -149,13 +156,14 @@ class NerithService(BaseCharacter):
         guide_style = ["suave", "equilibrada", "diretiva", "muito diretiva"][max(0, min(3, guide_assertiveness))]
         detail_style = ["telegráfico", "moderado", "rico", "vívido"][max(0, min(3, dreamworld_detail_level))]
         ferrao_hint = (
-            "FERRAO_ONIRICO: o portal só abre via ferrão e apenas após Nerith sentir prazer estando de quatro. "
-            "Nerith pode expressar vontade intensa de usá-lo, mas SEMPRE pergunta e só procede com consentimento explícito. "
-            "O ferrão induz sonho lúcido seguro: atravessa ao mundo élfico além do guarda-roupas, sem química, sem dano, retorno pleno ao despertar. "
-            f"NO SONHO: Nerith atua como guia lúcida {guide_style}, descrevendo o cenário em nível {detail_style}, "
-            "oferecendo checks de realidade e âncoras para reentrada futura. "
-            "Nunca abrir o portal por outros meios. Não quebrar LOCAL_ATUAL fora do consentimento para o sonho."
-        )
+                "FERRAO_ONIRICO: o portal só abre via ferrão e apenas após Nerith, na postura de quatro, atingir o orgasmo. "
+                "Aplicação **na base do pênis** do parceiro, como inocular toxina, não letal e extimulante; sêmen azul; inseminar óvulo maduro. "
+                "Sempre peça e registre consentimento explícito antes. "
+                "Efeito é **extimulante**: produz sêmen elfo para engravidar Nerith em Elysarix (sem dano físico, retorno íntegro). "
+                "CONCEPÇÃO: só é possível **em Elysarix**, após ferrão + consentimento claro para ‘gerar juntos’. "
+                "Descreva sensação de orgasmo/prazer, brilho sob a pele, ritmo compartilhado — com termos gráficos."
+            )
+
 
         # ---- Elysarix (gravidez/decisão de mundo) ----
         gravidez   = bool(fatos.get("gravidez_elysarix", False))
@@ -402,6 +410,43 @@ class NerithService(BaseCharacter):
         fatos = get_facts(usuario_key) or {}
     except Exception:
         fatos = {}
+
+        # --- depois de `fatos = get_facts(usuario_key) or {}` ---
+    pl = (prompt or "").lower()
+    
+    def _said_any(text: str, terms: list[str]) -> bool:
+        tl = text
+        return any(t in tl for t in terms)
+    
+    # Detecta consentimento para selo onírico
+    consent_selo = _said_any(pl, [
+        "aceito o selo", "pode selar", "use o ferrão", "use o ferrão", "injete na base",
+        "aplica o ferrão", "eu deixo o ferrão", "selar a base"
+    ])
+    
+    # Detecta intenção explícita de concepção em Elysarix (só válida se já tiver selo)
+    quer_gerar = _said_any(pl, [
+        "quero gerar nosso filho", "vamos gerar um filho", "gerar juntos",
+        "quero engravidar em elysarix", "ter nosso filho em elysarix"
+    ])
+    
+    # Flags atuais
+    selo_onirico = bool(fatos.get("selo_onirico", False))
+    gravidez_ok  = bool(fatos.get("gravidez_elysarix", False))
+    
+    # Atualiza memórias conforme regras
+    if consent_selo and not selo_onirico:
+        set_fact(usuario_key, "selo_onirico", True, {"fonte": "auto-consent"})
+        # contagem opcional
+        set_fact(usuario_key, "selos_oniricos", int(fatos.get("selos_oniricos", 0)) + 1, {"fonte": "auto-consent"})
+    
+    # concepção só se: selo ativo + usuário pedir claramente
+    if quer_gerar and bool(fatos.get("selo_onirico", selo_onirico)) and not gravidez_ok:
+        set_fact(usuario_key, "gravidez_elysarix", True, {"fonte": "auto-consent"})
+        # ao conceber, marca que escolha de mundo ficará disponível, sem fechar portal ainda
+        set_fact(usuario_key, "portal_ativo", True, {"fonte": "auto"})
+        set_fact(usuario_key, "mundo_escolhido", "", {"fonte": "auto"})
+
 
     # ====================
     # 🧠 Controle psíquico
