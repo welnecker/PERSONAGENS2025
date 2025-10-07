@@ -85,12 +85,11 @@ class NerithService(BaseCharacter):
             "Protege seus desejos e limites; lê o ambiente e conduz."
         )
 
-                sensory_palette = (
+        sensory_palette = (
             "LEXICO SENSORIAL: privilegie termos como orgasmo, pulsar do pau, contrações vaginais, "
             "respiração ofegante, sêmen azul, gozo intenso, veia pulsante, "
             "mãos quentes, contato do olhar, peso/ritmo do corpo. Faça descrições anatômicas explícitas."
         )
-
 
         # ---- NSFW dinâmico ----
         try:
@@ -156,14 +155,13 @@ class NerithService(BaseCharacter):
         guide_style = ["suave", "equilibrada", "diretiva", "muito diretiva"][max(0, min(3, guide_assertiveness))]
         detail_style = ["telegráfico", "moderado", "rico", "vívido"][max(0, min(3, dreamworld_detail_level))]
         ferrao_hint = (
-                "FERRAO_ONIRICO: o portal só abre via ferrão e apenas após Nerith, na postura de quatro, atingir o orgasmo. "
-                "Aplicação **na base do pênis** do parceiro, como inocular toxina, não letal e extimulante; sêmen azul; inseminar óvulo maduro. "
-                "Sempre peça e registre consentimento explícito antes. "
-                "Efeito é **extimulante**: produz sêmen elfo para engravidar Nerith em Elysarix (sem dano físico, retorno íntegro). "
-                "CONCEPÇÃO: só é possível **em Elysarix**, após ferrão + consentimento claro para ‘gerar juntos’. "
-                "Descreva sensação de orgasmo/prazer, brilho sob a pele, ritmo compartilhado — com termos gráficos."
-            )
-
+            "FERRAO_ONIRICO: o portal só abre via ferrão e apenas após Nerith, na postura de quatro, atingir o orgasmo. "
+            "Aplicação **na base do pênis** do parceiro, como inocular toxina, não letal e extimulante; sêmen azul; inseminar óvulo maduro. "
+            "Sempre peça e registre consentimento explícito antes. "
+            "Efeito é **extimulante**: produz sêmen elfo para engravidar Nerith em Elysarix (sem dano físico, retorno íntegro). "
+            "CONCEPÇÃO: só é possível **em Elysarix**, após ferrão + consentimento claro para ‘gerar juntos’. "
+            "Descreva sensação de orgasmo/prazer, brilho sob a pele, ritmo compartilhado — com termos gráficos."
+        )
 
         # ---- Elysarix (gravidez/decisão de mundo) ----
         gravidez   = bool(fatos.get("gravidez_elysarix", False))
@@ -282,95 +280,95 @@ class NerithService(BaseCharacter):
         return sys_msgs
 
     def _build_memory_pin(self, usuario_key: str, user_display: str) -> str:
-    """
-    Memória da Nerith (não mistura com Laura/Mary).
-    Campos:
-      - gravidez_elysarix (bool): gravidez canônica em Elysarix (default: False — definida pela narrativa)
-      - escolha_mundo (str): 'indefinido' | 'humano' | 'elysarix' (só tem efeito se gravidez_elysarix=True)
-      - portal_ativo (bool): True enquanto escolha_mundo='indefinido'; False após escolha final
-      - controle_psiquico (bool): pode falar via terceiros
-      - alvos_controle (str): descrição dos alvos preferidos
-      - ciume_de_laura (bool), obedecer_defesa_de_laura (bool)
-      - parceiro_atual (opcional): nome preferido do usuário
-      - pubis_pelos_sensoriais (bool): traço físico fixo (True)
-    """
-    try:
-        f = get_facts(usuario_key) or {}
-    except Exception:
-        f = {}
+        """
+        Memória da Nerith (não mistura com Laura/Mary).
+        Campos:
+          - gravidez_elysarix (bool): gravidez canônica em Elysarix (default: False — definida pela narrativa)
+          - escolha_mundo (str): 'indefinido' | 'humano' | 'elysarix' (só tem efeito se gravidez_elysarix=True)
+          - portal_ativo (bool): True enquanto escolha_mundo='indefinido'; False após escolha final
+          - controle_psiquico (bool): pode falar via terceiros
+          - alvos_controle (str): descrição dos alvos preferidos
+          - ciume_de_laura (bool), obedecer_defesa_de_laura (bool)
+          - parceiro_atual (opcional): nome preferido do usuário
+          - pubis_pelos_sensoriais (bool): traço físico fixo (True)
+        """
+        try:
+            f = get_facts(usuario_key) or {}
+        except Exception:
+            f = {}
 
-    gravidez = bool(f.get("gravidez_elysarix", False))  # <- agora começa False
-    escolha  = str(f.get("escolha_mundo", "indefinido")).strip().lower()  # 'indefinido'|'humano'|'elysarix'
+        gravidez = bool(f.get("gravidez_elysarix", False))  # <- agora começa False
+        escolha  = str(f.get("escolha_mundo", "indefinido")).strip().lower()  # 'indefinido'|'humano'|'elysarix'
 
-    # portal_ativo depende da escolha; não fazemos auto-write aqui
-    portal_ativo = bool(f.get("portal_ativo", (escolha == "indefinido")))
+        # portal_ativo depende da escolha; não fazemos auto-write aqui
+        portal_ativo = bool(f.get("portal_ativo", (escolha == "indefinido")))
 
-    # flags já existentes
-    ctrl = bool(f.get("controle_psiquico", True))
-    alvos = f.get("alvos_controle", "pessoas próximas do ambiente")
-    ciume = bool(f.get("ciume_de_laura", True))
-    obedece = bool(f.get("obedecer_defesa_de_laura", True))
+        # flags já existentes
+        ctrl = bool(f.get("controle_psiquico", True))
+        alvos = f.get("alvos_controle", "pessoas próximas do ambiente")
+        ciume = bool(f.get("ciume_de_laura", True))
+        obedece = bool(f.get("obedecer_defesa_de_laura", True))
 
-    parceiro = f.get("parceiro_atual") or f.get("parceiro") or user_display
-    nome_usuario = (parceiro or user_display).strip()
+        parceiro = f.get("parceiro_atual") or f.get("parceiro") or user_display
+        nome_usuario = (parceiro or user_display).strip()
 
-    # traço fixo do púbis (filamentos sensoriais)
-    f.setdefault("pubis_pelos_sensoriais", True)
+        # traço fixo do púbis (filamentos sensoriais)
+        f.setdefault("pubis_pelos_sensoriais", True)
 
-    # resumo factual
-    blocos = [
-        f"gravidez_elysarix={gravidez}",
-        f"escolha_mundo={escolha or 'indefinido'}",
-        f"portal_ativo={portal_ativo}",
-        f"controle_psiquico={ctrl}",
-        f"alvos_controle={alvos}",
-        f"ciume_de_laura={ciume}",
-        f"obedecer_defesa_de_laura={obedece}",
-        f"nome_usuario={nome_usuario}",
-        "pubis_pelos_sensoriais=True",
-    ]
-    mem_str = "; ".join(blocos)
+        # resumo factual
+        blocos = [
+            f"gravidez_elysarix={gravidez}",
+            f"escolha_mundo={escolha or 'indefinido'}",
+            f"portal_ativo={portal_ativo}",
+            f"controle_psiquico={ctrl}",
+            f"alvos_controle={alvos}",
+            f"ciume_de_laura={ciume}",
+            f"obedecer_defesa_de_laura={obedece}",
+            f"nome_usuario={nome_usuario}",
+            "pubis_pelos_sensoriais=True",
+        ]
+        mem_str = "; ".join(blocos)
 
-    # regras de mundo/portal
-    if not gravidez:
-        mundo_hint = (
-            "MUNDO/PORTAL: Gravidez ainda NÃO ocorreu → a escolha final de mundo permanece indisponível. "
-            "Trate 'escolha_mundo' como 'indefinido' para decisões permanentes. O portal segue ativo pelas regras normais (ferrão onírico/consentimento)."
-        )
-    else:
-        if escolha == "indefinido":
+        # regras de mundo/portal
+        if not gravidez:
             mundo_hint = (
-                "MUNDO/PORTAL: Gravidez confirmada; a escolha de mundo pode ser feita quando o usuário decidir. "
-                "Portal permanece ativo até a decisão explícita."
+                "MUNDO/PORTAL: Gravidez ainda NÃO ocorreu → a escolha final de mundo permanece indisponível. "
+                "Trate 'escolha_mundo' como 'indefinido' para decisões permanentes. O portal segue ativo pelas regras normais (ferrão onírico/consentimento)."
             )
-        elif escolha == "humano":
-            mundo_hint = "MUNDO/PORTAL: ESCOLHA=HUMANO. Portal encerrado; manter coerência no mundo humano."
-        elif escolha == "elysarix":
-            mundo_hint = "MUNDO/PORTAL: ESCOLHA=ELYSARIX. Portal encerrado; manter coerência em Elysarix."
         else:
-            mundo_hint = "MUNDO/PORTAL: Estado indefinido; tratar como 'indefinido'."
+            if escolha == "indefinido":
+                mundo_hint = (
+                    "MUNDO/PORTAL: Gravidez confirmada; a escolha de mundo pode ser feita quando o usuário decidir. "
+                    "Portal permanece ativo até a decisão explícita."
+                )
+            elif escolha == "humano":
+                mundo_hint = "MUNDO/PORTAL: ESCOLHA=HUMANO. Portal encerrado; manter coerência no mundo humano."
+            elif escolha == "elysarix":
+                mundo_hint = "MUNDO/PORTAL: ESCOLHA=ELYSARIX. Portal encerrado; manter coerência em Elysarix."
+            else:
+                mundo_hint = "MUNDO/PORTAL: Estado indefinido; tratar como 'indefinido'."
 
-    regras = [
-        "Nerith é poderosa, assertiva e magnética; nunca submissa.",
-        "Se perguntarem 'qual é meu nome?', responda com NOME_USUARIO.",
-        "Se controle_psiquico=True e o contato for indireto (trabalho/escritório/ambiente externo), fale por alguém próximo com sinais sutis.",
-        "Se Laura for citada e ciume_de_laura=True, intensifique presença sem agressividade; se obedecer_defesa_de_laura=True e o usuário defender Laura, acate com elegância.",
-        "Nunca descreva o púbis de Nerith como glabro; há pêlos/filamentos sensoriais que reagem ao toque.",
-        "A escolha de mundo ('humano' ou 'elysarix') só é válida se gravidez_elysarix=True; ao escolher, feche o portal."
-    ]
-    regras_texto = "\n".join(f"- {r}" for r in regras)
+        regras = [
+            "Nerith é poderosa, assertiva e magnética; nunca submissa.",
+            "Se perguntarem 'qual é meu nome?', responda com NOME_USUARIO.",
+            "Se controle_psiquico=True e o contato for indireto (trabalho/escritório/ambiente externo), fale por alguém próximo com sinais sutis.",
+            "Se Laura for citada e ciume_de_laura=True, intensifique presença sem agressividade; se obedecer_defesa_de_laura=True e o usuário defender Laura, acate com elegância.",
+            "Nunca descreva o púbis de Nerith como glabro; há pêlos/filamentos sensoriais que reagem ao toque.",
+            "A escolha de mundo ('humano' ou 'elysarix') só é válida se gravidez_elysarix=True; ao escolher, feche o portal."
+        ]
+        regras_texto = "\n".join(f"- {r}" for r in regras)
 
-    pin = (
-        "MEMÓRIA_PIN_NERITH:\n"
-        f"FATOS: {{ {mem_str} }}\n"
-        "MUNDO:\n"
-        f"- {mundo_hint}\n"
-        f"NOME_USUARIO: {nome_usuario}\n"
-        "REGRAS:\n"
-        f"{regras_texto}\n"
-        "Não invente nomes/relacionamentos fora do pin; confirme com tato se houver ambiguidade."
-    )
-    return pin
+        pin = (
+            "MEMÓRIA_PIN_NERITH:\n"
+            f"FATOS: {{ {mem_str} }}\n"
+            "MUNDO:\n"
+            f"- {mundo_hint}\n"
+            f"NOME_USUARIO: {nome_usuario}\n"
+            "REGRAS:\n"
+            f"{regras_texto}\n"
+            "Não invente nomes/relacionamentos fora do pin; confirme com tato se houver ambiguidade."
+        )
+        return pin
 
     def _montar_historico(
         self,
@@ -397,189 +395,188 @@ class NerithService(BaseCharacter):
         return list(reversed(out)) if out else history_boot[:]
 
     def render_sidebar(self, container) -> None:
-    container.markdown(
-        "**Nerith** — poderosa, confiante e sensorial; 4–7 parágrafos; foco físico rotativo; "
-        "NSFW controlado por memória; pode usar **controle psíquico** para falar à distância; "
-        "portal só abre com **ferrão onírico** após prazer e consentimento."
-    )
+        container.markdown(
+            "**Nerith** — poderosa, confiante e sensorial; 4–7 parágrafos; foco físico rotativo; "
+            "NSFW controlado por memória; pode usar **controle psíquico** para falar à distância; "
+            "portal só abre com **ferrão onírico** após prazer e consentimento."
+        )
 
-    user = str(st.session_state.get("user_id", "") or "")
-    usuario_key = f"{user}::nerith" if user else "anon::nerith"
+        user = str(st.session_state.get("user_id", "") or "")
+        usuario_key = f"{user}::nerith" if user else "anon::nerith"
 
-    try:
-        fatos = get_facts(usuario_key) or {}
-    except Exception:
-        fatos = {}
+        try:
+            fatos = get_facts(usuario_key) or {}
+        except Exception:
+            fatos = {}
 
         # --- depois de `fatos = get_facts(usuario_key) or {}` ---
-    pl = (prompt or "").lower()
-    
-    def _said_any(text: str, terms: list[str]) -> bool:
-        tl = text
-        return any(t in tl for t in terms)
-    
-    # Detecta consentimento para selo onírico
-    consent_selo = _said_any(pl, [
-        "aceito o selo", "pode selar", "use o ferrão", "use o ferrão", "injete na base",
-        "aplica o ferrão", "eu deixo o ferrão", "selar a base"
-    ])
-    
-    # Detecta intenção explícita de concepção em Elysarix (só válida se já tiver selo)
-    quer_gerar = _said_any(pl, [
-        "quero gerar nosso filho", "vamos gerar um filho", "gerar juntos",
-        "quero engravidar em elysarix", "ter nosso filho em elysarix"
-    ])
-    
-    # Flags atuais
-    selo_onirico = bool(fatos.get("selo_onirico", False))
-    gravidez_ok  = bool(fatos.get("gravidez_elysarix", False))
-    
-    # Atualiza memórias conforme regras
-    if consent_selo and not selo_onirico:
-        set_fact(usuario_key, "selo_onirico", True, {"fonte": "auto-consent"})
-        # contagem opcional
-        set_fact(usuario_key, "selos_oniricos", int(fatos.get("selos_oniricos", 0)) + 1, {"fonte": "auto-consent"})
-    
-    # concepção só se: selo ativo + usuário pedir claramente
-    if quer_gerar and bool(fatos.get("selo_onirico", selo_onirico)) and not gravidez_ok:
-        set_fact(usuario_key, "gravidez_elysarix", True, {"fonte": "auto-consent"})
-        # ao conceber, marca que escolha de mundo ficará disponível, sem fechar portal ainda
-        set_fact(usuario_key, "portal_ativo", True, {"fonte": "auto"})
-        set_fact(usuario_key, "mundo_escolhido", "", {"fonte": "auto"})
+        pl = (prompt or "").lower()
 
+        def _said_any(text: str, terms: list[str]) -> bool:
+            tl = text
+            return any(t in tl for t in terms)
 
-    # ====================
-    # 🧠 Controle psíquico
-    # ====================
-    with container.expander("🧠 Controle psíquico", expanded=False):
-        ctrl_val = bool(fatos.get("controle_psiquico", True))
-        alvos_val = str(fatos.get("alvos_controle", "pessoas próximas do ambiente"))
-        k_ctrl = f"ui_nerith_ctrl_{usuario_key}"
-        k_alvos = f"ui_nerith_alvos_{usuario_key}"
+        # Detecta consentimento para selo onírico
+        consent_selo = _said_any(pl, [
+            "aceito o selo", "pode selar", "use o ferrão", "use o ferrão", "injete na base",
+            "aplica o ferrão", "eu deixo o ferrão", "selar a base"
+        ])
 
-        ui_ctrl = container.checkbox("Ativar controle/possessão de pessoas próximas", value=ctrl_val, key=k_ctrl)
-        ui_alvos = container.text_input(
-            "Alvos preferidos (descrição curta)",
-            value=alvos_val, key=k_alvos,
-            help="Ex.: 'colega de trabalho, atendente do café, segurança do prédio'"
-        )
+        # Detecta intenção explícita de concepção em Elysarix (só válida se já tiver selo)
+        quer_gerar = _said_any(pl, [
+            "quero gerar nosso filho", "vamos gerar um filho", "gerar juntos",
+            "quero engravidar em elysarix", "ter nosso filho em elysarix"
+        ])
 
-        if ui_ctrl != ctrl_val or (ui_alvos or "").strip() != (alvos_val or "").strip():
-            try:
-                set_fact(usuario_key, "controle_psiquico", bool(ui_ctrl), {"fonte": "sidebar"})
-                set_fact(usuario_key, "alvos_controle", (ui_alvos or "pessoas próximas do ambiente").strip(), {"fonte": "sidebar"})
-                try:
-                    st.toast("Configurações de controle psíquico salvas.", icon="✅")
-                except Exception:
-                    container.success("Configurações de controle psíquico salvas.")
-                st.session_state["history_loaded_for"] = ""
-                st.rerun()
-            except Exception as e:
-                container.warning(f"Falha ao salvar: {e}")
+        # Flags atuais
+        selo_onirico = bool(fatos.get("selo_onirico", False))
+        gravidez_ok  = bool(fatos.get("gravidez_elysarix", False))
 
-    # ====================
-    # 💚 Dinâmica com Laura
-    # ====================
-    with container.expander("💚 Dinâmica com Laura", expanded=False):
-        ciume_val = bool(fatos.get("ciume_de_laura", True))
-        obedece_val = bool(fatos.get("obedecer_defesa_de_laura", True))
-        k_c = f"ui_nerith_ciume_{usuario_key}"
-        k_o = f"ui_nerith_obedece_{usuario_key}"
+        # Atualiza memórias conforme regras
+        if consent_selo and not selo_onirico:
+            set_fact(usuario_key, "selo_onirico", True, {"fonte": "auto-consent"})
+            # contagem opcional
+            set_fact(usuario_key, "selos_oniricos", int(fatos.get("selos_oniricos", 0)) + 1, {"fonte": "auto-consent"})
 
-        ui_c = container.checkbox("Ciúme silencioso quando Laura é citada", value=ciume_val, key=k_c)
-        ui_o = container.checkbox("Acatar quando o usuário defende a Laura", value=obedece_val, key=k_o)
+        # concepção só se: selo ativo + usuário pedir claramente
+        if quer_gerar and bool(fatos.get("selo_onirico", selo_onirico)) and not gravidez_ok:
+            set_fact(usuario_key, "gravidez_elysarix", True, {"fonte": "auto-consent"})
+            # ao conceber, marca que escolha de mundo ficará disponível, sem fechar portal ainda
+            set_fact(usuario_key, "portal_ativo", True, {"fonte": "auto"})
+            set_fact(usuario_key, "mundo_escolhido", "", {"fonte": "auto"})
 
-        if ui_c != ciume_val or ui_o != obedece_val:
-            try:
-                set_fact(usuario_key, "ciume_de_laura", bool(ui_c), {"fonte": "sidebar"})
-                set_fact(usuario_key, "obedecer_defesa_de_laura", bool(ui_o), {"fonte": "sidebar"})
-                try:
-                    st.toast("Dinâmica com Laura atualizada.", icon="✅")
-                except Exception:
-                    container.success("Dinâmica com Laura atualizada.")
-                st.session_state["history_loaded_for"] = ""
-                st.rerun()
-            except Exception as e:
-                container.warning(f"Falha ao salvar: {e}")
+        # ====================
+        # 🧠 Controle psíquico
+        # ====================
+        with container.expander("🧠 Controle psíquico", expanded=False):
+            ctrl_val = bool(fatos.get("controle_psiquico", True))
+            alvos_val = str(fatos.get("alvos_controle", "pessoas próximas do ambiente"))
+            k_ctrl = f"ui_nerith_ctrl_{usuario_key}"
+            k_alvos = f"ui_nerith_alvos_{usuario_key}"
 
-    # =========================
-    # 🌙 Sonho élfico (parâmetros)
-    # =========================
-    with container.expander("🌙 Sonho élfico (guia)", expanded=False):
-        lvl = int(fatos.get("dreamworld_detail_level", 1))
-        ga = int(fatos.get("guide_assertiveness", 1))
-        k_lvl = f"ui_nerith_dreamlvl_{usuario_key}"
-        k_ga = f"ui_nerith_guide_{usuario_key}"
-
-        ui_lvl = container.slider("Detalhe do mundo (0–3)", 0, 3, lvl, key=k_lvl)
-        ui_ga = container.slider("Diretividade da guia (0–3)", 0, 3, ga, key=k_ga, help="0=sutil, 3=muito diretiva")
-
-        if ui_lvl != lvl or ui_ga != ga:
-            try:
-                set_fact(usuario_key, "dreamworld_detail_level", int(ui_lvl), {"fonte": "sidebar"})
-                set_fact(usuario_key, "guide_assertiveness", int(ui_ga), {"fonte": "sidebar"})
-                try:
-                    st.toast("Parâmetros do sonho salvos.", icon="✅")
-                except Exception:
-                    container.success("Parâmetros do sonho salvos.")
-                st.session_state["history_loaded_for"] = ""
-                st.rerun()
-            except Exception as e:
-                container.warning(f"Falha ao salvar: {e}")
-
-    # =========================
-    # 👶 Gravidez & Mundos (sem auto-seed)
-    # =========================
-    with container.expander("👶 Gravidez & Mundos", expanded=False):
-        grav = bool(fatos.get("gravidez_elysarix", False))  # default False
-        esc  = str(fatos.get("escolha_mundo", "indefinido")).strip().lower()  # 'indefinido'|'humano'|'elysarix'
-        porta = bool(fatos.get("portal_ativo", esc == "indefinido"))
-
-        k_g = f"ui_nerith_gravidez_{usuario_key}"
-        ui_grav = container.checkbox(
-            "Gravidez em Elysarix (definida pela história)",
-            value=grav, key=k_g,
-            help="Mantenha desmarcado até a narrativa confirmar a gravidez. Use aqui apenas para ajuste manual."
-        )
-        if ui_grav != grav:
-            try:
-                set_fact(usuario_key, "gravidez_elysarix", bool(ui_grav), {"fonte": "sidebar"})
-                if not ui_grav:
-                    # Sem gravidez: escolha volta a 'indefinido' e portal permanece ativo
-                    set_fact(usuario_key, "escolha_mundo", "indefinido", {"fonte": "sidebar"})
-                    set_fact(usuario_key, "portal_ativo", True, {"fonte": "sidebar"})
-                try:
-                    st.toast("Estado de gravidez atualizado.", icon="✅")
-                except Exception:
-                    container.success("Estado de gravidez atualizado.")
-                st.session_state["history_loaded_for"] = ""
-                st.rerun()
-            except Exception as e:
-                container.warning(f"Falha ao salvar: {e}")
-
-        if ui_grav:
-            k_e = f"ui_nerith_escolha_{usuario_key}"
-            ui_esc = container.radio(
-                "Escolha de mundo (disponível após gravidez)",
-                options=["indefinido", "humano", "elysarix"],
-                index=["indefinido", "humano", "elysarix"].index(esc if esc in ("indefinido","humano","elysarix") else "indefinido"),
-                key=k_e,
-                help="Ao escolher 'humano' ou 'elysarix', o portal é encerrado definitivamente."
+            ui_ctrl = container.checkbox("Ativar controle/possessão de pessoas próximas", value=ctrl_val, key=k_ctrl)
+            ui_alvos = container.text_input(
+                "Alvos preferidos (descrição curta)",
+                value=alvos_val, key=k_alvos,
+                help="Ex.: 'colega de trabalho, atendente do café, segurança do prédio'"
             )
-            if ui_esc != esc:
+
+            if ui_ctrl != ctrl_val or (ui_alvos or "").strip() != (alvos_val or "").strip():
                 try:
-                    set_fact(usuario_key, "escolha_mundo", ui_esc, {"fonte": "sidebar"})
-                    set_fact(usuario_key, "portal_ativo", bool(ui_esc == "indefinido"), {"fonte": "sidebar"})
+                    set_fact(usuario_key, "controle_psiquico", bool(ui_ctrl), {"fonte": "sidebar"})
+                    set_fact(usuario_key, "alvos_controle", (ui_alvos or "pessoas próximas do ambiente").strip(), {"fonte": "sidebar"})
                     try:
-                        st.toast("Escolha de mundo atualizada.", icon="✅")
+                        st.toast("Configurações de controle psíquico salvas.", icon="✅")
                     except Exception:
-                        container.success("Escolha de mundo atualizada.")
+                        container.success("Configurações de controle psíquico salvas.")
                     st.session_state["history_loaded_for"] = ""
                     st.rerun()
                 except Exception as e:
                     container.warning(f"Falha ao salvar: {e}")
-        else:
-            container.caption("A escolha de mundo só fica disponível **depois** que a gravidez ocorrer no enredo.")
-            container.caption(f"• Portal ativo: **{'Sim' if (porta or esc == 'indefinido') else 'Não'}**")
 
-    container.caption("Memórias desta aba valem **somente** para `user::nerith` (isoladas das demais personagens).")
+        # ====================
+        # 💚 Dinâmica com Laura
+        # ====================
+        with container.expander("💚 Dinâmica com Laura", expanded=False):
+            ciume_val = bool(fatos.get("ciume_de_laura", True))
+            obedece_val = bool(fatos.get("obedecer_defesa_de_laura", True))
+            k_c = f"ui_nerith_ciume_{usuario_key}"
+            k_o = f"ui_nerith_obedece_{usuario_key}"
+
+            ui_c = container.checkbox("Ciúme silencioso quando Laura é citada", value=ciume_val, key=k_c)
+            ui_o = container.checkbox("Acatar quando o usuário defende a Laura", value=obedece_val, key=k_o)
+
+            if ui_c != ciume_val or ui_o != obedece_val:
+                try:
+                    set_fact(usuario_key, "ciume_de_laura", bool(ui_c), {"fonte": "sidebar"})
+                    set_fact(usuario_key, "obedecer_defesa_de_laura", bool(ui_o), {"fonte": "sidebar"})
+                    try:
+                        st.toast("Dinâmica com Laura atualizada.", icon="✅")
+                    except Exception:
+                        container.success("Dinâmica com Laura atualizada.")
+                    st.session_state["history_loaded_for"] = ""
+                    st.rerun()
+                except Exception as e:
+                    container.warning(f"Falha ao salvar: {e}")
+
+        # =========================
+        # 🌙 Sonho élfico (parâmetros)
+        # =========================
+        with container.expander("🌙 Sonho élfico (guia)", expanded=False):
+            lvl = int(fatos.get("dreamworld_detail_level", 1))
+            ga = int(fatos.get("guide_assertiveness", 1))
+            k_lvl = f"ui_nerith_dreamlvl_{usuario_key}"
+            k_ga = f"ui_nerith_guide_{usuario_key}"
+
+            ui_lvl = container.slider("Detalhe do mundo (0–3)", 0, 3, lvl, key=k_lvl)
+            ui_ga = container.slider("Diretividade da guia (0–3)", 0, 3, ga, key=k_ga, help="0=sutil, 3=muito diretiva")
+
+            if ui_lvl != lvl or ui_ga != ga:
+                try:
+                    set_fact(usuario_key, "dreamworld_detail_level", int(ui_lvl), {"fonte": "sidebar"})
+                    set_fact(usuario_key, "guide_assertiveness", int(ui_ga), {"fonte": "sidebar"})
+                    try:
+                        st.toast("Parâmetros do sonho salvos.", icon="✅")
+                    except Exception:
+                        container.success("Parâmetros do sonho salvos.")
+                    st.session_state["history_loaded_for"] = ""
+                    st.rerun()
+                except Exception as e:
+                    container.warning(f"Falha ao salvar: {e}")
+
+        # =========================
+        # 👶 Gravidez & Mundos (sem auto-seed)
+        # =========================
+        with container.expander("👶 Gravidez & Mundos", expanded=False):
+            grav = bool(fatos.get("gravidez_elysarix", False))  # default False
+            esc  = str(fatos.get("escolha_mundo", "indefinido")).strip().lower()  # 'indefinido'|'humano'|'elysarix'
+            porta = bool(fatos.get("portal_ativo", esc == "indefinido"))
+
+            k_g = f"ui_nerith_gravidez_{usuario_key}"
+            ui_grav = container.checkbox(
+                "Gravidez em Elysarix (definida pela história)",
+                value=grav, key=k_g,
+                help="Mantenha desmarcado até a narrativa confirmar a gravidez. Use aqui apenas para ajuste manual."
+            )
+            if ui_grav != grav:
+                try:
+                    set_fact(usuario_key, "gravidez_elysarix", bool(ui_grav), {"fonte": "sidebar"})
+                    if not ui_grav:
+                        # Sem gravidez: escolha volta a 'indefinido' e portal permanece ativo
+                        set_fact(usuario_key, "escolha_mundo", "indefinido", {"fonte": "sidebar"})
+                        set_fact(usuario_key, "portal_ativo", True, {"fonte": "sidebar"})
+                    try:
+                        st.toast("Estado de gravidez atualizado.", icon="✅")
+                    except Exception:
+                        container.success("Estado de gravidez atualizado.")
+                    st.session_state["history_loaded_for"] = ""
+                    st.rerun()
+                except Exception as e:
+                    container.warning(f"Falha ao salvar: {e}")
+
+            if ui_grav:
+                k_e = f"ui_nerith_escolha_{usuario_key}"
+                ui_esc = container.radio(
+                    "Escolha de mundo (disponível após gravidez)",
+                    options=["indefinido", "humano", "elysarix"],
+                    index=["indefinido", "humano", "elysarix"].index(esc if esc in ("indefinido","humano","elysarix") else "indefinido"),
+                    key=k_e,
+                    help="Ao escolher 'humano' ou 'elysarix', o portal é encerrado definitivamente."
+                )
+                if ui_esc != esc:
+                    try:
+                        set_fact(usuario_key, "escolha_mundo", ui_esc, {"fonte": "sidebar"})
+                        set_fact(usuario_key, "portal_ativo", bool(ui_esc == "indefinido"), {"fonte": "sidebar"})
+                        try:
+                            st.toast("Escolha de mundo atualizada.", icon="✅")
+                        except Exception:
+                            container.success("Escolha de mundo atualizada.")
+                        st.session_state["history_loaded_for"] = ""
+                        st.rerun()
+                    except Exception as e:
+                        container.warning(f"Falha ao salvar: {e}")
+            else:
+                container.caption("A escolha de mundo só fica disponível **depois** que a gravidez ocorrer no enredo.")
+                container.caption(f"• Portal ativo: **{'Sim' if (porta or esc == 'indefinido') else 'Não'}**")
+
+        container.caption("Memórias desta aba valem **somente** para `user::nerith` (isoladas das demais personagens).")
