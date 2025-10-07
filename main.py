@@ -10,8 +10,9 @@ import inspect
 import traceback
 from pathlib import Path
 from typing import Optional, List, Tuple
-
 import streamlit as st
+import base64
+from pathlib import Path
 
 # ---------- Path / Page ----------
 ROOT = Path(__file__).resolve().parent
@@ -35,6 +36,58 @@ st.markdown(
     """,
     unsafe_allow_html=True,
 )
+
+# --- Plano de fundo (CSS inline) ---
+IMG_DIR = (ROOT / "imagem")
+IMG_DIR.mkdir(exist_ok=True)
+
+def _encode_image_b64(p: Path) -> str:
+    with p.open("rb") as f:
+        return base64.b64encode(f.read()).decode("utf-8")
+
+def set_background(image_path: Path, *, darken: float = 0.25, blur_px: int = 0,
+                   attach_fixed: bool = True, size_mode: str = "cover") -> None:
+    """
+    Injeta CSS para usar a imagem como fundo.
+    - darken: 0.0 a 0.9 (overlay escuro p/ legibilidade)
+    - blur_px: desfoque em pixels (0 a 20)
+    - attach_fixed: True=fixo, False=rola com a página
+    - size_mode: 'cover' | 'contain'
+    """
+    if not image_path.exists():
+        return
+    b64 = _encode_image_b64(image_path)
+    att = "fixed" if attach_fixed else "scroll"
+    darken = max(0.0, min(0.9, float(darken)))
+    blur_px = max(0, min(40, int(blur_px)))
+    size_mode = size_mode if size_mode in ("cover", "contain") else "cover"
+
+    st.markdown(f"""
+    <style>
+    .stApp::before {{
+        content: "";
+        position: fixed;
+        inset: 0;
+        background-image: url("data:image;base64,{b64}");
+        background-position: center center;
+        background-repeat: no-repeat;
+        background-size: {size_mode};
+        background-attachment: {att};
+        filter: blur({blur_px}px);
+        z-index: -1;
+        transform: translateZ(0);
+    }}
+    .stApp::after {{
+        content: "";
+        position: fixed; inset: 0;
+        background: rgba(0,0,0,{darken});
+        z-index: -1;
+        pointer-events: none;
+    }}
+    </style>
+    """, unsafe_allow_html=True)
+
+
 
 # ---------- Gate opcional ----------
 def _check_scrypt(pwd: str) -> bool:
@@ -568,6 +621,49 @@ if c_off.button("🔒 Bloquear NSFW"):
         st.rerun()
     except Exception as e:
         st.sidebar.error(f"Falha ao bloquear NSFW: {e}")
+
+# ---------- Sidebar: Plano de fundo ----------
+st.sidebar.markdown("---")
+st.sidebar.subheader("🖼️ Plano de fundo")
+
+# lista arquivos imagem/nerith*.{jpg,jpeg,png,webp}
+bg_files = []
+for ext in ("*.jpg", "*.jpeg", "*.png", "*.webp"):
+    bg_files += list(IMG_DIR.glob(f"nerith{ext[1:]}"))  # mantém padrão 'nerith*.ext'
+bg_files += list(IMG_DIR.glob("nerith*.*"))  # fallback geral
+
+# remove duplicatas e ordena por nome
+bg_files = sorted({p.name: p for p in bg_files}.values(), key=lambda p: p.name)
+
+choices = ["(nenhuma)"] + [p.name for p in bg_files]
+st.session_state.setdefault("bg_file", choices[1] if len(choices) > 1 else "(nenhuma)")
+st.session_state.setdefault("bg_darken", 25)
+st.session_state.setdefault("bg_blur", 0)
+st.session_state.setdefault("bg_fixed", True)
+st.session_state.setdefault("bg_size", "cover")
+
+bg_sel = st.sidebar.selectbox("Imagem", choices, index=choices.index(st.session_state["bg_file"]))
+bg_darken = st.sidebar.slider("Escurecer overlay (%)", 0, 90, st.session_state["bg_darken"])
+bg_blur = st.sidebar.slider("Desfoque (px)", 0, 20, st.session_state["bg_blur"])
+bg_fixed = st.sidebar.checkbox("Fundo fixo", value=st.session_state["bg_fixed"])
+bg_size  = st.sidebar.selectbox("Ajuste", ["cover", "contain"], index=(0 if st.session_state["bg_size"]=="cover" else 1))
+
+# aplica e persiste
+st.session_state["bg_file"] = bg_sel
+st.session_state["bg_darken"] = bg_darken
+st.session_state["bg_blur"] = bg_blur
+st.session_state["bg_fixed"] = bg_fixed
+st.session_state["bg_size"] = bg_size
+
+if bg_sel != "(nenhuma)":
+    set_background(
+        IMG_DIR / bg_sel,
+        darken=bg_darken/100.0,
+        blur_px=bg_blur,
+        attach_fixed=bg_fixed,
+        size_mode=bg_size,
+    )
+
 
 
 
