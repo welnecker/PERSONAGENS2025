@@ -793,13 +793,21 @@ def _safe_reply_call(_service, *, user: str, model: str, prompt: str) -> str:
         return fn(user, model)
 
 # ---------- Chat ----------
-# Placeholder dinâmico vindo do serviço (st.session_state["suggestion_placeholder"])
+# Placeholder dinâmico vindo do serviço
 _ph = st.session_state.get("suggestion_placeholder", "")
-_label = f"Fale com {st.session_state['character']}"
-user_prompt = st.chat_input(
-    _label,
-    placeholder=(f"💡 Sugestão: {_ph}" if _ph else "Digite sua mensagem...")
-)
+_default_ph = f"Fale com {st.session_state['character']}"
+_dyn_ph = f"💡 Sugestão: {_ph}" if _ph else _default_ph
+
+# Algumas versões do Streamlit aceitam 'placeholder='; outras só 1 posicional.
+try:
+    # Novo: label opcional + placeholder kw-only (se suportado)
+    user_prompt = st.chat_input(
+        _default_ph,  # rótulo/legenda (em versões novas)
+        placeholder=_dyn_ph
+    )
+except TypeError:
+    # Antigo: apenas 1 argumento posicional (é o placeholder)
+    user_prompt = st.chat_input(_dyn_ph)
 
 cont = st.button("🔁 Continuar", help="Prossegue a cena do ponto atual, sem mudar o local salvo.")
 
@@ -832,5 +840,3 @@ if final_prompt:
 
     with st.chat_message("assistant", avatar="💚"):
         render_assistant_bubbles(text)
-
-    st.session_state["history"].append(("assistant", text))
