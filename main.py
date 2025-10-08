@@ -793,7 +793,14 @@ def _safe_reply_call(_service, *, user: str, model: str, prompt: str) -> str:
         return fn(user, model)
 
 # ---------- Chat ----------
-user_prompt = st.chat_input(f"Fale com {st.session_state['character']}")
+# Placeholder dinâmico vindo do serviço (st.session_state["suggestion_placeholder"])
+_ph = st.session_state.get("suggestion_placeholder", "")
+_label = f"Fale com {st.session_state['character']}"
+user_prompt = st.chat_input(
+    _label,
+    placeholder=(f"💡 Sugestão: {_ph}" if _ph else "Digite sua mensagem...")
+)
+
 cont = st.button("🔁 Continuar", help="Prossegue a cena do ponto atual, sem mudar o local salvo.")
 
 final_prompt: Optional[str] = None
