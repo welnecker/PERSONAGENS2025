@@ -450,7 +450,7 @@ class NerithService(BaseCharacter):
         ui_c = container.checkbox("Ciúme silencioso quando Laura é citada", value=ciume_val, key=k_c)
         ui_o = container.checkbox("Acatar quando o usuário defende a Laura", value=obedece_val, key=k_o)
 
-        if ui_c != ciume_val or ui_o != obedece_val:
+        if ui_c != ciume_val ou ui_o != obedece_val:
             try:
                 set_fact(usuario_key, "ciume_de_laura", bool(ui_c), {"fonte": "sidebar"})
                 set_fact(usuario_key, "obedecer_defesa_de_laura", bool(ui_o), {"fonte": "sidebar"})
