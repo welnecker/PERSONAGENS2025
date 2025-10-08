@@ -394,7 +394,7 @@ class NerithService(BaseCharacter):
             total += t
         return list(reversed(out)) if out else history_boot[:]
 
-        def render_sidebar(self, container) -> None:
+    def render_sidebar(self, container) -> None:
         container.markdown(
             "**Nerith** — poderosa, confiante e sensorial; 4–7 parágrafos; foco físico rotativo; "
             "NSFW controlado por memória; pode usar **controle psíquico** para falar à distância; "
