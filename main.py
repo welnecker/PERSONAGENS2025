@@ -431,6 +431,38 @@ def _reload_history(force: bool = False):
         st.sidebar.warning(f"Não foi possível carregar o histórico: {e}")
 
 
+# --- Boot visual da First Message (mostra no chat sem o usuário digitar) ---
+try:
+    user_id = str(st.session_state.get("user_id", "")).strip()
+    char    = str(st.session_state.get("character", "")).strip()
+    char_key = f"{user_id}::{char.lower()}" if user_id and char else user_id
+
+    # Se não há nada na timeline visual, tentamos injetar a 'First Message' da persona
+    if not st.session_state.get("history"):
+        # tenta achar o get_persona do personagem atual
+        try:
+            # 1) tenta importar do módulo da própria personagem (padrão)
+            mod = __import__(f"characters.{char.lower()}.persona", fromlist=["get_persona"])
+            get_persona = getattr(mod, "get_persona", None)
+        except Exception:
+            get_persona = None
+
+        if callable(get_persona):
+            persona_text, history_boot = get_persona()
+            first_msg = next((m.get("content","") for m in history_boot if m.get("role")=="assistant"), "").strip()
+            if first_msg:
+                # Persiste no repositório para a UI poder recarregar e exibir
+                try:
+                    save_interaction(char_key, "", first_msg, "boot:first_message")
+                except Exception:
+                    pass
+                # Atualiza a sessão atual (sem esperar próximo reload)
+                st.session_state["history"] = [("assistant", first_msg)]
+                st.session_state["history_loaded_for"] = ""  # garante que reload futuro funcione
+except Exception as e:
+    st.sidebar.warning(f"Boot da First Message falhou: {e}")
+
+
 
 # ---------- Troca de thread ao mudar usuário/personagem ----------
 _current_active = f"{st.session_state['user_id']}::{str(st.session_state['character']).lower()}"
