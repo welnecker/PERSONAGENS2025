@@ -916,13 +916,13 @@ _dyn_ph = f"💡 Sugestão: {_ph}" if _ph else _default_ph
 
 # Algumas versões do Streamlit aceitam 'placeholder='; outras só 1 posicional.
 try:
-    # Novo: label opcional + placeholder kw-only (se suportado)
+    # Versões novas: label + placeholder kw-only
     user_prompt = st.chat_input(
-        _default_ph,  # rótulo/legenda (em versões novas)
-        placeholder=_dyn_ph
+        _default_ph,            # rótulo/legenda
+        placeholder=_dyn_ph     # dica dinâmica
     )
 except TypeError:
-    # Antigo: apenas 1 argumento posicional (é o placeholder)
+    # Versões antigas: apenas 1 argumento posicional (é o placeholder)
     user_prompt = st.chat_input(_dyn_ph)
 
 cont = st.button("🔁 Continuar", help="Prossegue a cena do ponto atual, sem mudar o local salvo.")
@@ -939,10 +939,14 @@ elif user_prompt:
     final_prompt = user_prompt
 
 if final_prompt:
+    # Render do turno do usuário
     with st.chat_message("user"):
         st.markdown("🔁 **Continuar**" if auto_continue else final_prompt)
+
+    # Persistência visual do turno do usuário
     st.session_state["history"].append(("user", "🔁 Continuar" if auto_continue else final_prompt))
 
+    # Geração
     with st.spinner("Gerando…"):
         try:
             text = _safe_reply_call(
@@ -952,7 +956,17 @@ if final_prompt:
                 prompt=str(final_prompt),
             )
         except Exception as e:
-            text = f"Erro durante a geração:\n\n**{e.__class__.__name__}** — {e}\n\n```\n{traceback.format_exc()}\n```"
+            text = (
+                f"Erro durante a geração:\n\n**{e.__class__.__name__}** — {e}\n\n"
+                f"```\n{traceback.format_exc()}\n```"
+            )
 
+    # 🔒 Garante que a resposta da assistente fique fixa no histórico da UI
+    if text:
+        last = st.session_state["history"][-1] if st.session_state["history"] else None
+        if last != ("assistant", text):
+            st.session_state["history"].append(("assistant", text))
+
+    # Render do turno da assistente
     with st.chat_message("assistant", avatar="💚"):
         render_assistant_bubbles(text)
