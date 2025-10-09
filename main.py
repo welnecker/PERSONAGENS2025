@@ -419,6 +419,41 @@ if st.session_state["_active_key"] != _current_active:
     st.session_state["history_loaded_for"] = ""
     _reload_history(force=True)
 
+# --- Auto-seed: Mary (Esposa Cúmplice) ---
+try:
+    _user = str(st.session_state.get("user_id", "")).strip()
+    _char = str(st.session_state.get("character", "")).strip().lower()
+    if _user and _char == "mary":
+        _mary_key = f"{_user}::mary"
+        try:
+            f = get_facts(_mary_key) or {}
+        except Exception:
+            f = {}
+
+        changed = False
+        # parceiro_atual padrão = user_id (se vazio)
+        if not str(f.get("parceiro_atual", "")).strip():
+            set_fact(_mary_key, "parceiro_atual", _user, {"fonte": "auto_seed"})
+            changed = True
+
+        # relação canônica: casados=True (se ausente)
+        if "casados" not in f:
+            set_fact(_mary_key, "casados", True, {"fonte": "auto_seed"})
+            changed = True
+
+        # local inicial (se não houver): "quarto"
+        if not str(f.get("local_cena_atual", "")).strip():
+            set_fact(_mary_key, "local_cena_atual", "quarto", {"fonte": "auto_seed"})
+            changed = True
+
+        if changed:
+            # força recarregar histórico/memórias visualmente
+            st.session_state["history_loaded_for"] = ""
+            _reload_history(force=True)
+except Exception as _e:
+    st.sidebar.warning(f"Auto-seed Mary falhou: {_e}")
+
+
 # ---------- Instancia serviço ----------
 try:
     service = get_service(st.session_state["character"])
@@ -626,6 +661,35 @@ with st.sidebar.expander("🔓 NSFW rápido: Laura", expanded=False):
         except Exception as e:
             st.error(f"Falha ao ativar NSFW: {e}")
 
+# --- Seed rápido: Mary (Esposa Cúmplice) ---
+with st.sidebar.expander("⚡ Seed rápido: Mary (Esposa Cúmplice)", expanded=False):
+    u = (st.session_state.get("user_id") or "").strip() or "Janio Donisete"
+    mary_key = f"{u}::mary"
+
+    st.caption("Grava memórias canônicas da Mary casada com o usuário atual e define local inicial para 'quarto'.")
+    col1, col2 = st.columns(2)
+    with col1:
+        if st.button("Aplicar seed Mary"):
+            try:
+                set_fact(mary_key, "parceiro_atual", u, {"fonte": "seed"})
+                set_fact(mary_key, "casados", True, {"fonte": "seed"})
+                set_fact(mary_key, "local_cena_atual", "quarto", {"fonte": "seed"})
+                st.success("Seed aplicado para Mary (Esposa Cúmplice).")
+                st.session_state["history_loaded_for"] = ""
+                st.rerun()
+            except Exception as e:
+                st.error(f"Falha ao aplicar seed: {e}")
+    with col2:
+        if st.button("Limpar 'casados'"):
+            try:
+                # remove ou redefine estado — aqui só desativa o flag
+                set_fact(mary_key, "casados", False, {"fonte": "seed"})
+                st.success("Flag 'casados' definido como False.")
+                st.session_state["history_loaded_for"] = ""
+                st.rerun()
+            except Exception as e:
+                st.error(f"Falha ao limpar: {e}")
+
 
 # ---------- Sidebar: NSFW & Primeira vez ----------
 st.sidebar.markdown("---")
@@ -698,14 +762,11 @@ if c_off.button("🔒 Bloquear NSFW"):
 st.sidebar.markdown("---")
 st.sidebar.subheader("🖼️ Plano de fundo")
 
-# lista arquivos imagem/nerith*.{jpg,jpeg,png,webp}
-# --- substitua o bloco que monta bg_files ---
+# lista arquivos imagem/{nerith*, mary*}.{jpg,jpeg,png,webp}
 bg_files = []
-for pattern in ("nerith*.jpg","nerith*.jpeg","nerith*.png","nerith*.webp"):
+for pattern in ("nerith*.jpg","nerith*.jpeg","nerith*.png","nerith*.webp",
+                "mary*.jpg","mary*.jpeg","mary*.png","mary*.webp"):
     bg_files += list(IMG_DIR.glob(pattern))
-# fallback geral
-bg_files = sorted({p.name: p for p in bg_files}.values(), key=lambda p: p.name)
-
 
 # remove duplicatas e ordena por nome
 bg_files = sorted({p.name: p for p in bg_files}.values(), key=lambda p: p.name)
@@ -738,6 +799,7 @@ if bg_sel != "(nenhuma)":
         attach_fixed=bg_fixed,
         size_mode=bg_size,
     )
+
 
 
 
