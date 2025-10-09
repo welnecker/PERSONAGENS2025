@@ -22,119 +22,72 @@ if str(ROOT) not in sys.path:
 
 st.set_page_config(page_title="PERSONAGENS 2025", page_icon="🎭", layout="centered")
 
-# limite de largura do conteúdo (ex.: 820px)
-st.markdown(
-    """
-    <style>
-      .block-container {
-        max-width: 820px;
-        padding-top: 1rem;
-        padding-bottom: 4rem;
-      }
-      /* opcional: deixa as mensagens com uma largura agradável no chat */
-      .stChatMessage { line-height: 1.5; font-size: 1.02rem; }
-    </style>
-    """,
-    unsafe_allow_html=True,
-)
+# ——— CSS global (sem vazamento lateral) ———
+st.markdown("""
+<style>
+  /* Bloqueia overflow horizontal e respeita viewport */
+  html, body, .stApp { overflow-x: hidden; max-width: 100vw; }
 
-st.markdown(
-    """
-    <style>
-      /* Destaque azul para parágrafos da assistente */
-      .assistant-paragraph {
-        background: rgba(59,130,246,0.18);      /* azul translúcido */
-        border-left: 3px solid rgba(59,130,246,0.55);
-        padding: .55rem .75rem;
-        margin: .5rem 0;
-        border-radius: .5rem;
-        line-height: 1.55;
-        color: #fff;                            /* 👈 texto branco */
-      }
-      .assistant-paragraph a {
-        color: #ffffff;                         /* links brancos */
-        text-decoration: underline;
-      }
-      .assistant-paragraph a:hover {
-        opacity: 0.85;
-      }
-      .assistant-paragraph + .assistant-paragraph { margin-top: .45rem; }
+  /* Container central responsivo */
+  .block-container {
+    max-width: 820px;
+    width: 100%;
+    margin: 0 auto;                 /* centraliza */
+    box-sizing: border-box;         /* padding não estoura a largura */
+    padding-top: 1rem;
+    padding-bottom: 4rem;
+    padding-left: 16px !important;  /* respiro lateral */
+    padding-right: 16px !important;
+  }
 
-      /* Seleção (arrastar o mouse) continua azul com texto branco */
-      .stChatMessage ::selection {
-        background: rgba(59,130,246,0.35);
-        color: #fff;
-      }
-    </style>
-    """,
-    unsafe_allow_html=True,
-)
+  /* Chat: tipografia e largura seguras */
+  .stChatMessage { line-height: 1.5; font-size: 1.02rem; }
+  .stChatFloatingInputContainer, .stChatInput {
+    max-width: 100% !important;
+    width: 100% !important;
+    overflow: hidden;
+  }
 
+  /* Evita mídia “estourar” */
+  .stMarkdown img, .stImage img, .stVideo, .stAudio {
+    max-width: 100% !important;
+    height: auto !important;
+  }
 
-# --- Plano de fundo (CSS inline) ---
-IMG_DIR = (ROOT / "imagem")
-IMG_DIR.mkdir(exist_ok=True)
+  /* Widgets diversos nunca passam do container */
+  .stTextInput, .stButton, .stSelectbox, .stSlider,
+  .stMarkdown, .stForm, .stExpander, .stRadio, .stCheckbox {
+    max-width: 100% !important;
+    overflow: hidden;
+  }
 
-def _encode_image_b64(p: Path) -> str:
-    with p.open("rb") as f:
-        return base64.b64encode(f.read()).decode("utf-8")
+  /* Parágrafo da assistente com destaque */
+  .assistant-paragraph {
+    background: rgba(59,130,246,0.18);      /* azul translúcido */
+    border-left: 3px solid rgba(59,130,246,0.55);
+    padding: .55rem .75rem;
+    margin: .5rem 0;
+    border-radius: .5rem;
+    line-height: 1.55;
+    color: #fff;                            /* texto branco */
+  }
+  .assistant-paragraph a { color: #ffffff; text-decoration: underline; }
+  .assistant-paragraph a:hover { opacity: 0.85; }
+  .assistant-paragraph + .assistant-paragraph { margin-top: .45rem; }
 
-# --- substitua sua função set_background por esta ---
-def set_background(image_path: Path, *, darken: float = 0.25, blur_px: int = 0,
-                   attach_fixed: bool = True, size_mode: str = "cover") -> None:
-    if not image_path.exists():
-        return
+  /* Seleção (arrastar o mouse) continua azul com texto branco */
+  .stChatMessage ::selection {
+    background: rgba(59,130,246,0.35);
+    color: #fff;
+  }
 
-    # MIME correto para o data URL
-    ext = image_path.suffix.lower()
-    mime = {
-        ".jpg": "jpeg", ".jpeg": "jpeg",
-        ".png": "png", ".webp": "webp", ".gif": "gif"
-    }.get(ext, "jpeg")
-
-    with image_path.open("rb") as f:
-        b64 = base64.b64encode(f.read()).decode("utf-8")
-
-    att = "fixed" if attach_fixed else "scroll"
-    darken = max(0.0, min(0.9, float(darken)))
-    blur_px = max(0, min(40, int(blur_px)))
-    size_mode = size_mode if size_mode in ("cover", "contain") else "cover"
-
-    st.markdown(f"""
-    <style>
-    /* deixe o app translúcido e o conteúdo acima do fundo */
-    .stApp {{
-      background: transparent !important;
-    }}
-    .block-container {{
-      position: relative;
-      z-index: 1;
-    }}
-
-    /* camada da imagem */
-    .stApp::before {{
-      content: "";
-      position: fixed;
-      inset: 0;
-      background-image: url("data:image/{mime};base64,{b64}");
-      background-position: center center;
-      background-repeat: no-repeat;
-      background-size: {size_mode};
-      background-attachment: {att};
-      filter: blur({blur_px}px);
-      z-index: 0;
-    }}
-    /* overlay para escurecer e dar contraste ao texto */
-    .stApp::after {{
-      content: "";
-      position: fixed;
-      inset: 0;
-      background: rgba(0,0,0,{darken});
-      z-index: 0; /* ::after empilha acima de ::before por padrão */
-      pointer-events: none;
-    }}
-    </style>
-    """, unsafe_allow_html=True)
+  /* Ajustes finos em telas menores */
+  @media (max-width: 420px) {
+    .block-container { padding-left: 12px !important; padding-right: 12px !important; }
+    .assistant-paragraph { font-size: 0.98rem; }
+  }
+</style>
+""", unsafe_allow_html=True)
 
 
 
