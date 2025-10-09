@@ -25,12 +25,12 @@ try:
 except Exception:
     def get_persona() -> Tuple[str, List[Dict[str, str]]]:
         txt = (
-            "Você é MARY. Fale em primeira pessoa (eu). Tom adulto, afetuoso e leve, com humor sutil. "
-            "Sensorial obrigatório: traga 1 traço físico concreto no 1º ou 2º parágrafo. "
+            "Você é Mary Massariol — Esposa Cúmplice — esposa e parceira de aventuras do usuário. "
+            "Fale em primeira pessoa (eu). Tom íntimo, sensual e carinhoso. "
+            "Traga 1 traço físico concreto nos primeiros parágrafos. "
             "Sem metacena, sem listas. 2–4 frases por parágrafo; 4–7 parágrafos."
         )
         return txt, []
-
 
 # === template de system único (slots) ===
 def _build_system_block(persona_text: str,
@@ -48,13 +48,11 @@ def _build_system_block(persona_text: str,
         "sempre integradas à ação (jamais em lista)."
     )
     length = "ESTILO: 4–7 parágrafos; 2–4 frases por parágrafo; sem listas; sem metacena."
-
     rules = (
         "CONTINUIDADE: não mude tempo/lugar sem pedido explícito do usuário. "
         "Use a memória abaixo para manter fatos estáveis (nomes, roupas citadas, gestos recorrentes). "
         "Termine com um gancho sutil (pergunta curta/convite)."
     )
-
     safety = (
         "LIMITES: adultos; consentimento; nada ilegal. Evite desculpas didáticas; redirecione com tato se necessário."
     )
@@ -87,7 +85,7 @@ class MaryService(BaseCharacter):
         local_atual = self._safe_get_local(usuario_key)
         memoria_pin = self._build_memory_pin(usuario_key, user)
 
-        # Foco sensorial rotativo
+        # Foco sensorial rotativo (ajuda o modelo a variar detalhes)
         pool = [
             "cabelo", "olhos", "lábios/boca", "mãos/toque", "respiração",
             "perfume", "pele/temperatura", "quadril/coxas", "voz/timbre", "sorriso"
@@ -104,15 +102,12 @@ class MaryService(BaseCharacter):
             nsfw_on = False
         nsfw_hint = (
             "NSFW: LIBERADO. Erotismo consensual e progressivo quando o usuário sinalizar desejo. "
-            "Detalhe sensorial com naturalidade; valide conforto ao intensificar."
+            "Detalhe sensorial com naturalidade; valide conforto ao intensificar. "
+            "Lembre: vocês são casados e cúmplices — priorize diálogo e respeito."
             if nsfw_on else
-            "NSFW: BLOQUEADO. Não descreva ato sexual explícito. Use tensão, sugestão e fade-to-black."
+            "NSFW: BLOQUEADO. Não descreva ato sexual explícito. Use tensão, sugestão e fade-to-black, "
+            "sempre preservando o vínculo do casal."
         )
-
-        # Proxy Nerith (opcional, via memórias)
-        nerith_proxy_block = self._get_nerith_proxy_block(usuario_key)
-        if nerith_proxy_block:
-            nsfw_hint = nsfw_hint + "\n" + nerith_proxy_block
 
         # Resumo rolante atual
         rolling = self._get_rolling_summary(usuario_key)
@@ -185,34 +180,11 @@ class MaryService(BaseCharacter):
         except Exception:
             return ""
 
-    def _get_nerith_proxy_block(self, usuario_key: str) -> str:
-        try:
-            f = get_facts(usuario_key) or {}
-        except Exception:
-            f = {}
-
-        active = bool(f.get("nerith_proxy.active", False) or f.get("nerith_proxy_active", False))
-        if not active:
-            return ""
-
-        medium = (f.get("nerith_proxy.medium") or f.get("nerith_proxy_medium") or "").strip()
-        hint   = (f.get("nerith_proxy.hint")   or f.get("nerith_proxy_hint")   or "").strip()
-
-        details = []
-        if medium:
-            details.append(f"médio/host: {medium}")
-        if hint:
-            details.append(f"dica: {hint}")
-        det_txt = (" (" + "; ".join(details) + ")") if details else ""
-
-        return (
-            "NERITH_PROXY: ATIVO. Nerith pode ‘falar’ por outra pessoa próxima ao usuário, de modo sutil e imersivo"
-            f"{det_txt}. Regras: não quebre a quarta parede; mostre sinais discretos (olhar que perde o foco, "
-            "pausas estranhas, um sussurro que não parece da pessoa). Só revele que é a Nerith se o usuário notar "
-            "e perguntar, ou der consentimento explícito. Se confirmado, interaja com a Nerith mantendo a cena."
-        )
-
     def _build_memory_pin(self, usuario_key: str, user_display: str) -> str:
+        """
+        Memória canônica curta para coerência. Inclui relação 'casados' e
+        nome do usuário como referência obrigatória quando perguntado.
+        """
         try:
             f = get_facts(usuario_key) or {}
         except Exception:
@@ -222,13 +194,16 @@ class MaryService(BaseCharacter):
 
         parceiro = f.get("parceiro_atual") or f.get("parceiro") or ""
         nome_usuario = parceiro or user_display
-
         if parceiro:
             blocos.append(f"parceiro_atual={parceiro}")
-        if "virgem" in f:
-            blocos.append(f"virgem={bool(f['virgem'])}")
-        if f.get("primeiro_encontro"):
-            blocos.append(f"primeiro_encontro={f['primeiro_encontro']}")
+
+        # Sinaliza canonicamente que são casados (default True neste perfil)
+        casados = bool(f.get("casados", True))
+        blocos.append(f"casados={casados}")
+
+        # Eventos/lore opcionais
+        if "aniversario_casamento" in f:
+            blocos.append(f"aniversario_casamento={f.get('aniversario_casamento')}")
 
         try:
             ev = last_event(usuario_key, "primeira_vez")
@@ -244,9 +219,9 @@ class MaryService(BaseCharacter):
         pin = (
             "MEMÓRIA_PIN: "
             f"NOME_USUARIO={nome_usuario}. FATOS={{ {mem_str} }}. "
-            "Regras duras: use essas memórias para consistência narrativa. "
-            "Se o usuário perguntar 'qual é meu nome?' ou similar, responda com NOME_USUARIO. "
-            "NUNCA invente outro nome; confirme com delicadeza se houver ambiguidade."
+            "Regras duras: vocês são casados e cúmplices; trate a relação como base emocional. "
+            "Se o usuário perguntar 'qual é meu nome?', responda com NOME_USUARIO. "
+            "Não invente outro nome; confirme com delicadeza se houver ambiguidade."
         )
         return pin
 
@@ -290,7 +265,7 @@ class MaryService(BaseCharacter):
         try:
             seed = (
                 "Resuma canonicamente a conversa recente (máx 10 frases). "
-                "Foque fatos duráveis: nomes, relação, local/tempo atual, itens/gestos citados e rumo do enredo. "
+                "Foque fatos duráveis: nomes, relação (casados), local/tempo atual, itens/gestos citados e rumo do enredo. "
                 "Sem diálogos literais; use frases informativas."
             )
             data, used_model, provider = route_chat_strict(model, {
@@ -309,59 +284,30 @@ class MaryService(BaseCharacter):
         except Exception:
             pass
 
-    # ===== Placeholder de sugestão =====
+    # ===== Placeholder de sugestão (input livre) =====
     def _suggest_placeholder(self, assistant_text: str, scene_loc: str) -> str:
         s = (assistant_text or "").lower()
         if "?" in s:
-            return "Ok. Continue do ponto exato — e me puxe pela mão."
-        if any(k in s for k in ["vamos", "topa", "que tal", "prefere"]):
-            return "Quero, mas descreva lentamente o próximo gesto."
+            return "Amor, continua do exato ponto… me conduz."
+        if any(k in s for k in ["vamos", "topa", "que tal", "prefere", "quer"]):
+            return "Quero — mas descreve devagar o próximo passo."
         if scene_loc:
-            return f"Mantemos em {scene_loc}. Me guia com calma."
-        return "Explique em 2 frases o que você propõe agora."
+            return f"Mantemos no {scene_loc}. Fala baixinho no meu ouvido."
+        return "Em duas frases: o que você propõe pra nós dois agora?"
 
-    # ===== Sidebar (mantido leve; só Nerith proxy) =====
+    # ===== Sidebar leve (sem knobs extras) =====
     def render_sidebar(self, container) -> None:
         container.markdown(
-            "**Mary** — resposta longa (4–7 parágrafos), foco sensorial obrigatório com atributo físico rotativo; "
-            "NSFW controlado por memória do usuário."
+            "**Mary — Esposa Cúmplice** • Respostas longas (4–7 parágrafos), sensoriais e íntimas. "
+            "Relação canônica: casados e cúmplices."
         )
-
         user = str(st.session_state.get("user_id", "") or "")
         usuario_key = f"{user}::mary" if user else "anon::mary"
 
+        # Indicativo (somente leitura) do status de casamento
         try:
-            fatos = get_facts(usuario_key) or {}
+            f = get_facts(usuario_key) or {}
         except Exception:
-            fatos = {}
-
-        with container.expander("🌀 Nerith por perto (posse discreta)", expanded=False):
-            act_def = bool(fatos.get("nerith_proxy.active", False) or fatos.get("nerith_proxy_active", False))
-            med_def = str(fatos.get("nerith_proxy.medium", fatos.get("nerith_proxy_medium", "")))
-            hint_def = str(fatos.get("nerith_proxy.hint", fatos.get("nerith_proxy_hint", "")))
-
-            k_act  = f"ui_mary_np_act_{usuario_key}"
-            k_med  = f"ui_mary_np_med_{usuario_key}"
-            k_hint = f"ui_mary_np_hint_{usuario_key}"
-
-            ui_act  = container.checkbox(
-                "Ativar presença psíquica da Nerith", value=act_def, key=k_act,
-                help="Quando ativo, Mary percebe sinais sutis de uma voz/gesto que não parece da pessoa."
-            )
-            ui_med  = container.text_input("Médio/host atual (ex.: colega, atendente)", value=med_def, key=k_med)
-            ui_hint = container.text_input("Observação/hint (opcional)", value=hint_def, key=k_hint)
-
-            if container.button("💾 Salvar presença da Nerith"):
-                try:
-                    set_fact(usuario_key, "nerith_proxy.active", bool(ui_act), {"fonte": "sidebar"})
-                    set_fact(usuario_key, "nerith_proxy.medium", (ui_med or "").strip(), {"fonte": "sidebar"})
-                    set_fact(usuario_key, "nerith_proxy.hint", (ui_hint or "").strip(), {"fonte": "sidebar"})
-                    try:
-                        st.toast("Configurações salvas.", icon="✅")
-                    except Exception:
-                        container.success("Configurações salvas.")
-                    st.session_state["history_loaded_for"] = ""  # força recarga no main
-                    if hasattr(st, "rerun"):
-                        st.rerun()
-                except Exception as e:
-                    container.error(f"Falha ao salvar: {e}")
+            f = {}
+        casados = bool(f.get("casados", True))
+        container.caption(f"Estado da relação: **{'Casados' if casados else '—'}**")
