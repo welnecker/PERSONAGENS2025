@@ -854,16 +854,19 @@ if bg_sel != "(nenhuma)":
         size_mode=bg_size,
     )
 
-
-
-
-
 # ---------- Carrega histórico (primeiro render / pós-ops) ----------
 _reload_history()
 
-# ---------- Render histórico ----------
+# ---------- Render histórico (com coalescência de duplicatas consecutivas) ----------
+_last_role, _last_content = None, None
 for role, content in st.session_state["history"]:
-    with st.chat_message("user" if role == "user" else "assistant", avatar=("💬" if role == "user" else "💚")):
+    # Evita repetir mensagens idênticas consecutivas (ex.: First Message duplicada)
+    if role == _last_role and content == _last_content:
+        continue
+    _last_role, _last_content = role, content
+
+    with st.chat_message("user" if role == "user" else "assistant",
+                         avatar=("💬" if role == "user" else "💚")):
         if role == "assistant":
             render_assistant_bubbles(content)
         else:
@@ -914,15 +917,10 @@ _ph = st.session_state.get("suggestion_placeholder", "")
 _default_ph = f"Fale com {st.session_state['character']}"
 _dyn_ph = f"💡 Sugestão: {_ph}" if _ph else _default_ph
 
-# Algumas versões do Streamlit aceitam 'placeholder='; outras só 1 posicional.
+# Compat: versões com/sem suporte ao kw-only 'placeholder'
 try:
-    # Versões novas: label + placeholder kw-only
-    user_prompt = st.chat_input(
-        _default_ph,            # rótulo/legenda
-        placeholder=_dyn_ph     # dica dinâmica
-    )
+    user_prompt = st.chat_input(_default_ph, placeholder=_dyn_ph)
 except TypeError:
-    # Versões antigas: apenas 1 argumento posicional (é o placeholder)
     user_prompt = st.chat_input(_dyn_ph)
 
 cont = st.button("🔁 Continuar", help="Prossegue a cena do ponto atual, sem mudar o local salvo.")
@@ -939,34 +937,46 @@ elif user_prompt:
     final_prompt = user_prompt
 
 if final_prompt:
-    # Render do turno do usuário
-    with st.chat_message("user"):
-        st.markdown("🔁 **Continuar**" if auto_continue else final_prompt)
+    # --- Nonce de turno (trava contra execução dupla no mesmo rerun) ---
+    import time, hashlib
+    _turn_key   = f"{st.session_state.get('user_id','')}::{str(st.session_state.get('character','')).lower()}"
+    _raw_nonce  = f"{_turn_key}|{final_prompt}|{int(time.time())//2}"  # janela de 2s
+    _turn_nonce = hashlib.sha1(_raw_nonce.encode("utf-8")).hexdigest()[:10]
 
-    # Persistência visual do turno do usuário
-    st.session_state["history"].append(("user", "🔁 Continuar" if auto_continue else final_prompt))
+    if st.session_state.get("_last_turn_nonce") == _turn_nonce:
+        # Já processamos este envio neste ciclo; não repete
+        pass
+    else:
+        st.session_state["_last_turn_nonce"] = _turn_nonce
 
-    # Geração
-    with st.spinner("Gerando…"):
-        try:
-            text = _safe_reply_call(
-                service,
-                user=str(st.session_state["user_id"]),
-                model=str(st.session_state["model"]),
-                prompt=str(final_prompt),
-            )
-        except Exception as e:
-            text = (
-                f"Erro durante a geração:\n\n**{e.__class__.__name__}** — {e}\n\n"
-                f"```\n{traceback.format_exc()}\n```"
-            )
+        # Render do turno do usuário
+        with st.chat_message("user"):
+            st.markdown("🔁 **Continuar**" if auto_continue else final_prompt)
 
-    # 🔒 Garante que a resposta da assistente fique fixa no histórico da UI
-    if text:
-        last = st.session_state["history"][-1] if st.session_state["history"] else None
-        if last != ("assistant", text):
-            st.session_state["history"].append(("assistant", text))
+        # Persistência visual do turno do usuário
+        st.session_state["history"].append(("user", "🔁 Continuar" if auto_continue else final_prompt))
 
-    # Render do turno da assistente
-    with st.chat_message("assistant", avatar="💚"):
-        render_assistant_bubbles(text)
+        # Geração
+        with st.spinner("Gerando…"):
+            try:
+                text = _safe_reply_call(
+                    service,
+                    user=str(st.session_state["user_id"]),
+                    model=str(st.session_state["model"]),
+                    prompt=str(final_prompt),
+                )
+            except Exception as e:
+                text = (
+                    f"Erro durante a geração:\n\n**{e.__class__.__name__}** — {e}\n\n"
+                    f"```\n{traceback.format_exc()}\n```"
+                )
+
+        # 🔒 Append garantido da resposta da assistente (não forçar reload aqui)
+        if text:
+            last = st.session_state["history"][-1] if st.session_state["history"] else None
+            if last != ("assistant", text):
+                st.session_state["history"].append(("assistant", text))
+
+        # Render do turno da assistente
+        with st.chat_message("assistant", avatar="💚"):
+            render_assistant_bubbles(text)
