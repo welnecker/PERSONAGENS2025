@@ -911,7 +911,7 @@ def _safe_reply_call(_service, *, user: str, model: str, prompt: str) -> str:
     except TypeError:
         return fn(user, model)
 
-# ---------- Chat ----------
+# ---------- Chat (robusto com fila pendente) ----------
 # Placeholder dinâmico vindo do serviço
 _ph = st.session_state.get("suggestion_placeholder", "")
 _default_ph = f"Fale com {st.session_state['character']}"
@@ -925,58 +925,69 @@ except TypeError:
 
 cont = st.button("🔁 Continuar", help="Prossegue a cena do ponto atual, sem mudar o local salvo.")
 
-final_prompt: Optional[str] = None
-auto_continue = False
+# --- estado do fluxo de turnos ---
+st.session_state.setdefault("_turn_id", 0)              # identificador incremental do turno
+st.session_state.setdefault("_processed_turn_id", 0)    # último turno já processado
+st.session_state.setdefault("_pending_prompt", None)    # prompt pendente (fila)
+st.session_state.setdefault("_pending_auto", False)     # flag se é auto-continue
+
+# 1) Captura do envio → cria "job" pendente
 if cont and not user_prompt:
-    final_prompt = (
+    st.session_state["_pending_prompt"] = (
         "CONTINUAR: Prossiga a cena exatamente de onde a última resposta parou. "
         "Mantenha LOCAL_ATUAL, personagens presentes e tom. Não resuma; avance ação e diálogo em 1ª pessoa."
     )
-    auto_continue = True
+    st.session_state["_pending_auto"] = True
+    st.session_state["_turn_id"] += 1
+
 elif user_prompt:
-    final_prompt = user_prompt
+    st.session_state["_pending_prompt"] = user_prompt
+    st.session_state["_pending_auto"] = False
+    st.session_state["_turn_id"] += 1
 
-if final_prompt:
-    # --- Nonce de turno (trava contra execução dupla no mesmo rerun) ---
-    import time, hashlib
-    _turn_key   = f"{st.session_state.get('user_id','')}::{str(st.session_state.get('character','')).lower()}"
-    _raw_nonce  = f"{_turn_key}|{final_prompt}|{int(time.time())//2}"  # janela de 2s
-    _turn_nonce = hashlib.sha1(_raw_nonce.encode("utf-8")).hexdigest()[:10]
+# 2) Processamento: apenas se houver job novo (não processado ainda)
+_has_new_job = bool(st.session_state["_pending_prompt"]) and (
+    st.session_state["_turn_id"] > st.session_state["_processed_turn_id"]
+)
 
-    if st.session_state.get("_last_turn_nonce") == _turn_nonce:
-        # Já processamos este envio neste ciclo; não repete
-        pass
-    else:
-        st.session_state["_last_turn_nonce"] = _turn_nonce
+if _has_new_job:
+    final_prompt = str(st.session_state["_pending_prompt"])
+    auto_continue = bool(st.session_state["_pending_auto"])
 
-        # Render do turno do usuário
-        with st.chat_message("user"):
-            st.markdown("🔁 **Continuar**" if auto_continue else final_prompt)
+    # Render do turno do usuário
+    with st.chat_message("user"):
+        st.markdown("🔁 **Continuar**" if auto_continue else final_prompt)
 
-        # Persistência visual do turno do usuário
-        st.session_state["history"].append(("user", "🔁 Continuar" if auto_continue else final_prompt))
+    # Persistência visual do turno do usuário
+    st.session_state["history"].append(("user", "🔁 Continuar" if auto_continue else final_prompt))
 
-        # Geração
-        with st.spinner("Gerando…"):
-            try:
-                text = _safe_reply_call(
-                    service,
-                    user=str(st.session_state["user_id"]),
-                    model=str(st.session_state["model"]),
-                    prompt=str(final_prompt),
-                )
-            except Exception as e:
-                text = (
-                    f"Erro durante a geração:\n\n**{e.__class__.__name__}** — {e}\n\n"
-                    f"```\n{traceback.format_exc()}\n```"
-                )
+    # Geração
+    with st.spinner("Gerando…"):
+        try:
+            text = _safe_reply_call(
+                service,
+                user=str(st.session_state["user_id"]),
+                model=str(st.session_state["model"]),
+                prompt=final_prompt,
+            )
+        except Exception as e:
+            import traceback as _tb
+            text = (
+                f"Erro durante a geração:\n\n**{e.__class__.__name__}** — {e}\n\n"
+                f"```\n{_tb.format_exc()}\n```"
+            )
 
-        # 🔒 Append garantido da resposta da assistente (não forçar reload aqui)
-        if text:
-            last = st.session_state["history"][-1] if st.session_state["history"] else None
-            if last != ("assistant", text):
-                st.session_state["history"].append(("assistant", text))
+    # Append garantido da resposta da assistente (não forçar reload aqui)
+    if text:
+        last = st.session_state["history"][-1] if st.session_state["history"] else None
+        if last != ("assistant", text):
+            st.session_state["history"].append(("assistant", text))
 
-        # Render do turno da assistente
-        with st.chat_message("assistant", avatar="💚"):
-            render_assistant_bubbles(text)
+    # Render do turno da assistente
+    with st.chat_message("assistant", avatar="💚"):
+        render_assistant_bubbles(text)
+
+    # ✅ marca o turno como processado e limpa a fila
+    st.session_state["_processed_turn_id"] = st.session_state["_turn_id"]
+    st.session_state["_pending_prompt"] = None
+    st.session_state["_pending_auto"] = False
