@@ -51,7 +51,7 @@ def _build_system_block(persona_text: str,
     rules = (
         "CONTINUIDADE: não mude tempo/lugar sem pedido explícito do usuário. "
         "Use a memória abaixo para manter fatos estáveis (nomes, roupas citadas, gestos recorrentes). "
-        "Termine com um gancho sutil (pergunta curta/convite)."
+        "Evite terminar sempre com pergunta; varie o fechamento (pausa, convite implícito, gesto)."
     )
     safety = (
         "LIMITES: adultos; consentimento; nada ilegal. Evite desculpas didáticas; redirecione com tato se necessário."
@@ -84,6 +84,9 @@ class MaryService(BaseCharacter):
         # Memória & continuidade
         local_atual = self._safe_get_local(usuario_key)
         memoria_pin = self._build_memory_pin(usuario_key, user)
+        if memoria_pin:
+            # hard cap para não estourar contexto
+            memoria_pin = memoria_pin[:2000]
 
         # Foco sensorial rotativo (ajuda o modelo a variar detalhes)
         pool = [
@@ -122,14 +125,27 @@ class MaryService(BaseCharacter):
             scene_time=st.session_state.get("momento_atual", "")
         )
 
+        # ======== NOVO: pre_msgs com fatos relevantes + digest ========
+        pre_msgs: List[Dict[str, str]] = []
+
+        facts_block = self._select_relevant_facts(usuario_key, prompt, budget_tokens=300)
+        if facts_block:
+            pre_msgs.append({"role": "system", "content": f"FATOS_RELEVANTES:\n{facts_block}"})
+
+        digest = self._get_or_update_digest(usuario_key)
+        if digest:
+            pre_msgs.append({"role": "system", "content": f"RESUMO_EPISODICO:\n{digest}"})
+        # ===============================================================
+
         messages: List[Dict[str, str]] = (
-            [{"role": "system", "content": system_block}]
+            pre_msgs
+            + [{"role": "system", "content": system_block}]
             + ([{"role": "system", "content": memoria_pin}] if memoria_pin else [])
             + [{"role": "system", "content": (
                 f"LOCAL_ATUAL: {local_atual or '—'}. "
                 "Regra dura: NÃO mude tempo/lugar sem pedido explícito do usuário."
             )}]
-            + self._montar_historico(usuario_key, history_boot)
+            + self._montar_historico(usuario_key, history_boot)  # já com budget fixo
             + [{"role": "user", "content": prompt}]
         )
 
@@ -225,18 +241,107 @@ class MaryService(BaseCharacter):
         )
         return pin
 
+    # ===== memória: seleção relevante / digest / histórico com budget =====
+    def _select_relevant_facts(self, usuario_key: str, prompt: str, budget_tokens: int = 300) -> str:
+        """
+        Seleciona fatos canônicos mais relevantes ao prompt respeitando um orçamento de tokens.
+        Retorna linhas curtas no formato 'chave=valor'.
+        """
+        try:
+            facts = get_facts(usuario_key) or {}
+        except Exception:
+            facts = {}
+
+        priority_keys = [
+            "parceiro_atual", "local_cena_atual", "nsfw_override",
+            "casados",
+            "controle_psiquico", "alvos_controle",
+            "ciume_de_laura", "obedecer_defesa_de_laura",
+        ]
+
+        pl = (prompt or "").lower()
+        scored = []
+        for k, v in facts.items():
+            score = 0
+            if k in priority_keys:
+                score += 3
+            # “boost” por termos presentes no prompt
+            try:
+                vstr = str(v).lower()
+            except Exception:
+                vstr = str(v)
+            if k.lower() in pl or (isinstance(v, str) and vstr in pl):
+                score += 2
+            scored.append((score, k, v))
+
+        out_lines, used = [], 0
+        for _score, k, v in sorted(scored, key=lambda x: x[0], reverse=True):
+            line = f"{k}={v}"
+            cost = toklen(line)
+            if used + cost > budget_tokens:
+                continue
+            out_lines.append(line)
+            used += cost
+
+        return "\n".join(out_lines[:40])
+
+    def _get_or_update_digest(self, usuario_key: str, force_update: bool = False) -> str:
+        """
+        Mantém um resumo denso (episodic digest) do histórico antigo.
+        Atualiza quando histórico total exceder ~12k tokens.
+        """
+        try:
+            docs = get_history_docs(usuario_key) or []
+        except Exception:
+            docs = []
+
+        # últimas 12 interações ficam como “recentes”; o resto vira elegível a digest
+        recent, old = docs[-12:], docs[:-12]
+
+        old_txt = []
+        for d in old:
+            u = (d.get("mensagem_usuario") or "").strip()
+            a = (d.get("resposta_mary") or "").strip()  # campo legado
+            if u:
+                old_txt.append(f"U: {u}")
+            if a:
+                old_txt.append(f"A: {a}")
+        old_blob = "\n".join(old_txt)
+
+        # Se pouco conteúdo antigo e não há força de atualização, tenta usar digest já salvo
+        if toklen(old_blob) < 12000 and not force_update:
+            try:
+                f = get_facts(usuario_key) or {}
+                return str(f.get("episodic_digest", "") or "")
+            except Exception:
+                return ""
+
+        # Placeholder seguro e curto (você pode substituir por um sumário via LLM barato)
+        digest = (
+            "Resumo denso de episódios anteriores: relações estáveis, marcos de decisão, "
+            "acordos/consentimentos, locais recorrentes e mudanças de estado. "
+            "Evitar detalhes supérfluos; preservar nomes e decisões já tomadas."
+        )
+
+        try:
+            set_fact(usuario_key, "episodic_digest", digest, {"fonte": "auto_digest"})
+        except Exception:
+            pass
+        return digest
+
     def _montar_historico(
         self,
         usuario_key: str,
         history_boot: List[Dict[str, str]],
-        limite_tokens: int = 120_000
+        limite_tokens: int = 900  # budget fixo para histórico recente
     ) -> List[Dict[str, str]]:
         docs = get_history_docs(usuario_key)
         if not docs:
             return history_boot[:]
         total = 0
         out: List[Dict[str, str]] = []
-        for d in reversed(docs):
+        # apenas as últimas 20 interações
+        for d in reversed(docs[-20:]):
             u = (d.get("mensagem_usuario") or "").strip()
             a = (d.get("resposta_mary") or "").strip()  # campo legado consumido pela UI
             t = toklen(u) + toklen(a)
