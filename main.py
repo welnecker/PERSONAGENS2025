@@ -158,8 +158,6 @@ def set_background(image_path: Path, *, darken: float = 0.25, blur_px: int = 0,
     </style>
     """, unsafe_allow_html=True)
 
-
-
 # ---------- Gate opcional ----------
 def _check_scrypt(pwd: str) -> bool:
     cfg = st.secrets.get("auth", {})
@@ -287,7 +285,6 @@ try:
 except Exception:
     pass
 
-
 # Repositório (histórico/fatos) — safe fallback
 try:
     from core.repositories import (
@@ -356,7 +353,19 @@ st.sidebar.markdown("---")
 # ---------- Estado base ----------
 st.session_state.setdefault("user_id", "Janio Donisete")
 st.session_state.setdefault("character", "Mary")
-all_models = list_models(None)
+try:
+    from core.service_router import list_models as _lm_
+    all_models = _lm_(None)
+except Exception:
+    all_models = [
+        "deepseek/deepseek-chat-v3-0324",
+        "anthropic/claude-3.5-haiku",
+        "qwen/qwen3-max",
+        "nousresearch/hermes-3-llama-3.1-405b",
+        "together/meta-llama/Meta-Llama-3.1-405B-Instruct-Turbo",
+        "together/Qwen/Qwen2.5-72B-Instruct",
+        "together/Qwen/QwQ-32B",
+    ]
 st.session_state.setdefault("model", (all_models[0] if all_models else "deepseek/deepseek-chat-v3-0324"))
 st.session_state.setdefault("history", [])  # List[Tuple[str, str]]
 st.session_state.setdefault("history_loaded_for", "")
@@ -371,7 +380,7 @@ with c2:
     default_idx = names.index("Mary") if "Mary" in names else 0
     st.selectbox("🎭 Personagem", names, index=default_idx, key="character")
 
-st.selectbox("🧠 Modelo", list_models(None), key="model")
+st.selectbox("🧠 Modelo", all_models, key="model")
 
 def render_assistant_bubbles(markdown_text: str) -> None:
     """
@@ -381,18 +390,17 @@ def render_assistant_bubbles(markdown_text: str) -> None:
     """
     if not markdown_text:
         return
-    parts = re.split(r"(```[\s\S]*?```)", markdown_text)
+    parts = re.split(r"(```[\\s\\S]*?```)", markdown_text)
     for part in parts:
         if part.startswith("```") and part.endswith("```"):
             # mantém blocos de código intactos
             st.markdown(part)
         else:
             # divide em parágrafos por linhas em branco
-            paras = [p.strip() for p in re.split(r"\n\s*\n", part) if p.strip()]
+            paras = [p.strip() for p in re.split(r"\\n\\s*\\n", part) if p.strip()]
             for p in paras:
-                safe = html.escape(p).replace("\n", "<br>")
+                safe = html.escape(p).replace("\\n", "<br>")
                 st.markdown(f"<div class='assistant-paragraph'>{safe}</div>", unsafe_allow_html=True)
-
 
 # ---------- Helpers de histórico ----------
 def _user_keys_for_history(user_id: str, character_name: str) -> List[str]:
@@ -430,18 +438,24 @@ def _reload_history(force: bool = False):
     except Exception as e:
         st.sidebar.warning(f"Não foi possível carregar o histórico: {e}")
 
-
-# --- Boot visual da First Message (mostra no chat sem o usuário digitar) ---
+# --- Boot da First Message (somente se o DB estiver vazio) ---
 try:
     user_id = str(st.session_state.get("user_id", "")).strip()
     char    = str(st.session_state.get("character", "")).strip()
     char_key = f"{user_id}::{char.lower()}" if user_id and char else user_id
 
-    # Se não há nada na timeline visual, tentamos injetar a 'First Message' da persona
-    if not st.session_state.get("history"):
+    # Primeiro, tenta carregar do repositório (DB). Se houver algo, não injeta nada.
+    docs_exist = False
+    try:
+        existing = get_history_docs(char_key) or []
+        docs_exist = len(existing) > 0
+    except Exception:
+        existing = []
+        docs_exist = False
+
+    if not docs_exist:
         # tenta achar o get_persona do personagem atual
         try:
-            # 1) tenta importar do módulo da própria personagem (padrão)
             mod = __import__(f"characters.{char.lower()}.persona", fromlist=["get_persona"])
             get_persona = getattr(mod, "get_persona", None)
         except Exception:
@@ -451,18 +465,13 @@ try:
             persona_text, history_boot = get_persona()
             first_msg = next((m.get("content","") for m in history_boot if m.get("role")=="assistant"), "").strip()
             if first_msg:
-                # Persiste no repositório para a UI poder recarregar e exibir
                 try:
                     save_interaction(char_key, "", first_msg, "boot:first_message")
                 except Exception:
                     pass
-                # Atualiza a sessão atual (sem esperar próximo reload)
-                st.session_state["history"] = [("assistant", first_msg)]
-                st.session_state["history_loaded_for"] = ""  # garante que reload futuro funcione
+                # Não precisa setar session_state["history"] aqui; o _reload_history() cuidará de mostrar.
 except Exception as e:
     st.sidebar.warning(f"Boot da First Message falhou: {e}")
-
-
 
 # ---------- Troca de thread ao mudar usuário/personagem ----------
 _current_active = f"{st.session_state['user_id']}::{str(st.session_state['character']).lower()}"
@@ -506,7 +515,6 @@ try:
             _reload_history(force=True)
 except Exception as _e:
     st.sidebar.warning(f"Auto-seed Mary falhou: {_e}")
-
 
 # ---------- Instancia serviço ----------
 try:
@@ -744,7 +752,6 @@ with st.sidebar.expander("⚡ Seed rápido: Mary (Esposa Cúmplice)", expanded=F
             except Exception as e:
                 st.error(f"Falha ao limpar: {e}")
 
-
 # ---------- Sidebar: NSFW & Primeira vez ----------
 st.sidebar.markdown("---")
 st.sidebar.subheader("🔞 NSFW & Primeira vez")
@@ -872,7 +879,6 @@ for role, content in st.session_state["history"]:
         else:
             st.markdown(content)
 
-
 # ---------- LLM Ping (diagnóstico direto no provedor) ----------
 with st.expander("🔧 Diagnóstico LLM"):
     if st.button("Ping modelo atual"):
@@ -911,6 +917,12 @@ def _safe_reply_call(_service, *, user: str, model: str, prompt: str) -> str:
     except TypeError:
         return fn(user, model)
 
+# --- Helpers de clique "Continuar" fixo no rodapé ---
+def _mark_continue():
+    st.session_state["_cont_clicked"] = True
+
+st.session_state.setdefault("_cont_clicked", False)
+
 # ---------- Chat (robusto com fila pendente) ----------
 # Placeholder dinâmico vindo do serviço
 _ph = st.session_state.get("suggestion_placeholder", "")
@@ -923,8 +935,6 @@ try:
 except TypeError:
     user_prompt = st.chat_input(_dyn_ph)
 
-cont = st.button("🔁 Continuar", help="Prossegue a cena do ponto atual, sem mudar o local salvo.")
-
 # --- estado do fluxo de turnos ---
 st.session_state.setdefault("_turn_id", 0)              # identificador incremental do turno
 st.session_state.setdefault("_processed_turn_id", 0)    # último turno já processado
@@ -932,20 +942,22 @@ st.session_state.setdefault("_pending_prompt", None)    # prompt pendente (fila)
 st.session_state.setdefault("_pending_auto", False)     # flag se é auto-continue
 
 # 1) Captura do envio → cria "job" pendente
-if cont and not user_prompt:
+if user_prompt:
+    st.session_state["_pending_prompt"] = user_prompt
+    st.session_state["_pending_auto"] = False
+    st.session_state["_turn_id"] += 1
+
+# 2) Se o botão CONTINUAR foi clicado no rodapé (ver seção do rodapé), cria job
+if st.session_state.get("_cont_clicked", False) and not user_prompt:
     st.session_state["_pending_prompt"] = (
         "CONTINUAR: Prossiga a cena exatamente de onde a última resposta parou. "
         "Mantenha LOCAL_ATUAL, personagens presentes e tom. Não resuma; avance ação e diálogo em 1ª pessoa."
     )
     st.session_state["_pending_auto"] = True
     st.session_state["_turn_id"] += 1
+    st.session_state["_cont_clicked"] = False  # reseta a bandeira
 
-elif user_prompt:
-    st.session_state["_pending_prompt"] = user_prompt
-    st.session_state["_pending_auto"] = False
-    st.session_state["_turn_id"] += 1
-
-# 2) Processamento: apenas se houver job novo (não processado ainda)
+# 3) Processamento: apenas se houver job novo (não processado ainda)
 _has_new_job = bool(st.session_state["_pending_prompt"]) and (
     st.session_state["_turn_id"] > st.session_state["_processed_turn_id"]
 )
@@ -977,7 +989,7 @@ if _has_new_job:
                 f"```\n{_tb.format_exc()}\n```"
             )
 
-    # Append garantido da resposta da assistente (não forçar reload aqui)
+    # Append garantido da resposta da assistente
     if text:
         last = st.session_state["history"][-1] if st.session_state["history"] else None
         if last != ("assistant", text):
@@ -991,3 +1003,15 @@ if _has_new_job:
     st.session_state["_processed_turn_id"] = st.session_state["_turn_id"]
     st.session_state["_pending_prompt"] = None
     st.session_state["_pending_auto"] = False
+
+# ---------- Rodapé fixo: botão "Continuar" sempre abaixo do último turno ----------
+footer = st.empty()
+with footer:
+    st.divider()
+    st.button(
+        "🔁 Continuar",
+        help="Prossegue a cena do ponto atual, sem mudar o local salvo.",
+        on_click=_mark_continue,
+        use_container_width=True,
+        key="continue_bottom",
+    )
