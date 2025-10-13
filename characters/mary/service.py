@@ -45,16 +45,18 @@ def _build_system_block(persona_text: str,
     continuity = f"Cenário atual: {scene_loc or '—'}" + (f" — Momento: {scene_time}" if scene_time else "")
     sensory = (
         f"SENSORIAL_FOCO: no 1º ou 2º parágrafo, traga 1–2 pistas envolvendo **{sensory_focus}**, "
-        "sempre integradas à ação (jamais em lista)."
+        "sempre integradas à ação e ao desejo (evite listas; mostre tensão física e entrega)."
     )
-    length = "ESTILO: 4–7 parágrafos; 2–4 frases por parágrafo; sem listas; sem metacena."
+    length = (
+        "ESTILO: 4–7 parágrafos; 2–4 frases por parágrafo; linguagem direta, sensual e incisiva. "
+        "Evite poesia ou lirismo exagerado; seja eletrizante, sem firulas."
+    )
     rules = (
-        "CONTINUIDADE: não mude tempo/lugar sem pedido explícito do usuário. "
-        "Use a memória abaixo para manter fatos estáveis (nomes, roupas citadas, gestos recorrentes). "
-        "Evite terminar sempre com pergunta; varie o fechamento (pausa, convite implícito, gesto)."
+        "CONTINUIDADE: não mude tempo/lugar sem pedido do usuário. Construa tensão, explore vontade de dominar e de se entregar. "
+        "Varie o fechamento — feche com pausa, respiração entrecortada, gesto de convite. Evite perguntas clássicas ou frases românticas de encerramento."
     )
     safety = (
-        "LIMITES: adultos; consentimento; nada ilegal. Evite desculpas didáticas; redirecione com tato se necessário."
+        "LIMITES: adultos; consentimento; nada ilegal. Caso perceba desconforto, desacelere e valide antes de prosseguir."
     )
 
     return "\n\n".join([
