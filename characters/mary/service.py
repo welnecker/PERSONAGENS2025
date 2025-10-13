@@ -33,6 +33,73 @@ except Exception:
         )
         return txt, []
 
+# === Janela por modelo e orçamento ===
+MODEL_WINDOWS = {
+    "anthropic/claude-3.5-haiku": 200_000,
+    "together/meta-llama/Meta-Llama-3.1-405B-Instruct-Turbo": 128_000,
+    "together/Qwen/Qwen2.5-72B-Instruct": 32_000,
+    "deepseek/deepseek-chat-v3-0324": 32_000,
+    # adicione aqui outros modelos usados no app
+}
+DEFAULT_WINDOW = 32_000
+
+def _get_window_for(model: str) -> int:
+    return MODEL_WINDOWS.get((model or "").strip(), DEFAULT_WINDOW)
+
+def _budget_slices(model: str) -> tuple[int, int, int]:
+    """
+    Retorna (hist_budget, meta_budget, out_budget_base) em tokens.
+    - histórico ~ 60%, meta (system+fatos+resumos) ~ 20%, saída ~ 20%.
+    - garante piso razoável para histórico.
+    """
+    win = _get_window_for(model)
+    hist = max(8_000, int(win * 0.60))
+    meta = int(win * 0.20)
+    outb = int(win * 0.20)
+    return hist, meta, outb
+
+def _safe_max_output(win: int, prompt_tokens: int) -> int:
+    """
+    Reserva espaço de saída sem estourar a janela (mínimo 512).
+    """
+    alvo = int(win * 0.20)
+    sobra = max(0, win - prompt_tokens - 256)
+    return max(512, min(alvo, sobra))
+
+# === Mini-sumarizadores ===
+def _heuristic_summarize(texto: str, max_bullets: int = 10) -> str:
+    """
+    Compacta texto grande em bullets telegráficos (fallback sem LLM).
+    """
+    texto = re.sub(r"\s+", " ", (texto or "").strip())
+    sent = re.split(r"(?<=[\.\!\?])\s+", texto)
+    sent = [s.strip() for s in sent if s.strip()]
+    return " • " + "\n • ".join(sent[:max_bullets])
+
+def _llm_summarize(model: str, user_chunk: str) -> str:
+    """
+    Usa o roteador para resumir um bloco antigo. Se der erro, cai no heurístico.
+    """
+    seed = (
+        "Resuma em 6–10 frases telegráficas, somente fatos duráveis (decisões, nomes, locais, tempo, "
+        "gestos/itens fixos e rumo da cena). Proibido diálogo literal."
+    )
+    try:
+        data, used_model, provider = route_chat_strict(model, {
+            "model": model,
+            "messages": [
+                {"role": "system", "content": seed},
+                {"role": "user", "content": user_chunk}
+            ],
+            "max_tokens": 220,
+            "temperature": 0.2,
+            "top_p": 0.9
+        })
+        txt = (data.get("choices", [{}])[0].get("message", {}) or {}).get("content", "") or ""
+        return txt.strip() or _heuristic_summarize(user_chunk)
+    except Exception:
+        return _heuristic_summarize(user_chunk)
+
 # ===== Blocos de system (slots) =====
 def _build_system_block(persona_text: str,
                         rolling_summary: str,
@@ -132,7 +199,6 @@ def _compact_user_evidence(docs: List[Dict], max_chars: int = 320) -> str:
     for d in reversed(docs):
         u = (d.get("mensagem_usuario") or "").strip()
         if u:
-            # tira quebras excessivas e espaços
             u = re.sub(r"\s+", " ", u)
             snippets.append(u)
         if len(snippets) >= 4:
@@ -161,9 +227,7 @@ def _extract_and_store_entities(usuario_key: str, user_text: str, assistant_text
     m = _CLUB_PAT.search(user_text or "") or _CLUB_PAT.search(assistant_text or "")
     if m:
         raw = m.group(0).strip()
-        # normaliza capitalização leve
         name = re.sub(r"\s+", " ", raw)
-        # evita trocar se já existe e é o mesmo
         cur = str(f.get("mary.entity.club_name", "") or "").strip()
         if not cur or len(name) >= len(cur):
             set_fact(usuario_key, "mary.entity.club_name", name, {"fonte": "extracted"})
@@ -183,6 +247,33 @@ def _extract_and_store_entities(usuario_key: str, user_text: str, assistant_text
         cur = str(f.get("mary.entity.club_ig", "") or "").strip()
         if not cur:
             set_fact(usuario_key, "mary.entity.club_ig", "@"+handle, {"fonte": "extracted"})
+
+# ===== Aviso de memória (resumo/poda) =====
+def _mem_drop_warn(report: dict) -> None:
+    """
+    Mostra um aviso visual quando houve perda/compactação de memória.
+    Usa st.info uma vez por turno.
+    """
+    if not report:
+        return
+    summarized = int(report.get("summarized_pairs", 0))
+    trimmed    = int(report.get("trimmed_pairs", 0))
+    hist_tokens = int(report.get("hist_tokens", 0))
+    hist_budget = int(report.get("hist_budget", 0))
+
+    if summarized or trimmed:
+        msg = []
+        if summarized:
+            msg.append(f"**{summarized}** turnos antigos **foram resumidos**")
+        if trimmed:
+            msg.append(f"**{trimmed}** turnos verbatim **foram podados**")
+        txt = " e ".join(msg)
+        st.info(
+            f"⚠️ Memória ajustada: {txt}. "
+            f"(histórico: {hist_tokens}/{hist_budget} tokens). "
+            "Se notar esquecimentos, peça um **‘recap curto’** ou fixe fatos na **Memória Canônica**.",
+            icon="⚠️",
+        )
 
 class MaryService(BaseCharacter):
     id: str = "mary"
@@ -251,6 +342,9 @@ class MaryService(BaseCharacter):
             scene_time=st.session_state.get("momento_atual", "")
         )
 
+        # === Histórico com orçamento por modelo + relatório de memória ===
+        hist_msgs = self._montar_historico(usuario_key, history_boot, model, verbatim_ultimos=6)
+
         messages: List[Dict[str, str]] = (
             [{"role": "system", "content": system_block}]
             + ([{"role": "system", "content": memoria_pin}] if memoria_pin else [])
@@ -258,9 +352,23 @@ class MaryService(BaseCharacter):
                 f"LOCAL_ATUAL: {local_atual or '—'}. "
                 "Regra dura: NÃO mude tempo/lugar sem pedido explícito do usuário."
             )}]
-            + self._montar_historico(usuario_key, history_boot, limite_tokens=8000)
+            + hist_msgs
             + [{"role": "user", "content": prompt}]
         )
+
+        # Aviso visual se houve resumo/poda neste turno
+        try:
+            _mem_drop_warn(st.session_state.get("_mem_drop_report", {}))
+        except Exception:
+            pass
+
+        # --- orçamento de saída dinâmico ---
+        win = _get_window_for(model)
+        try:
+            prompt_tokens = sum(toklen(m["content"]) for m in messages)
+        except Exception:
+            prompt_tokens = 0
+        max_out = _safe_max_output(win, prompt_tokens)
 
         # Chamada robusta
         fallbacks = [
@@ -269,9 +377,20 @@ class MaryService(BaseCharacter):
             "anthropic/claude-3.5-haiku",
         ]
         data, used_model, provider = _robust_chat_call(
-            model, messages, max_tokens=1536, temperature=0.7, top_p=0.95, fallback_models=fallbacks
+            model, messages, max_tokens=max_out, temperature=0.7, top_p=0.95, fallback_models=fallbacks
         )
         texto = (data.get("choices", [{}])[0].get("message", {}) or {}).get("content", "") or ""
+
+        # Sentinela: detectar sinais de esquecimento explícito na resposta
+        try:
+            forgot_pat = re.compile(
+                r"\b(n[ãa]o (lembro|recordo)|quem (é voc[êe]|[ée] voc[êe])|me relembre|o que est[aá]vamos)\b",
+                re.I
+            )
+            if forgot_pat.search(texto or ""):
+                st.warning("🧠 A IA sinalizou possível esquecimento. Se necessário, peça **‘recap curto’** ou fixe fatos na Memória Canônica.")
+        except Exception:
+            pass
 
         # Persistência da interação
         save_interaction(usuario_key, prompt, texto, f"{provider}:{used_model}")
@@ -370,25 +489,90 @@ class MaryService(BaseCharacter):
         self,
         usuario_key: str,
         history_boot: List[Dict[str, str]],
-        limite_tokens: int = 8000,
+        model: str,
+        verbatim_ultimos: int = 6,
     ) -> List[Dict[str, str]]:
+        """
+        Monta histórico usando orçamento por modelo:
+          - Últimos N turnos verbatim preservados.
+          - Antigos viram [RESUMO-*] em 1–3 camadas.
+          - Se necessário, poda verbatim mais antigo.
+        Além disso, grava um relatório em st.session_state['_mem_drop_report'].
+        """
+        win = _get_window_for(model)
+        hist_budget, meta_budget, _ = _budget_slices(model)
+
         docs = get_history_docs(usuario_key)
         if not docs:
+            st.session_state["_mem_drop_report"] = {}
             return history_boot[:]
-        total = 0
-        out: List[Dict[str, str]] = []
-        for d in reversed(docs):
+
+        # Constrói pares user/assistant em ordem cronológica
+        pares: List[Dict[str, str]] = []
+        for d in docs:
             u = (d.get("mensagem_usuario") or "").strip()
             a = (d.get("resposta_mary") or "").strip()
-            t = toklen(u) + toklen(a)
-            if total + t > limite_tokens:
-                break
             if u:
-                out.append({"role": "user", "content": u})
+                pares.append({"role": "user", "content": u})
             if a:
-                out.append({"role": "assistant", "content": a})
-            total += t
-        return list(reversed(out)) if out else history_boot[:]
+                pares.append({"role": "assistant", "content": a})
+
+        if not pares:
+            st.session_state["_mem_drop_report"] = {}
+            return history_boot[:]
+
+        keep = max(0, verbatim_ultimos * 2)
+        verbatim = pares[-keep:] if keep else []
+        antigos  = pares[:len(pares) - len(verbatim)]
+
+        msgs: List[Dict[str, str]] = []
+        summarized_pairs = 0
+        trimmed_pairs = 0
+
+        # Resumo em camadas
+        if antigos:
+            summarized_pairs = len(antigos) // 2  # aproxima nº de turnos (pares)
+            bloco = "\n\n".join(m["content"] for m in antigos)
+            resumo = _llm_summarize(model, bloco)
+            resumo_layers = [resumo]
+
+            def _count_total_sim(resumo_texts: List[str]) -> int:
+                sim_msgs = [{"role": "system", "content": f"[RESUMO-{i+1}]\n{r}"} for i, r in enumerate(resumo_texts)]
+                sim_msgs += verbatim
+                return sum(toklen(m["content"]) for m in sim_msgs)
+
+            while _count_total_sim(resumo_layers) > hist_budget and len(resumo_layers) < 3:
+                resumo_layers[0] = _llm_summarize(model, resumo_layers[0])
+
+            for i, r in enumerate(resumo_layers, start=1):
+                msgs.append({"role": "system", "content": f"[RESUMO-{i}]\n{r}"})
+
+        # Injeta verbatim
+        msgs.extend(verbatim)
+
+        # Poda se ainda exceder orçamento
+        def _hist_tokens(mm: List[Dict[str, str]]) -> int:
+            return sum(toklen(m["content"]) for m in mm)
+
+        while _hist_tokens(msgs) > hist_budget and verbatim:
+            if len(verbatim) >= 2:
+                verbatim = verbatim[2:]
+                trimmed_pairs += 1
+            else:
+                verbatim = []
+            # Reconstrói
+            msgs = [m for m in msgs if m["role"] == "system"] + verbatim
+
+        # Report para aviso visual
+        hist_tokens = _hist_tokens(msgs)
+        st.session_state["_mem_drop_report"] = {
+            "summarized_pairs": summarized_pairs,
+            "trimmed_pairs": trimmed_pairs,
+            "hist_tokens": hist_tokens,
+            "hist_budget": hist_budget,
+        }
+
+        return msgs if msgs else history_boot[:]
 
     # ===== Resumo rolante V2 (todo turno, curto) =====
     def _get_rolling_summary(self, usuario_key: str) -> str:
