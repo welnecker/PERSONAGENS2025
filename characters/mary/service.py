@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import streamlit as st
 from typing import List, Dict, Tuple
+import re, time, random
 
 from core.common.base_service import BaseCharacter
 from core.service_router import route_chat_strict
@@ -32,32 +33,33 @@ except Exception:
         )
         return txt, []
 
-# === template de system único (slots) ===
+# ===== Blocos de system (slots) =====
 def _build_system_block(persona_text: str,
                         rolling_summary: str,
                         sensory_focus: str,
                         nsfw_hint: str,
                         scene_loc: str,
+                        entities_line: str,
+                        evidence: str,
                         scene_time: str = "") -> str:
     persona_text = (persona_text or "").strip()
     rolling_summary = (rolling_summary or "—").strip()
+    entities_line = (entities_line or "—").strip()
 
     continuity = f"Cenário atual: {scene_loc or '—'}" + (f" — Momento: {scene_time}" if scene_time else "")
     sensory = (
         f"SENSORIAL_FOCO: no 1º ou 2º parágrafo, traga 1–2 pistas envolvendo **{sensory_focus}**, "
-        "sempre integradas à ação e ao desejo (evite listas; mostre tensão física e entrega)."
+        "sempre integradas à ação (jamais em lista)."
     )
-    length = (
-        "ESTILO: 4–7 parágrafos; 2–4 frases por parágrafo; linguagem direta, sensual e incisiva. "
-        "Evite poesia ou lirismo exagerado; seja eletrizante, sem firulas."
-    )
+    length = "ESTILO: 4–7 parágrafos; 2–4 frases por parágrafo; sem listas; sem metacena."
     rules = (
-        "CONTINUIDADE: não mude tempo/lugar sem pedido do usuário. Construa tensão, explore vontade de dominar e de se entregar. "
-        "Varie o fechamento — feche com pausa, respiração entrecortada, gesto de convite. Evite perguntas clássicas ou frases românticas de encerramento."
+        "CONTINUIDADE: não mude tempo/lugar sem pedido explícito do usuário. "
+        "Use MEMÓRIA e ENTIDADES abaixo como **fonte de verdade**. "
+        "Se um nome/endereço não estiver salvo na MEMÓRIA/ENTIDADES, **não invente**: admita e convide o usuário a confirmar em 1 linha (sem forçar pergunta em todo turno)."
     )
-    safety = (
-        "LIMITES: adultos; consentimento; nada ilegal. Caso perceba desconforto, desacelere e valide antes de prosseguir."
-    )
+    safety = "LIMITES: adultos; consentimento; nada ilegal."
+
+    evidence_block = f"EVIDÊNCIA RECENTE (resumo ultra-curto de falas do usuário): {evidence or '—'}"
 
     return "\n\n".join([
         persona_text,
@@ -65,16 +67,128 @@ def _build_system_block(persona_text: str,
         sensory,
         nsfw_hint,
         rules,
-        f"RESUMO ROLANTE (canon): {rolling_summary}",
+        f"MEMÓRIA (canon curto): {rolling_summary}",
+        f"ENTIDADES: {entities_line}",
         f"CONTINUIDADE: {continuity}",
-    ]) + "\n\n" + safety
+        evidence_block,
+        safety,
+    ])
 
+# ===== Robustez de chamada (retry + failover) =====
+def _looks_like_cloudflare_5xx(err_text: str) -> bool:
+    if not err_text:
+        return False
+    s = err_text.lower()
+    return ("cloudflare" in s) and any(code in s for code in ["500", "502", "503", "504"])
+
+def _robust_chat_call(model: str, messages: List[Dict[str, str]], *,
+                      max_tokens: int = 1536, temperature: float = 0.7, top_p: float = 0.95,
+                      fallback_models: List[str] | None = None) -> Tuple[Dict, str, str]:
+    attempts = 3
+    last_err = ""
+    for i in range(attempts):
+        try:
+            return route_chat_strict(model, {
+                "model": model, "messages": messages,
+                "max_tokens": max_tokens, "temperature": temperature, "top_p": top_p
+            })
+        except Exception as e:
+            last_err = str(e)
+            if _looks_like_cloudflare_5xx(last_err) or "OpenRouter 502" in last_err:
+                time.sleep((0.7 * (2 ** i)) + random.uniform(0, .4))
+                continue
+            break
+    if fallback_models:
+        for fb in fallback_models:
+            try:
+                return route_chat_strict(fb, {
+                    "model": fb, "messages": messages,
+                    "max_tokens": max_tokens, "temperature": temperature, "top_p": top_p
+                })
+            except Exception as e2:
+                last_err = str(e2)
+    synthetic = {
+        "choices": [{"message": {"content":
+            "Amor… tive um tropeço técnico agora, mas já mantive nosso fio e cenário. "
+            "Me diz numa linha o próximo passo que você quer e eu sigo daí — sem perder o ritmo."
+        }}]
+    }
+    return synthetic, model, "synthetic-fallback"
+
+# ===== Utilidades de memória/entidades =====
+_ENTITY_KEYS = ("club_name", "club_address", "club_alias", "club_contact", "club_ig")
+
+def _entities_to_line(f: Dict) -> str:
+    parts = []
+    for k in _ENTITY_KEYS:
+        v = str(f.get(f"mary.entity.{k}", "") or "").strip()
+        if v:
+            parts.append(f"{k}={v}")
+    return "; ".join(parts) if parts else "—"
+
+def _compact_user_evidence(docs: List[Dict], max_chars: int = 320) -> str:
+    """Concatena as últimas 4 falas do usuário (sem assistente), reduzindo ruído."""
+    snippets: List[str] = []
+    for d in reversed(docs):
+        u = (d.get("mensagem_usuario") or "").strip()
+        if u:
+            # tira quebras excessivas e espaços
+            u = re.sub(r"\s+", " ", u)
+            snippets.append(u)
+        if len(snippets) >= 4:
+            break
+    s = " | ".join(reversed(snippets))[:max_chars]
+    return s
+
+_CLUB_PAT = re.compile(
+    r"\b(clube|club|casa)\s+([A-ZÀ-Üa-zà-ü0-9][\wÀ-ÖØ-öø-ÿ'’\- ]{1,40})\b", re.I
+)
+_ADDR_PAT = re.compile(
+    r"\b(rua|av\.?|avenida|al\.?|alameda|rod\.?|rodovia)\s+[^,]{1,50},?\s*\d{1,5}\b", re.I
+)
+_IG_PAT = re.compile(
+    r"(?:instagram\.com/|@)([A-Za-z0-9_.]{2,30})"
+)
+
+def _extract_and_store_entities(usuario_key: str, user_text: str, assistant_text: str) -> None:
+    """Extrai entidades prováveis e persiste se fizer sentido (não sobrescreve agressivamente)."""
+    try:
+        f = get_facts(usuario_key) or {}
+    except Exception:
+        f = {}
+
+    # Nome/alias do clube (prioriza o que veio do usuário)
+    m = _CLUB_PAT.search(user_text or "") or _CLUB_PAT.search(assistant_text or "")
+    if m:
+        raw = m.group(0).strip()
+        # normaliza capitalização leve
+        name = re.sub(r"\s+", " ", raw)
+        # evita trocar se já existe e é o mesmo
+        cur = str(f.get("mary.entity.club_name", "") or "").strip()
+        if not cur or len(name) >= len(cur):
+            set_fact(usuario_key, "mary.entity.club_name", name, {"fonte": "extracted"})
+
+    # Endereço
+    a = _ADDR_PAT.search(user_text or "") or _ADDR_PAT.search(assistant_text or "")
+    if a:
+        addr = a.group(0).strip()
+        cur = str(f.get("mary.entity.club_address", "") or "").strip()
+        if not cur or len(addr) >= len(cur):
+            set_fact(usuario_key, "mary.entity.club_address", addr, {"fonte": "extracted"})
+
+    # Instagram/contato
+    ig = _IG_PAT.search(user_text or "") or _IG_PAT.search(assistant_text or "")
+    if ig:
+        handle = ig.group(1).strip("@")
+        cur = str(f.get("mary.entity.club_ig", "") or "").strip()
+        if not cur:
+            set_fact(usuario_key, "mary.entity.club_ig", "@"+handle, {"fonte": "extracted"})
 
 class MaryService(BaseCharacter):
     id: str = "mary"
     display_name: str = "Mary"
 
-    # ===== API exigida por BaseCharacter =====
+    # ===== API =====
     def reply(self, user: str, model: str) -> str:
         prompt = self._get_user_prompt()
         if not prompt:
@@ -83,14 +197,11 @@ class MaryService(BaseCharacter):
         persona_text, history_boot = self._load_persona()
         usuario_key = f"{user}::mary"
 
-        # Memória & continuidade
+        # Memória/continuidade base
         local_atual = self._safe_get_local(usuario_key)
         memoria_pin = self._build_memory_pin(usuario_key, user)
-        if memoria_pin:
-            # hard cap para não estourar contexto
-            memoria_pin = memoria_pin[:2000]
 
-        # Foco sensorial rotativo (ajuda o modelo a variar detalhes)
+        # Foco sensorial rotativo
         pool = [
             "cabelo", "olhos", "lábios/boca", "mãos/toque", "respiração",
             "perfume", "pele/temperatura", "quadril/coxas", "voz/timbre", "sorriso"
@@ -108,14 +219,25 @@ class MaryService(BaseCharacter):
         nsfw_hint = (
             "NSFW: LIBERADO. Erotismo consensual e progressivo quando o usuário sinalizar desejo. "
             "Detalhe sensorial com naturalidade; valide conforto ao intensificar. "
-            "Lembre: vocês são casados e cúmplices — priorize diálogo e respeito."
+            "Vocês são casados e cúmplices."
             if nsfw_on else
-            "NSFW: BLOQUEADO. Não descreva ato sexual explícito. Use tensão, sugestão e fade-to-black, "
-            "sempre preservando o vínculo do casal."
+            "NSFW: BLOQUEADO. Não descreva ato sexual explícito; use tensão e sugestão."
         )
 
-        # Resumo rolante atual
-        rolling = self._get_rolling_summary(usuario_key)
+        # ===== SUMÁRIO + ENTIDADES + EVIDÊNCIA =====
+        rolling = self._get_rolling_summary(usuario_key)  # v2
+        try:
+            f_all = get_facts(usuario_key) or {}
+        except Exception:
+            f_all = {}
+        entities_line = _entities_to_line(f_all)
+
+        # pega docs crus para compor o evidence curto do usuário
+        try:
+            docs = get_history_docs(usuario_key) or []
+        except Exception:
+            docs = []
+        evidence = _compact_user_evidence(docs, max_chars=320)
 
         # System único com slots
         system_block = _build_system_block(
@@ -124,52 +246,49 @@ class MaryService(BaseCharacter):
             sensory_focus=foco,
             nsfw_hint=nsfw_hint,
             scene_loc=local_atual or "—",
+            entities_line=entities_line,
+            evidence=evidence,
             scene_time=st.session_state.get("momento_atual", "")
         )
 
-        # ======== NOVO: pre_msgs com fatos relevantes + digest ========
-        pre_msgs: List[Dict[str, str]] = []
-
-        facts_block = self._select_relevant_facts(usuario_key, prompt, budget_tokens=300)
-        if facts_block:
-            pre_msgs.append({"role": "system", "content": f"FATOS_RELEVANTES:\n{facts_block}"})
-
-        digest = self._get_or_update_digest(usuario_key)
-        if digest:
-            pre_msgs.append({"role": "system", "content": f"RESUMO_EPISODICO:\n{digest}"})
-        # ===============================================================
-
         messages: List[Dict[str, str]] = (
-            pre_msgs
-            + [{"role": "system", "content": system_block}]
+            [{"role": "system", "content": system_block}]
             + ([{"role": "system", "content": memoria_pin}] if memoria_pin else [])
             + [{"role": "system", "content": (
                 f"LOCAL_ATUAL: {local_atual or '—'}. "
                 "Regra dura: NÃO mude tempo/lugar sem pedido explícito do usuário."
             )}]
-            + self._montar_historico(usuario_key, history_boot)  # já com budget fixo
+            + self._montar_historico(usuario_key, history_boot, limite_tokens=8000)
             + [{"role": "user", "content": prompt}]
         )
 
-        data, used_model, provider = route_chat_strict(model, {
-            "model": model,
-            "messages": messages,
-            "max_tokens": 1536,
-            "temperature": 0.7,
-            "top_p": 0.95,
-        })
+        # Chamada robusta
+        fallbacks = [
+            "together/Qwen/Qwen2.5-72B-Instruct",
+            "together/meta-llama/Meta-Llama-3.1-405B-Instruct-Turbo",
+            "anthropic/claude-3.5-haiku",
+        ]
+        data, used_model, provider = _robust_chat_call(
+            model, messages, max_tokens=1536, temperature=0.7, top_p=0.95, fallback_models=fallbacks
+        )
         texto = (data.get("choices", [{}])[0].get("message", {}) or {}).get("content", "") or ""
 
-        # Persistência
+        # Persistência da interação
         save_interaction(usuario_key, prompt, texto, f"{provider}:{used_model}")
 
-        # Resumo rolante (auto) a cada 3 turnos
+        # Atualiza ENTIDADES (puxando do user/assistant atuais)
         try:
-            self._maybe_update_rolling_summary(usuario_key, model, prompt, texto)
+            _extract_and_store_entities(usuario_key, prompt, texto)
         except Exception:
             pass
 
-        # Placeholder de sugestão (input livre)
+        # Resumo rolante V2 (toda rodada, curto)
+        try:
+            self._update_rolling_summary_v2(usuario_key, model, prompt, texto)
+        except Exception:
+            pass
+
+        # Placeholder sugestivo leve
         try:
             ph = self._suggest_placeholder(texto, local_atual)
             st.session_state["suggestion_placeholder"] = ph
@@ -177,9 +296,18 @@ class MaryService(BaseCharacter):
         except Exception:
             st.session_state["suggestion_placeholder"] = ""
 
+        # Sinaliza failover
+        try:
+            if provider == "synthetic-fallback":
+                st.info("⚠️ Provedor instável. Resposta em fallback — pode continuar normalmente.")
+            elif used_model and "together/" in used_model:
+                st.caption(f"↪️ Failover automático: **{used_model}**.")
+        except Exception:
+            pass
+
         return texto
 
-    # ===== utilidades internas =====
+    # ===== utilidades =====
     def _load_persona(self) -> Tuple[str, List[Dict[str, str]]]:
         return get_persona()
 
@@ -199,30 +327,27 @@ class MaryService(BaseCharacter):
             return ""
 
     def _build_memory_pin(self, usuario_key: str, user_display: str) -> str:
-        """
-        Memória canônica curta para coerência. Inclui relação 'casados' e
-        nome do usuário como referência obrigatória quando perguntado.
-        """
+        """Memória canônica curta + pistas fortes (não exceder)."""
         try:
             f = get_facts(usuario_key) or {}
         except Exception:
             f = {}
-
         blocos: List[str] = []
 
         parceiro = f.get("parceiro_atual") or f.get("parceiro") or ""
-        nome_usuario = parceiro or user_display
+        nome_usuario = (parceiro or user_display).strip()
         if parceiro:
             blocos.append(f"parceiro_atual={parceiro}")
 
-        # Sinaliza canonicamente que são casados (default True neste perfil)
         casados = bool(f.get("casados", True))
         blocos.append(f"casados={casados}")
 
-        # Eventos/lore opcionais
-        if "aniversario_casamento" in f:
-            blocos.append(f"aniversario_casamento={f.get('aniversario_casamento')}")
+        # últimas entidades (se existirem)
+        ent_line = _entities_to_line(f)
+        if ent_line and ent_line != "—":
+            blocos.append(f"entidades=({ent_line})")
 
+        # evento opcional
         try:
             ev = last_event(usuario_key, "primeira_vez")
         except Exception:
@@ -233,119 +358,28 @@ class MaryService(BaseCharacter):
             blocos.append(f"primeira_vez@{quando}")
 
         mem_str = "; ".join(blocos) if blocos else "—"
-
         pin = (
             "MEMÓRIA_PIN: "
             f"NOME_USUARIO={nome_usuario}. FATOS={{ {mem_str} }}. "
-            "Regras duras: vocês são casados e cúmplices; trate a relação como base emocional. "
-            "Se o usuário perguntar 'qual é meu nome?', responda com NOME_USUARIO. "
-            "Não invente outro nome; confirme com delicadeza se houver ambiguidade."
+            "Regras: relação de casal (casados) e confiança são base. "
+            "Use ENTIDADES como fonte de verdade para nomes/endereços; se estiver ausente, não invente."
         )
         return pin
-
-    # ===== memória: seleção relevante / digest / histórico com budget =====
-    def _select_relevant_facts(self, usuario_key: str, prompt: str, budget_tokens: int = 300) -> str:
-        """
-        Seleciona fatos canônicos mais relevantes ao prompt respeitando um orçamento de tokens.
-        Retorna linhas curtas no formato 'chave=valor'.
-        """
-        try:
-            facts = get_facts(usuario_key) or {}
-        except Exception:
-            facts = {}
-
-        priority_keys = [
-            "parceiro_atual", "local_cena_atual", "nsfw_override",
-            "casados",
-            "controle_psiquico", "alvos_controle",
-            "ciume_de_laura", "obedecer_defesa_de_laura",
-        ]
-
-        pl = (prompt or "").lower()
-        scored = []
-        for k, v in facts.items():
-            score = 0
-            if k in priority_keys:
-                score += 3
-            # “boost” por termos presentes no prompt
-            try:
-                vstr = str(v).lower()
-            except Exception:
-                vstr = str(v)
-            if k.lower() in pl or (isinstance(v, str) and vstr in pl):
-                score += 2
-            scored.append((score, k, v))
-
-        out_lines, used = [], 0
-        for _score, k, v in sorted(scored, key=lambda x: x[0], reverse=True):
-            line = f"{k}={v}"
-            cost = toklen(line)
-            if used + cost > budget_tokens:
-                continue
-            out_lines.append(line)
-            used += cost
-
-        return "\n".join(out_lines[:40])
-
-    def _get_or_update_digest(self, usuario_key: str, force_update: bool = False) -> str:
-        """
-        Mantém um resumo denso (episodic digest) do histórico antigo.
-        Atualiza quando histórico total exceder ~12k tokens.
-        """
-        try:
-            docs = get_history_docs(usuario_key) or []
-        except Exception:
-            docs = []
-
-        # últimas 12 interações ficam como “recentes”; o resto vira elegível a digest
-        recent, old = docs[-12:], docs[:-12]
-
-        old_txt = []
-        for d in old:
-            u = (d.get("mensagem_usuario") or "").strip()
-            a = (d.get("resposta_mary") or "").strip()  # campo legado
-            if u:
-                old_txt.append(f"U: {u}")
-            if a:
-                old_txt.append(f"A: {a}")
-        old_blob = "\n".join(old_txt)
-
-        # Se pouco conteúdo antigo e não há força de atualização, tenta usar digest já salvo
-        if toklen(old_blob) < 12000 and not force_update:
-            try:
-                f = get_facts(usuario_key) or {}
-                return str(f.get("episodic_digest", "") or "")
-            except Exception:
-                return ""
-
-        # Placeholder seguro e curto (você pode substituir por um sumário via LLM barato)
-        digest = (
-            "Resumo denso de episódios anteriores: relações estáveis, marcos de decisão, "
-            "acordos/consentimentos, locais recorrentes e mudanças de estado. "
-            "Evitar detalhes supérfluos; preservar nomes e decisões já tomadas."
-        )
-
-        try:
-            set_fact(usuario_key, "episodic_digest", digest, {"fonte": "auto_digest"})
-        except Exception:
-            pass
-        return digest
 
     def _montar_historico(
         self,
         usuario_key: str,
         history_boot: List[Dict[str, str]],
-        limite_tokens: int = 900  # budget fixo para histórico recente
+        limite_tokens: int = 8000,
     ) -> List[Dict[str, str]]:
         docs = get_history_docs(usuario_key)
         if not docs:
             return history_boot[:]
         total = 0
         out: List[Dict[str, str]] = []
-        # apenas as últimas 20 interações
-        for d in reversed(docs[-20:]):
+        for d in reversed(docs):
             u = (d.get("mensagem_usuario") or "").strip()
-            a = (d.get("resposta_mary") or "").strip()  # campo legado consumido pela UI
+            a = (d.get("resposta_mary") or "").strip()
             t = toklen(u) + toklen(a)
             if total + t > limite_tokens:
                 break
@@ -356,53 +390,50 @@ class MaryService(BaseCharacter):
             total += t
         return list(reversed(out)) if out else history_boot[:]
 
-    # ===== Resumo rolante (auto) =====
+    # ===== Resumo rolante V2 (todo turno, curto) =====
     def _get_rolling_summary(self, usuario_key: str) -> str:
         try:
             f = get_facts(usuario_key) or {}
-            return str(f.get("mary.rolling_summary", "") or "")
+            return str(f.get("mary.rs.v2", "") or f.get("mary.rolling_summary", "") or "")
         except Exception:
             return ""
 
-    def _maybe_update_rolling_summary(self, usuario_key: str, model: str, last_user: str, last_assistant: str) -> None:
-        turn = int(st.session_state.get("mary_turn_counter", 0)) + 1
-        st.session_state["mary_turn_counter"] = turn
-        if turn % 3 != 0:
-            return
+    def _update_rolling_summary_v2(self, usuario_key: str, model: str, last_user: str, last_assistant: str) -> None:
+        seed = (
+            "Resuma a conversa recente em ATÉ 8–10 frases, apenas fatos duráveis: "
+            "nomes próprios (ex.: clube), endereços/links, relação (casados), local/tempo atual, "
+            "itens/gestos fixos e rumo do enredo. "
+            "Proíba diálogos literais; seja telegráfico e informativo."
+        )
         try:
-            seed = (
-                "Resuma canonicamente a conversa recente (máx 10 frases). "
-                "Foque fatos duráveis: nomes, relação (casados), local/tempo atual, itens/gestos citados e rumo do enredo. "
-                "Sem diálogos literais; use frases informativas."
-            )
             data, used_model, provider = route_chat_strict(model, {
                 "model": model,
                 "messages": [
                     {"role": "system", "content": seed},
-                    {"role": "user", "content": f"Última mensagem do usuário:\n{last_user}\n\nÚltima resposta da Mary:\n{last_assistant}"}
+                    {"role": "user", "content": f"USER:\n{last_user}\n\nMARY:\n{last_assistant}"}
                 ],
-                "max_tokens": 220,
+                "max_tokens": 180,
                 "temperature": 0.2,
                 "top_p": 0.9,
             })
             resumo = (data.get("choices", [{}])[0].get("message", {}) or {}).get("content", "").strip()
             if resumo:
-                set_fact(usuario_key, "mary.rolling_summary", resumo, {"fonte": "auto_summary"})
+                set_fact(usuario_key, "mary.rs.v2", resumo, {"fonte": "auto_summary"})
         except Exception:
             pass
 
-    # ===== Placeholder de sugestão (input livre) =====
+    # ===== Placeholder leve =====
     def _suggest_placeholder(self, assistant_text: str, scene_loc: str) -> str:
         s = (assistant_text or "").lower()
         if "?" in s:
-            return "Amor, continua do exato ponto… me conduz."
+            return "Continua do ponto exato… me conduz."
         if any(k in s for k in ["vamos", "topa", "que tal", "prefere", "quer"]):
-            return "Quero — mas descreve devagar o próximo passo."
+            return "Quero — descreve devagar o próximo passo."
         if scene_loc:
-            return f"Mantemos no {scene_loc}. Fala baixinho no meu ouvido."
-        return "Em duas frases: o que você propõe pra nós dois agora?"
+            return f"No {scene_loc} mesmo — fala baixinho no meu ouvido."
+        return "Mantém o cenário e dá o próximo passo com calma."
 
-    # ===== Sidebar leve (sem knobs extras) =====
+    # ===== Sidebar (somente leitura) =====
     def render_sidebar(self, container) -> None:
         container.markdown(
             "**Mary — Esposa Cúmplice** • Respostas longas (4–7 parágrafos), sensoriais e íntimas. "
@@ -410,11 +441,15 @@ class MaryService(BaseCharacter):
         )
         user = str(st.session_state.get("user_id", "") or "")
         usuario_key = f"{user}::mary" if user else "anon::mary"
-
-        # Indicativo (somente leitura) do status de casamento
         try:
             f = get_facts(usuario_key) or {}
         except Exception:
             f = {}
         casados = bool(f.get("casados", True))
+        ent = _entities_to_line(f)
+        rs = (f.get("mary.rs.v2") or "")[:200]
         container.caption(f"Estado da relação: **{'Casados' if casados else '—'}**")
+        if ent and ent != "—":
+            container.caption(f"Entidades salvas: {ent}")
+        if rs:
+            container.caption("Resumo rolante ativo (v2).")
