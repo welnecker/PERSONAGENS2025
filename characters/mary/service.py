@@ -5,6 +5,9 @@ import streamlit as st
 from typing import List, Dict, Tuple
 import re, time, random
 
+from core.memoria_longa import topk as lore_topk, save_fragment as lore_save
+from core.ultra import critic_review, polish
+
 from core.common.base_service import BaseCharacter
 from core.service_router import route_chat_strict
 from core.repositories import (
@@ -342,12 +345,25 @@ class MaryService(BaseCharacter):
             scene_time=st.session_state.get("momento_atual", "")
         )
 
+        # === LORE (memória longa): recupera fragmentos relevantes e injeta como system barato ===
+        lore_msgs: List[Dict[str, str]] = []
+        try:
+            q = (prompt or "") + "\n" + (rolling or "")
+            top = lore_topk(usuario_key, q, k=4, allow_tags=None)
+            if top:
+                lore_text = " | ".join(d.get("texto", "") for d in top if d.get("texto"))
+                if lore_text:
+                    lore_msgs.append({"role": "system", "content": f"[LORE]\n{lore_text}"})
+        except Exception:
+            pass
+
         # === Histórico com orçamento por modelo + relatório de memória ===
         hist_msgs = self._montar_historico(usuario_key, history_boot, model, verbatim_ultimos=6)
 
         messages: List[Dict[str, str]] = (
             [{"role": "system", "content": system_block}]
             + ([{"role": "system", "content": memoria_pin}] if memoria_pin else [])
+            + lore_msgs
             + [{"role": "system", "content": (
                 f"LOCAL_ATUAL: {local_atual or '—'}. "
                 "Regra dura: NÃO mude tempo/lugar sem pedido explícito do usuário."
@@ -370,7 +386,7 @@ class MaryService(BaseCharacter):
             prompt_tokens = 0
         max_out = _safe_max_output(win, prompt_tokens)
 
-        # Chamada robusta
+        # Chamada robusta (Writer)
         fallbacks = [
             "together/Qwen/Qwen2.5-72B-Instruct",
             "together/meta-llama/Meta-Llama-3.1-405B-Instruct-Turbo",
@@ -380,6 +396,15 @@ class MaryService(BaseCharacter):
             model, messages, max_tokens=max_out, temperature=0.7, top_p=0.95, fallback_models=fallbacks
         )
         texto = (data.get("choices", [{}])[0].get("message", {}) or {}).get("content", "") or ""
+
+        # Ultra IA (opcional): writer -> critic -> polisher
+        try:
+            if bool(st.session_state.get("ultra_ia_on", False)) and texto:
+                critic_model = st.session_state.get("ultra_critic_model", model) or model
+                notes = critic_review(critic_model, system_block, prompt, texto)
+                texto = polish(model, system_block, prompt, texto, notes)
+        except Exception:
+            pass
 
         # Sentinela: detectar sinais de esquecimento explícito na resposta
         try:
@@ -404,6 +429,13 @@ class MaryService(BaseCharacter):
         # Resumo rolante V2 (toda rodada, curto)
         try:
             self._update_rolling_summary_v2(usuario_key, model, prompt, texto)
+        except Exception:
+            pass
+
+        # Memória longa: salva fragmento curto do turno (simples e barato)
+        try:
+            frag = f"[USER] {prompt}\n[MARY] {texto}"
+            lore_save(usuario_key, frag, tags=["mary", "chat"])
         except Exception:
             pass
 
