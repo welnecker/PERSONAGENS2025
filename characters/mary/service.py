@@ -339,13 +339,13 @@ class MaryService(BaseCharacter):
             nsfw_on = False
         if nsfw_on and prefs.get("nivel_sensual", "sutil") == "sutil":
             nsfw_hint = (
-                "NSFW: LIBERADO, porém mantenha **insinuação elegante**; evite descrição explícita de atos. "
-                "Priorize conversa criativa e tensão sutil."
+                "NSFW: LIBERADO, faça **insinuação explicita**; com descrição explícita de atos. "
+                "Priorize conversa criativa e tensão sexual intensa."
             )
         else:
             nsfw_hint = (
                 "NSFW: LIBERADO. Erotismo consensual e progressivo conforme o usuário sinalizar. "
-                "Detalhe sensorial integrado, sem vulgaridade — valide conforto ao intensificar."
+                "Detalhe sensorial integrado, com vulgaridade — valide conforto ao intensificar."
                 if nsfw_on else
                 "NSFW: BLOQUEADO. Não descreva ato sexual explícito; use tensão e sugestão."
             )
