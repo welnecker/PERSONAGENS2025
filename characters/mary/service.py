@@ -1,4 +1,3 @@
-# characters/mary/service.py
 from __future__ import annotations
 
 import streamlit as st
@@ -30,8 +29,8 @@ except Exception:
     def get_persona() -> Tuple[str, List[Dict[str, str]]]:
         txt = (
             "Você é Mary Massariol — Esposa Cúmplice — esposa e parceira de aventuras do usuário. "
-            "Fale em primeira pessoa (eu). Tom íntimo, sensual e carinhoso. "
-            "Traga 1 traço físico concreto nos primeiros parágrafos. "
+            "Fale em primeira pessoa (eu). Tom insinuante e sutil. "
+            "Traga 1 pista sensorial integrada à ação. "
             "Sem metacena, sem listas. 2–4 frases por parágrafo; 4–7 parágrafos."
         )
         return txt, []
@@ -69,20 +68,45 @@ def _safe_max_output(win: int, prompt_tokens: int) -> int:
     sobra = max(0, win - prompt_tokens - 256)
     return max(512, min(alvo, sobra))
 
+# === Preferências do usuário ===
+def _read_prefs(facts: Dict) -> Dict:
+    """Lê preferências persistidas e define padrões seguros."""
+    prefs = {
+        "nivel_sensual": str(facts.get("mary.pref.nivel_sensual", "") or "sutil").lower(),
+        "ritmo": str(facts.get("mary.pref.ritmo", "") or "lento").lower(),
+        "tamanho_resposta": str(facts.get("mary.pref.tamanho_resposta", "") or "media").lower(),
+        "evitar_topicos": facts.get("mary.pref.evitar_topicos", []) or [],
+        "temas_favoritos": facts.get("mary.pref.temas_favoritos", []) or [],
+    }
+    # normalização básica
+    if isinstance(prefs["evitar_topicos"], str):
+        prefs["evitar_topicos"] = [prefs["evitar_topicos"]]
+    if isinstance(prefs["temas_favoritos"], str):
+        prefs["temas_favoritos"] = [prefs["temas_favoritos"]]
+    return prefs
+
+def _prefs_line(prefs: Dict) -> str:
+    """Linha barata para o system com instruções de estilo dinâmicas."""
+    evitar = ", ".join(prefs.get("evitar_topicos") or [])
+    temas  = ", ".join(prefs.get("temas_favoritos") or [])
+    return (
+        f"PREFERÊNCIAS: nível={prefs.get('nivel_sensual','sutil')}; ritmo={prefs.get('ritmo','lento')}; "
+        f"tamanho={prefs.get('tamanho_resposta','media')}; "
+        f"evitar=[{evitar or '—'}]; "
+        f"temas_favoritos=[{temas or '—'}]. "
+        "Siga com insinuação elegante; evite urgência sexual e listas de atos."
+    )
+
 # === Mini-sumarizadores ===
 def _heuristic_summarize(texto: str, max_bullets: int = 10) -> str:
-    """
-    Compacta texto grande em bullets telegráficos (fallback sem LLM).
-    """
+    """Compacta texto grande em bullets telegráficos (fallback sem LLM)."""
     texto = re.sub(r"\s+", " ", (texto or "").strip())
     sent = re.split(r"(?<=[\.\!\?])\s+", texto)
     sent = [s.strip() for s in sent if s.strip()]
     return " • " + "\n • ".join(sent[:max_bullets])
 
 def _llm_summarize(model: str, user_chunk: str) -> str:
-    """
-    Usa o roteador para resumir um bloco antigo. Se der erro, cai no heurístico.
-    """
+    """Usa o roteador para resumir um bloco antigo. Se der erro, cai no heurístico."""
     seed = (
         "Resuma em 6–10 frases telegráficas, somente fatos duráveis (decisões, nomes, locais, tempo, "
         "gestos/itens fixos e rumo da cena). Proibido diálogo literal."
@@ -111,10 +135,12 @@ def _build_system_block(persona_text: str,
                         scene_loc: str,
                         entities_line: str,
                         evidence: str,
+                        prefs_line: str = "",
                         scene_time: str = "") -> str:
     persona_text = (persona_text or "").strip()
     rolling_summary = (rolling_summary or "—").strip()
     entities_line = (entities_line or "—").strip()
+    prefs_line = (prefs_line or "PREFERÊNCIAS: nível=sutil; ritmo=lento; tamanho=media.").strip()
 
     continuity = f"Cenário atual: {scene_loc or '—'}" + (f" — Momento: {scene_time}" if scene_time else "")
     sensory = (
@@ -128,11 +154,11 @@ def _build_system_block(persona_text: str,
         "Se um nome/endereço não estiver salvo na MEMÓRIA/ENTIDADES, **não invente**: admita e convide o usuário a confirmar em 1 linha (sem forçar pergunta em todo turno)."
     )
     safety = "LIMITES: adultos; consentimento; nada ilegal."
-
     evidence_block = f"EVIDÊNCIA RECENTE (resumo ultra-curto de falas do usuário): {evidence or '—'}"
 
     return "\n\n".join([
         persona_text,
+        prefs_line,
         length,
         sensory,
         nsfw_hint,
@@ -253,17 +279,13 @@ def _extract_and_store_entities(usuario_key: str, user_text: str, assistant_text
 
 # ===== Aviso de memória (resumo/poda) =====
 def _mem_drop_warn(report: dict) -> None:
-    """
-    Mostra um aviso visual quando houve perda/compactação de memória.
-    Usa st.info uma vez por turno.
-    """
+    """Mostra um aviso visual quando houve perda/compactação de memória."""
     if not report:
         return
     summarized = int(report.get("summarized_pairs", 0))
     trimmed    = int(report.get("trimmed_pairs", 0))
     hist_tokens = int(report.get("hist_tokens", 0))
     hist_budget = int(report.get("hist_budget", 0))
-
     if summarized or trimmed:
         msg = []
         if summarized:
@@ -293,6 +315,11 @@ class MaryService(BaseCharacter):
 
         # Memória/continuidade base
         local_atual = self._safe_get_local(usuario_key)
+        try:
+            f_all = get_facts(usuario_key) or {}
+        except Exception:
+            f_all = {}
+        prefs = _read_prefs(f_all)
         memoria_pin = self._build_memory_pin(usuario_key, user)
 
         # Foco sensorial rotativo
@@ -305,25 +332,26 @@ class MaryService(BaseCharacter):
         st.session_state["mary_attr_idx"] = idx
         foco = pool[idx]
 
-        # NSFW por usuário
+        # NSFW por usuário (com nuance de nível sutil)
         try:
             nsfw_on = bool(nsfw_enabled(usuario_key))
         except Exception:
             nsfw_on = False
-        nsfw_hint = (
-            "NSFW: LIBERADO. Erotismo consensual e progressivo quando o usuário sinalizar desejo. "
-            "Detalhe sensorial com naturalidade; valide conforto ao intensificar. "
-            "Vocês são casados e cúmplices."
-            if nsfw_on else
-            "NSFW: BLOQUEADO. Não descreva ato sexual explícito; use tensão e sugestão."
-        )
+        if nsfw_on and prefs.get("nivel_sensual", "sutil") == "sutil":
+            nsfw_hint = (
+                "NSFW: LIBERADO, porém mantenha **insinuação elegante**; evite descrição explícita de atos. "
+                "Priorize conversa criativa e tensão sutil."
+            )
+        else:
+            nsfw_hint = (
+                "NSFW: LIBERADO. Erotismo consensual e progressivo conforme o usuário sinalizar. "
+                "Detalhe sensorial integrado, sem vulgaridade — valide conforto ao intensificar."
+                if nsfw_on else
+                "NSFW: BLOQUEADO. Não descreva ato sexual explícito; use tensão e sugestão."
+            )
 
         # ===== SUMÁRIO + ENTIDADES + EVIDÊNCIA =====
         rolling = self._get_rolling_summary(usuario_key)  # v2
-        try:
-            f_all = get_facts(usuario_key) or {}
-        except Exception:
-            f_all = {}
         entities_line = _entities_to_line(f_all)
 
         # pega docs crus para compor o evidence curto do usuário
@@ -333,7 +361,7 @@ class MaryService(BaseCharacter):
             docs = []
         evidence = _compact_user_evidence(docs, max_chars=320)
 
-        # System único com slots
+        # System único com slots (+ PREFERÊNCIAS)
         system_block = _build_system_block(
             persona_text=persona_text,
             rolling_summary=rolling,
@@ -342,6 +370,7 @@ class MaryService(BaseCharacter):
             scene_loc=local_atual or "—",
             entities_line=entities_line,
             evidence=evidence,
+            prefs_line=_prefs_line(prefs),
             scene_time=st.session_state.get("momento_atual", "")
         )
 
@@ -378,13 +407,20 @@ class MaryService(BaseCharacter):
         except Exception:
             pass
 
-        # --- orçamento de saída dinâmico ---
+        # --- orçamento de saída dinâmico (modulado por preferência de tamanho) ---
         win = _get_window_for(model)
         try:
             prompt_tokens = sum(toklen(m["content"]) for m in messages)
         except Exception:
             prompt_tokens = 0
-        max_out = _safe_max_output(win, prompt_tokens)
+        base_out = _safe_max_output(win, prompt_tokens)
+        size = prefs.get("tamanho_resposta", "media")
+        mult = 1.0 if size == "media" else (0.75 if size == "curta" else 1.25)
+        max_out = max(512, int(base_out * mult))
+
+        # Temperatura conforme ritmo
+        ritmo = prefs.get("ritmo", "lento")
+        temperature = 0.6 if ritmo == "lento" else (0.9 if ritmo == "rapido" else 0.7)
 
         # Chamada robusta (Writer)
         fallbacks = [
@@ -393,7 +429,7 @@ class MaryService(BaseCharacter):
             "anthropic/claude-3.5-haiku",
         ]
         data, used_model, provider = _robust_chat_call(
-            model, messages, max_tokens=max_out, temperature=0.7, top_p=0.95, fallback_models=fallbacks
+            model, messages, max_tokens=max_out, temperature=temperature, top_p=0.95, fallback_models=fallbacks
         )
         texto = (data.get("choices", [{}])[0].get("message", {}) or {}).get("content", "") or ""
 
@@ -652,7 +688,7 @@ class MaryService(BaseCharacter):
     # ===== Sidebar (somente leitura) =====
     def render_sidebar(self, container) -> None:
         container.markdown(
-            "**Mary — Esposa Cúmplice** • Respostas longas (4–7 parágrafos), sensoriais e íntimas. "
+            "**Mary — Esposa Cúmplice** • Respostas insinuantes e sutis; 4–7 parágrafos. "
             "Relação canônica: casados e cúmplices."
         )
         user = str(st.session_state.get("user_id", "") or "")
@@ -664,8 +700,13 @@ class MaryService(BaseCharacter):
         casados = bool(f.get("casados", True))
         ent = _entities_to_line(f)
         rs = (f.get("mary.rs.v2") or "")[:200]
+        prefs = _read_prefs(f)
+
         container.caption(f"Estado da relação: **{'Casados' if casados else '—'}**")
         if ent and ent != "—":
             container.caption(f"Entidades salvas: {ent}")
         if rs:
             container.caption("Resumo rolante ativo (v2).")
+        container.caption(
+            f"Prefs: nível={prefs.get('nivel_sensual')}, ritmo={prefs.get('ritmo')}, tamanho={prefs.get('tamanho_resposta')}"
+        )
