@@ -14,6 +14,9 @@ import streamlit as st
 import base64
 import re, html
 from pathlib import Path
+# Em qualquer ponto de boot do app (ex.: main.py):
+from core.memoria_longa import ensure_indexes
+ensure_indexes()
 
 # ---------- Path / Page ----------
 ROOT = Path(__file__).resolve().parent
