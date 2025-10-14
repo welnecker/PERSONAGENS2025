@@ -919,92 +919,89 @@ def _safe_reply_call(_service, *, user: str, model: str, prompt: str) -> str:
     except TypeError:
         return fn(user, model)
 
-# --- Helpers de clique "Continuar" fixo no rodapé ---
-def _mark_continue():
-    st.session_state["_cont_clicked"] = True
+# =======================
+#  CHAT ROBUSTO (FILA)
+# =======================
 
-st.session_state.setdefault("_cont_clicked", False)
+# Estado do fluxo robusto (sem _turn_id)
+st.session_state.setdefault("_pending_prompt", None)   # prompt pendente (fila)
+st.session_state.setdefault("_pending_auto", False)    # se veio do botão "Continuar"
+st.session_state.setdefault("_is_generating", False)   # trava anti-duplo disparo
+st.session_state.setdefault("_job_uid", None)          # id do job em processamento
+st.session_state.setdefault("_cont_clicked", False)    # clique do botão continuar
 
-# ---------- Chat (robusto com fila pendente) ----------
-# Placeholder dinâmico vindo do serviço
+# Placeholder dinâmico
 _ph = st.session_state.get("suggestion_placeholder", "")
 _default_ph = f"Fale com {st.session_state['character']}"
 _dyn_ph = f"💡 Sugestão: {_ph}" if _ph else _default_ph
 
-# Compat: versões com/sem suporte ao kw-only 'placeholder'
+# Chat input com chave fixa (estabiliza entre reruns)
 try:
-    user_prompt = st.chat_input(_default_ph, placeholder=_dyn_ph)
+    user_prompt = st.chat_input(_default_ph, placeholder=_dyn_ph, key="chat_msg")
 except TypeError:
-    user_prompt = st.chat_input(_dyn_ph)
+    user_prompt = st.chat_input(_dyn_ph, key="chat_msg")
 
-# --- estado do fluxo de turnos ---
-st.session_state.setdefault("_turn_id", 0)              # identificador incremental do turno
-st.session_state.setdefault("_processed_turn_id", 0)    # último turno já processado
-st.session_state.setdefault("_pending_prompt", None)    # prompt pendente (fila)
-st.session_state.setdefault("_pending_auto", False)     # flag se é auto-continue
-
-# 1) Captura do envio → cria "job" pendente
-if user_prompt:
+# 1) Captura do envio do usuário
+if user_prompt and not st.session_state.get("_is_generating"):
     st.session_state["_pending_prompt"] = user_prompt
     st.session_state["_pending_auto"] = False
-    st.session_state["_turn_id"] += 1
 
-# 2) Se o botão CONTINUAR foi clicado no rodapé (ver seção do rodapé), cria job
-if st.session_state.get("_cont_clicked", False) and not user_prompt:
+# 2) Se o botão CONTINUAR foi clicado, cria job
+if st.session_state.get("_cont_clicked") and not st.session_state.get("_is_generating"):
     st.session_state["_pending_prompt"] = (
         "CONTINUAR: Prossiga a cena exatamente de onde a última resposta parou. "
         "Mantenha LOCAL_ATUAL, personagens presentes e tom. Não resuma; avance ação e diálogo em 1ª pessoa."
     )
     st.session_state["_pending_auto"] = True
-    st.session_state["_turn_id"] += 1
-    st.session_state["_cont_clicked"] = False  # reseta a bandeira
+    st.session_state["_cont_clicked"] = False  # limpa o clique
 
-# 3) Processamento: apenas se houver job novo (não processado ainda)
-_has_new_job = bool(st.session_state["_pending_prompt"]) and (
-    st.session_state["_turn_id"] > st.session_state["_processed_turn_id"]
-)
+# 3) Processa job se houver e não estivermos gerando
+_has_job = bool(st.session_state.get("_pending_prompt"))
+if _has_job and not st.session_state.get("_is_generating"):
+    st.session_state["_is_generating"] = True
+    st.session_state["_job_uid"] = f"job-{time.time():.6f}"
 
-if _has_new_job:
     final_prompt = str(st.session_state["_pending_prompt"])
     auto_continue = bool(st.session_state["_pending_auto"])
 
-    # Render do turno do usuário
+    # Render turno do usuário
     with st.chat_message("user"):
         st.markdown("🔁 **Continuar**" if auto_continue else final_prompt)
-
-    # Persistência visual do turno do usuário
     st.session_state["history"].append(("user", "🔁 Continuar" if auto_continue else final_prompt))
 
-    # Geração
-    with st.spinner("Gerando…"):
-        try:
-            text = _safe_reply_call(
-                service,
-                user=str(st.session_state["user_id"]),
-                model=str(st.session_state["model"]),
-                prompt=final_prompt,
-            )
-        except Exception as e:
-            import traceback as _tb
-            text = (
-                f"Erro durante a geração:\n\n**{e.__class__.__name__}** — {e}\n\n"
-                f"```\n{_tb.format_exc()}\n```"
-            )
+    # Geração protegida
+    try:
+        with st.spinner("Gerando…"):
+            try:
+                text = _safe_reply_call(
+                    service,
+                    user=str(st.session_state["user_id"]),
+                    model=str(st.session_state["model"]),
+                    prompt=final_prompt,
+                )
+            except Exception as e:
+                import traceback as _tb
+                text = (
+                    f"Erro durante a geração:\n\n**{e.__class__.__name__}** — {e}\n\n"
+                    f"```\n{_tb.format_exc()}\n```"
+                )
 
-    # Append garantido da resposta da assistente
-    if text:
-        last = st.session_state["history"][-1] if st.session_state["history"] else None
-        if last != ("assistant", text):
-            st.session_state["history"].append(("assistant", text))
+        # Append garantido
+        if text:
+            last = st.session_state["history"][-1] if st.session_state["history"] else None
+            if last != ("assistant", text):
+                st.session_state["history"].append(("assistant", text))
 
-    # Render do turno da assistente
-    with st.chat_message("assistant", avatar="💚"):
-        render_assistant_bubbles(text)
+        # Render da assistente
+        with st.chat_message("assistant", avatar="💚"):
+            render_assistant_bubbles(text)
 
-    # ✅ marca o turno como processado e limpa a fila
-    st.session_state["_processed_turn_id"] = st.session_state["_turn_id"]
-    st.session_state["_pending_prompt"] = None
-    st.session_state["_pending_auto"] = False
+    finally:
+        # Limpeza SEMPRE, mesmo em erro
+        st.session_state["_pending_prompt"] = None
+        st.session_state["_pending_auto"] = False
+        st.session_state["_job_uid"] = None
+        st.session_state["_is_generating"] = False
 
 # ---------- Rodapé fixo: botão "Continuar" sempre abaixo do último turno ----------
 footer = st.empty()
@@ -1013,7 +1010,7 @@ with footer:
     st.button(
         "🔁 Continuar",
         help="Prossegue a cena do ponto atual, sem mudar o local salvo.",
-        on_click=_mark_continue,
+        on_click=lambda: st.session_state.__setitem__("_cont_clicked", True),
         use_container_width=True,
         key="continue_bottom",
     )
