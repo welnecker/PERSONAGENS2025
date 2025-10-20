@@ -15,14 +15,14 @@ from core.repositories import (
 )
 from core.tokens import toklen
 
-# NSFW (opcional)
+# NSFW (opcional) — leitura do flag via fatos/overrides
 try:
     from core.nsfw import nsfw_enabled
 except Exception:  # fallback seguro
     def nsfw_enabled(_user: str) -> bool:
         return False
 
-# Persona específica (ideal: characters/mary/persona.py)
+# Persona específica
 try:
     from .persona import get_persona  # -> Tuple[str, List[Dict[str,str]]]
 except Exception:
@@ -42,7 +42,8 @@ MODEL_WINDOWS = {
     "together/Qwen/Qwen2.5-72B-Instruct": 32_000,
     "deepseek/deepseek-chat-v3-0324": 32_000,
     "inclusionai/ling-1t": 64_000,  # ajuste se o provedor publicar outro contexto
-}
+    "thedrummer/cydonia-24b-v4.1": 64_000,
+    }
 DEFAULT_WINDOW = 32_000
 
 def _get_window_for(model: str) -> int:
@@ -149,7 +150,10 @@ def _build_system_block(persona_text: str,
         "Use MEMÓRIA e ENTIDADES abaixo como **fonte de verdade**. "
         "Se um nome/endereço não estiver salvo na MEMÓRIA/ENTIDADES, **não invente**; convide o usuário a confirmar em 1 linha."
     )
-    safety = "LIMITES: adultos; consentimento; nada ilegal."
+    safety = (
+        "LIMITES: adultos; consentimento; nada ilegal. "
+        "Mesmo com NSFW ON, **descreva genitais com o ato sexual gráfico**; foque em sensações, atmosfera e condução confiante."
+    )
     evidence_block = f"EVIDÊNCIA RECENTE (resumo ultra-curto de falas do usuário): {evidence or '—'}"
 
     return "\n\n".join([
@@ -319,7 +323,7 @@ class MaryService(BaseCharacter):
         st.session_state["mary_attr_idx"] = idx
         foco = pool[idx]
 
-        # NSFW por usuário com nuance de preferência
+        # NSFW por usuário com nuance de preferência (seguro)
         try:
             nsfw_on = bool(nsfw_enabled(usuario_key))
         except Exception:
@@ -327,21 +331,25 @@ class MaryService(BaseCharacter):
 
         nivel = prefs.get("nivel_sensual", "sutil")
         if not nsfw_on:
-            nsfw_hint = "NSFW: BLOQUEADO. Use sugestão, tensão e intimidade sem descrição explícita de atos."
+            nsfw_hint = (
+                "NSFW: BLOQUEADO. Use sugestão, tensão e intimidade sem descrição explícita de atos; "
+                "concentre-se em atmosfera, presença e condução confiante."
+            )
         else:
             if nivel == "sutil":
                 nsfw_hint = (
-                    "NSFW: LIBERADO. Mantenha **insinuação elegante** e tensão crescente; "
-                    "detalhes sugestivos, sem descrição gráfica."
+                    "NSFW: LIBERADO. **Insinuação elegante** e tensão crescente; foque em sensações e proximidade, "
+                    "com genitais/ato gráfico."
                 )
             elif nivel == "alta":
                 nsfw_hint = (
-                    "NSFW: LIBERADO. Pode intensificar com **detalhes explícitos** consensuais quando o usuário sinalizar; "
-                    "sempre com elegância e foco emocional."
+                    "NSFW: LIBERADO. Intensifique calor, respiração, fricção de tecidos na pele, sussurros no ouvido "
+                    "e condução de ritmo; **descreva genitais, com ato sexual gráfico**."
                 )
             else:  # 'media'
                 nsfw_hint = (
-                    "NSFW: LIBERADO. Sensualidade clara e progressiva; descreva sensações e ações sem pressa."
+                    "NSFW: LIBERADO. Sensualidade clara e progressiva; descreva sensações e ações sem pressa, "
+                    "com genitais/ato gráfico."
                 )
 
         # ===== SUMÁRIO + ENTIDADES + EVIDÊNCIA =====
@@ -380,7 +388,7 @@ class MaryService(BaseCharacter):
             pass
 
         # === Histórico com orçamento por modelo + relatório de memória ===
-        verbatim_ultimos = int(st.session_state.get("verbatim_ultimos", 10))  # << configurável via UI
+        verbatim_ultimos = int(st.session_state.get("verbatim_ultimos", 10))  # configurável via UI
         hist_msgs = self._montar_historico(usuario_key, history_boot, model, verbatim_ultimos=verbatim_ultimos)
 
         messages: List[Dict[str, str]] = (
@@ -679,7 +687,7 @@ class MaryService(BaseCharacter):
     # ===== Sidebar (somente leitura) =====
     def render_sidebar(self, container) -> None:
         container.markdown(
-            "**Mary — Esposa Cúmplice** • Respostas insinuantes e sutis; 4–7 parágrafos. "
+            "**Mary — Esposa Cúmplice** • Respostas insinuantes e confiantes; 4–7 parágrafos. "
             "Relação canônica: casados e cúmplices."
         )
         user = str(st.session_state.get("user_id", "") or "")
