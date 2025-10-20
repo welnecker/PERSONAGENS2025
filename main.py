@@ -1,5 +1,6 @@
 # main.py
 from __future__ import annotations
+
 import os
 import sys
 import time
@@ -7,14 +8,15 @@ import hmac
 import hashlib
 import inspect
 import traceback
+import base64
+import re
+import html
 from pathlib import Path
 from typing import Optional, List, Tuple
-import streamlit as st
-import base64
-import re, html
-from pathlib import Path
 
-# Em qualquer ponto de boot do app (ex.: main.py):
+import streamlit as st
+
+# ===== Memória longa (garante índices no boot) =====
 from core.memoria_longa import ensure_indexes
 ensure_indexes()
 
@@ -167,11 +169,13 @@ def _load_env_from_secrets():
         "MONGO_CLUSTER":      sec.get("MONGO_CLUSTER", ""),
         "APP_NAME":           sec.get("APP_NAME", "personagens2025"),
         "APP_PUBLIC_URL":     sec.get("APP_PUBLIC_URL", ""),
+        # >>> Mongo como padrão <<<
         "DB_BACKEND":         sec.get("DB_BACKEND", "mongo"),
     }
     for k, v in mapping.items():
         if v and not os.environ.get(k):
             os.environ[k] = str(v)
+
 _load_env_from_secrets()
 
 # ---------- Registry de personagens ----------
@@ -200,7 +204,6 @@ except Exception:
             "together/meta-llama/Meta-Llama-3.1-405B-Instruct-Turbo",
             "together/Qwen/Qwen2.5-72B-Instruct",
             "together/Qwen/QwQ-32B",
-            "inclusionai/ling-1t",  # adicionado
         ]
     def provider_chat(model: str, messages: List[dict], **kw):
         raise RuntimeError("service_router indisponível.")
@@ -305,8 +308,12 @@ except Exception:
         "together/meta-llama/Meta-Llama-3.1-405B-Instruct-Turbo",
         "together/Qwen/Qwen2.5-72B-Instruct",
         "together/Qwen/QwQ-32B",
-        "inclusionai/ling-1t",
     ]
+
+# 👉 Força aparecer o modelo do OpenRouter mesmo se o router não listar
+if "inclusionai/ling-1t" not in all_models:
+    all_models.append("inclusionai/ling-1t")
+
 st.session_state.setdefault("model", (all_models[0] if all_models else "deepseek/deepseek-chat-v3-0324"))
 st.session_state.setdefault("history", [])  # List[Tuple[str, str]]
 st.session_state.setdefault("history_loaded_for", "")
@@ -324,16 +331,17 @@ with c2:
 st.selectbox("🧠 Modelo", all_models, key="model")
 
 def render_assistant_bubbles(markdown_text: str) -> None:
+    """Renderiza mensagens da assistente em blocos azuis; preserva ```code```."""
     if not markdown_text:
         return
-    parts = re.split(r"(```[\\s\\S]*?```)", markdown_text)
+    parts = re.split(r"(```[\s\S]*?```)", markdown_text)
     for part in parts:
         if part.startswith("```") and part.endswith("```"):
             st.markdown(part)
         else:
-            paras = [p.strip() for p in re.split(r"\\n\\s*\\n", part) if p.strip()]
+            paras = [p.strip() for p in re.split(r"\n\s*\n", part) if p.strip()]
             for p in paras:
-                safe = html.escape(p).replace("\\n", "<br>")
+                safe = html.escape(p).replace("\n", "<br>")
                 st.markdown(f"<div class='assistant-paragraph'>{safe}</div>", unsafe_allow_html=True)
 
 # ---------- Helpers de histórico ----------
@@ -341,7 +349,7 @@ def _user_keys_for_history(user_id: str, character_name: str) -> List[str]:
     ch = (character_name or "").strip().lower()
     primary = f"{user_id}::{ch}"
     if ch == "mary":
-        return [primary, user_id]
+        return [primary, user_id]  # inclui legado
     return [primary]
 
 def _reload_history(force: bool = False):
@@ -733,9 +741,20 @@ if bg_sel != "(nenhuma)":
 st.sidebar.markdown("---")
 st.sidebar.subheader("🎚️ Preferências (Mary)")
 if _char == "mary":
-    nivel = st.sidebar.selectbox("Nível sensual", ["sutil", "media", "alta"], index=["sutil","media","alta"].index(str(facts.get("mary.pref.nivel_sensual","sutil")).lower() if facts else 0))
-    ritmo = st.sidebar.selectbox("Ritmo", ["lento", "normal", "rapido"], index=["lento","normal","rapido"].index(str(facts.get("mary.pref.ritmo","lento")).lower() if facts else 0))
-    tam   = st.sidebar.selectbox("Tamanho da resposta", ["curta","media","longa"], index=["curta","media","longa"].index(str(facts.get("mary.pref.tamanho_resposta","media")).lower() if facts else 1))
+    def _idx(opt_list, value, default):
+        try:
+            return opt_list.index(value)
+        except Exception:
+            return default
+    nivel_opts = ["sutil", "media", "alta"]
+    ritmo_opts = ["lento", "normal", "rapido"]
+    tam_opts   = ["curta","media","longa"]
+    nivel = st.sidebar.selectbox("Nível sensual", nivel_opts,
+                                 index=_idx(nivel_opts, str(facts.get("mary.pref.nivel_sensual","sutil")).lower(), 0))
+    ritmo = st.sidebar.selectbox("Ritmo", ritmo_opts,
+                                 index=_idx(ritmo_opts, str(facts.get("mary.pref.ritmo","lento")).lower(), 0))
+    tam   = st.sidebar.selectbox("Tamanho da resposta", tam_opts,
+                                 index=_idx(tam_opts, str(facts.get("mary.pref.tamanho_resposta","media")).lower(), 1))
     if st.sidebar.button("💾 Salvar preferências"):
         try:
             set_fact(user_key, "mary.pref.nivel_sensual", nivel, {"fonte":"prefs"})
@@ -892,3 +911,25 @@ if _has_job and not st.session_state.get("_is_generating"):
         st.session_state["_pending_auto"] = False
         st.session_state["_job_uid"] = None
         st.session_state["_is_generating"] = False
+
+# ---------- Rodapé fixo: botões auxiliares ----------
+footer = st.empty()
+with footer:
+    st.divider()
+    cols = st.columns(2)
+    with cols[0]:
+        st.button(
+            "🔁 Continuar",
+            help="Prossegue a cena do ponto atual, sem mudar o local salvo.",
+            on_click=lambda: st.session_state.__setitem__("_cont_clicked", True),
+            use_container_width=True,
+            key="continue_bottom",
+        )
+    with cols[1]:
+        st.button(
+            "🧾 Recap curto",
+            help="Resumo telegráfico: nomes, locais/tempo atual, decisões e rumo do enredo.",
+            on_click=lambda: st.session_state.__setitem__("_recap_clicked", True),
+            use_container_width=True,
+            key="recap_bottom",
+        )
