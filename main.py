@@ -313,6 +313,9 @@ except Exception:
 # 👉 Força aparecer o modelo do OpenRouter mesmo se o router não listar
 if "inclusionai/ling-1t" not in all_models:
     all_models.append("inclusionai/ling-1t")
+# 👉 Força aparecer o modelo do OpenRouter mesmo se o router não listar
+if "z-ai/glm-4.6" not in all_models:
+    all_models.append("z-ai/glm-4.6")    
 
 st.session_state.setdefault("model", (all_models[0] if all_models else "deepseek/deepseek-chat-v3-0324"))
 st.session_state.setdefault("history", [])  # List[Tuple[str, str]]
