@@ -871,6 +871,5 @@ if _has_job and not st.session_state.get("_is_generating"):
                 )
             except Exception as e:
                 import traceback as _tb
-                text = (
-                    f"Erro durante a geração:\n\n**{e.__class__.__name__}** — {e}\n\n"
-                    f"```\n{_tb.format_exc()}\n```"
+                tb = _tb.format_exc()
+                text = f"Erro durante a geração:\n\n**{e.__class__.__name__}** — {e}\n\n```\n{tb}\n```"
