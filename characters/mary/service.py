@@ -1,12 +1,12 @@
+# characters/mary/service.py
 from __future__ import annotations
 
-import streamlit as st
-from typing import List, Dict, Tuple
 import re, time, random
+from typing import List, Dict, Tuple
+import streamlit as st
 
 from core.memoria_longa import topk as lore_topk, save_fragment as lore_save
 from core.ultra import critic_review, polish
-
 from core.common.base_service import BaseCharacter
 from core.service_router import route_chat_strict
 from core.repositories import (
@@ -41,7 +41,7 @@ MODEL_WINDOWS = {
     "together/meta-llama/Meta-Llama-3.1-405B-Instruct-Turbo": 128_000,
     "together/Qwen/Qwen2.5-72B-Instruct": 32_000,
     "deepseek/deepseek-chat-v3-0324": 32_000,
-    # adicione aqui outros modelos usados no app
+    "inclusionai/ling-1t": 64_000,  # ajuste se o provedor publicar outro contexto
 }
 DEFAULT_WINDOW = 32_000
 
@@ -61,9 +61,7 @@ def _budget_slices(model: str) -> tuple[int, int, int]:
     return hist, meta, outb
 
 def _safe_max_output(win: int, prompt_tokens: int) -> int:
-    """
-    Reserva espaço de saída sem estourar a janela (mínimo 512).
-    """
+    """Reserva espaço de saída sem estourar a janela (mínimo 512)."""
     alvo = int(win * 0.20)
     sobra = max(0, win - prompt_tokens - 256)
     return max(512, min(alvo, sobra))
@@ -72,13 +70,12 @@ def _safe_max_output(win: int, prompt_tokens: int) -> int:
 def _read_prefs(facts: Dict) -> Dict:
     """Lê preferências persistidas e define padrões seguros."""
     prefs = {
-        "nivel_sensual": str(facts.get("mary.pref.nivel_sensual", "") or "sutil").lower(),
-        "ritmo": str(facts.get("mary.pref.ritmo", "") or "lento").lower(),
-        "tamanho_resposta": str(facts.get("mary.pref.tamanho_resposta", "") or "media").lower(),
+        "nivel_sensual": str(facts.get("mary.pref.nivel_sensual", "") or "sutil").lower(),   # sutil | media | alta
+        "ritmo": str(facts.get("mary.pref.ritmo", "") or "lento").lower(),                   # lento | normal | rapido
+        "tamanho_resposta": str(facts.get("mary.pref.tamanho_resposta", "") or "media").lower(),  # curta | media | longa
         "evitar_topicos": facts.get("mary.pref.evitar_topicos", []) or [],
         "temas_favoritos": facts.get("mary.pref.temas_favoritos", []) or [],
     }
-    # normalização básica
     if isinstance(prefs["evitar_topicos"], str):
         prefs["evitar_topicos"] = [prefs["evitar_topicos"]]
     if isinstance(prefs["temas_favoritos"], str):
@@ -92,9 +89,8 @@ def _prefs_line(prefs: Dict) -> str:
     return (
         f"PREFERÊNCIAS: nível={prefs.get('nivel_sensual','sutil')}; ritmo={prefs.get('ritmo','lento')}; "
         f"tamanho={prefs.get('tamanho_resposta','media')}; "
-        f"evitar=[{evitar or '—'}]; "
-        f"temas_favoritos=[{temas or '—'}]. "
-        "Siga com insinuação elegante; evite urgência sexual e listas de atos."
+        f"evitar=[{evitar or '—'}]; temas_favoritos=[{temas or '—'}]. "
+        "Use insinuação elegante; evite listas de atos e aceleração artificial."
     )
 
 # === Mini-sumarizadores ===
@@ -151,7 +147,7 @@ def _build_system_block(persona_text: str,
     rules = (
         "CONTINUIDADE: não mude tempo/lugar sem pedido explícito do usuário. "
         "Use MEMÓRIA e ENTIDADES abaixo como **fonte de verdade**. "
-        "Se um nome/endereço não estiver salvo na MEMÓRIA/ENTIDADES, **não invente**: admita e convide o usuário a confirmar em 1 linha (sem forçar pergunta em todo turno)."
+        "Se um nome/endereço não estiver salvo na MEMÓRIA/ENTIDADES, **não invente**; convide o usuário a confirmar em 1 linha."
     )
     safety = "LIMITES: adultos; consentimento; nada ilegal."
     evidence_block = f"EVIDÊNCIA RECENTE (resumo ultra-curto de falas do usuário): {evidence or '—'}"
@@ -206,7 +202,7 @@ def _robust_chat_call(model: str, messages: List[Dict[str, str]], *,
     synthetic = {
         "choices": [{"message": {"content":
             "Amor… tive um tropeço técnico agora, mas já mantive nosso fio e cenário. "
-            "Me diz numa linha o próximo passo que você quer e eu sigo daí — sem perder o ritmo."
+            "Me diz numa linha o próximo passo e eu sigo — sem perder o ritmo."
         }}]
     }
     return synthetic, model, "synthetic-fallback"
@@ -235,15 +231,9 @@ def _compact_user_evidence(docs: List[Dict], max_chars: int = 320) -> str:
     s = " | ".join(reversed(snippets))[:max_chars]
     return s
 
-_CLUB_PAT = re.compile(
-    r"\b(clube|club|casa)\s+([A-ZÀ-Üa-zà-ü0-9][\wÀ-ÖØ-öø-ÿ'’\- ]{1,40})\b", re.I
-)
-_ADDR_PAT = re.compile(
-    r"\b(rua|av\.?|avenida|al\.?|alameda|rod\.?|rodovia)\s+[^,]{1,50},?\s*\d{1,5}\b", re.I
-)
-_IG_PAT = re.compile(
-    r"(?:instagram\.com/|@)([A-Za-z0-9_.]{2,30})"
-)
+_CLUB_PAT = re.compile(r"\b(clube|club|casa)\s+([A-ZÀ-Üa-zà-ü0-9][\wÀ-ÖØ-öø-ÿ'’\- ]{1,40})\b", re.I)
+_ADDR_PAT = re.compile(r"\b(rua|av\.?|avenida|al\.?|alameda|rod\.?|rodovia)\s+[^,]{1,50},?\s*\d{1,5}\b", re.I)
+_IG_PAT   = re.compile(r"(?:instagram\.com/|@)([A-Za-z0-9_.]{2,30})")
 
 def _extract_and_store_entities(usuario_key: str, user_text: str, assistant_text: str) -> None:
     """Extrai entidades prováveis e persiste se fizer sentido (não sobrescreve agressivamente)."""
@@ -252,7 +242,6 @@ def _extract_and_store_entities(usuario_key: str, user_text: str, assistant_text
     except Exception:
         f = {}
 
-    # Nome/alias do clube (prioriza o que veio do usuário)
     m = _CLUB_PAT.search(user_text or "") or _CLUB_PAT.search(assistant_text or "")
     if m:
         raw = m.group(0).strip()
@@ -261,7 +250,6 @@ def _extract_and_store_entities(usuario_key: str, user_text: str, assistant_text
         if not cur or len(name) >= len(cur):
             set_fact(usuario_key, "mary.entity.club_name", name, {"fonte": "extracted"})
 
-    # Endereço
     a = _ADDR_PAT.search(user_text or "") or _ADDR_PAT.search(assistant_text or "")
     if a:
         addr = a.group(0).strip()
@@ -269,7 +257,6 @@ def _extract_and_store_entities(usuario_key: str, user_text: str, assistant_text
         if not cur or len(addr) >= len(cur):
             set_fact(usuario_key, "mary.entity.club_address", addr, {"fonte": "extracted"})
 
-    # Instagram/contato
     ig = _IG_PAT.search(user_text or "") or _IG_PAT.search(assistant_text or "")
     if ig:
         handle = ig.group(1).strip("@")
@@ -332,29 +319,35 @@ class MaryService(BaseCharacter):
         st.session_state["mary_attr_idx"] = idx
         foco = pool[idx]
 
-        # NSFW por usuário (com nuance de nível sutil)
+        # NSFW por usuário com nuance de preferência
         try:
             nsfw_on = bool(nsfw_enabled(usuario_key))
         except Exception:
             nsfw_on = False
-        if nsfw_on and prefs.get("nivel_sensual", "sutil") == "sutil":
-            nsfw_hint = (
-                "NSFW: LIBERADO, faça **insinuação explicita**; com descrição explícita de atos. "
-                "Priorize conversa criativa e tensão sexual intensa."
-            )
+
+        nivel = prefs.get("nivel_sensual", "sutil")
+        if not nsfw_on:
+            nsfw_hint = "NSFW: BLOQUEADO. Use sugestão, tensão e intimidade sem descrição explícita de atos."
         else:
-            nsfw_hint = (
-                "NSFW: LIBERADO. Erotismo consensual e progressivo conforme o usuário sinalizar. "
-                "Detalhe sensorial integrado, com vulgaridade — valide conforto ao intensificar."
-                if nsfw_on else
-                "NSFW: BLOQUEADO. Não descreva ato sexual explícito; use tensão e sugestão."
-            )
+            if nivel == "sutil":
+                nsfw_hint = (
+                    "NSFW: LIBERADO. Mantenha **insinuação elegante** e tensão crescente; "
+                    "detalhes sugestivos, sem descrição gráfica."
+                )
+            elif nivel == "alta":
+                nsfw_hint = (
+                    "NSFW: LIBERADO. Pode intensificar com **detalhes explícitos** consensuais quando o usuário sinalizar; "
+                    "sempre com elegância e foco emocional."
+                )
+            else:  # 'media'
+                nsfw_hint = (
+                    "NSFW: LIBERADO. Sensualidade clara e progressiva; descreva sensações e ações sem pressa."
+                )
 
         # ===== SUMÁRIO + ENTIDADES + EVIDÊNCIA =====
         rolling = self._get_rolling_summary(usuario_key)  # v2
         entities_line = _entities_to_line(f_all)
 
-        # pega docs crus para compor o evidence curto do usuário
         try:
             docs = get_history_docs(usuario_key) or []
         except Exception:
@@ -374,7 +367,7 @@ class MaryService(BaseCharacter):
             scene_time=st.session_state.get("momento_atual", "")
         )
 
-        # === LORE (memória longa): recupera fragmentos relevantes e injeta como system barato ===
+        # === LORE (memória longa)
         lore_msgs: List[Dict[str, str]] = []
         try:
             q = (prompt or "") + "\n" + (rolling or "")
@@ -387,7 +380,8 @@ class MaryService(BaseCharacter):
             pass
 
         # === Histórico com orçamento por modelo + relatório de memória ===
-        hist_msgs = self._montar_historico(usuario_key, history_boot, model, verbatim_ultimos=6)
+        verbatim_ultimos = int(st.session_state.get("verbatim_ultimos", 10))  # << configurável via UI
+        hist_msgs = self._montar_historico(usuario_key, history_boot, model, verbatim_ultimos=verbatim_ultimos)
 
         messages: List[Dict[str, str]] = (
             [{"role": "system", "content": system_block}]
@@ -456,7 +450,7 @@ class MaryService(BaseCharacter):
         # Persistência da interação
         save_interaction(usuario_key, prompt, texto, f"{provider}:{used_model}")
 
-        # Atualiza ENTIDADES (puxando do user/assistant atuais)
+        # Atualiza ENTIDADES
         try:
             _extract_and_store_entities(usuario_key, prompt, texto)
         except Exception:
@@ -468,7 +462,7 @@ class MaryService(BaseCharacter):
         except Exception:
             pass
 
-        # Memória longa: salva fragmento curto do turno (simples e barato)
+        # Memória longa: salva fragmento curto do turno
         try:
             frag = f"[USER] {prompt}\n[MARY] {texto}"
             lore_save(usuario_key, frag, tags=["mary", "chat"])
@@ -529,12 +523,10 @@ class MaryService(BaseCharacter):
         casados = bool(f.get("casados", True))
         blocos.append(f"casados={casados}")
 
-        # últimas entidades (se existirem)
         ent_line = _entities_to_line(f)
         if ent_line and ent_line != "—":
             blocos.append(f"entidades=({ent_line})")
 
-        # evento opcional
         try:
             ev = last_event(usuario_key, "primeira_vez")
         except Exception:
@@ -548,8 +540,8 @@ class MaryService(BaseCharacter):
         pin = (
             "MEMÓRIA_PIN: "
             f"NOME_USUARIO={nome_usuario}. FATOS={{ {mem_str} }}. "
-            "Regras: relação de casal (casados) e confiança são base. "
-            "Use ENTIDADES como fonte de verdade para nomes/endereços; se estiver ausente, não invente."
+            "Regras: casal (casados) e confiança são base. "
+            "Use ENTIDADES como fonte de verdade; se ausente, não invente."
         )
         return pin
 
@@ -558,7 +550,7 @@ class MaryService(BaseCharacter):
         usuario_key: str,
         history_boot: List[Dict[str, str]],
         model: str,
-        verbatim_ultimos: int = 6,
+        verbatim_ultimos: int = 10,
     ) -> List[Dict[str, str]]:
         """
         Monta histórico usando orçamento por modelo:
@@ -599,7 +591,7 @@ class MaryService(BaseCharacter):
 
         # Resumo em camadas
         if antigos:
-            summarized_pairs = len(antigos) // 2  # aproxima nº de turnos (pares)
+            summarized_pairs = len(antigos) // 2
             bloco = "\n\n".join(m["content"] for m in antigos)
             resumo = _llm_summarize(model, bloco)
             resumo_layers = [resumo]
@@ -628,7 +620,6 @@ class MaryService(BaseCharacter):
                 trimmed_pairs += 1
             else:
                 verbatim = []
-            # Reconstrói
             msgs = [m for m in msgs if m["role"] == "system"] + verbatim
 
         # Report para aviso visual
@@ -653,7 +644,7 @@ class MaryService(BaseCharacter):
     def _update_rolling_summary_v2(self, usuario_key: str, model: str, last_user: str, last_assistant: str) -> None:
         seed = (
             "Resuma a conversa recente em ATÉ 8–10 frases, apenas fatos duráveis: "
-            "nomes próprios (ex.: clube), endereços/links, relação (casados), local/tempo atual, "
+            "nomes próprios, endereços/links, relação (casados), local/tempo atual, "
             "itens/gestos fixos e rumo do enredo. "
             "Proíba diálogos literais; seja telegráfico e informativo."
         )
