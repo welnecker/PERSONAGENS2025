@@ -856,10 +856,12 @@ if _has_job and not st.session_state.get("_is_generating"):
     final_prompt = str(st.session_state["_pending_prompt"])
     auto_continue = bool(st.session_state["_pending_auto"])
 
+    # Render turno do usuário
     with st.chat_message("user"):
         st.markdown("🔁 **Continuar**" if auto_continue else final_prompt)
     st.session_state["history"].append(("user", "🔁 Continuar" if auto_continue else final_prompt))
 
+    # Geração protegida
     try:
         with st.spinner("Gerando…"):
             try:
@@ -873,3 +875,20 @@ if _has_job and not st.session_state.get("_is_generating"):
                 import traceback as _tb
                 tb = _tb.format_exc()
                 text = f"Erro durante a geração:\n\n**{e.__class__.__name__}** — {e}\n\n```\n{tb}\n```"
+
+        # Append garantido
+        if text:
+            last = st.session_state["history"][-1] if st.session_state["history"] else None
+            if last != ("assistant", text):
+                st.session_state["history"].append(("assistant", text))
+
+        # Render da assistente
+        with st.chat_message("assistant", avatar="💚"):
+            render_assistant_bubbles(text)
+
+    finally:
+        # Limpeza SEMPRE, mesmo em erro
+        st.session_state["_pending_prompt"] = None
+        st.session_state["_pending_auto"] = False
+        st.session_state["_job_uid"] = None
+        st.session_state["_is_generating"] = False
