@@ -45,6 +45,7 @@ MODEL_WINDOWS = {
     "thedrummer/cydonia-24b-v4.1": 64_000,
     "x-ai/grok-4-fast": 64_000,
     "moonshotai/kimi-k2-0905": 64_000,
+    "x-ai/grok-code-fast-1": 64_000,
     }
 DEFAULT_WINDOW = 32_000
 
