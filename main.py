@@ -328,7 +328,11 @@ if "moonshotai/kimi-k2-0905" not in all_models:
     all_models.append("moonshotai/kimi-k2-0905")
 # 👉 Força aparecer o modelo do OpenRouter mesmo se o router não listar
 if "x-ai/grok-code-fast-1" not in all_models:
-    all_models.append("x-ai/grok-code-fast-1")   
+    all_models.append("x-ai/grok-code-fast-1") 
+
+# 👉 Força aparecer o modelo do OpenRouter mesmo se o router não listar
+if "google/gemma-3-27b-it" not in all_models:
+    all_models.append("google/gemma-3-27b-it")
 
 st.session_state.setdefault("model", (all_models[0] if all_models else "deepseek/deepseek-chat-v3-0324"))
 st.session_state.setdefault("history", [])  # List[Tuple[str, str]]
