@@ -44,6 +44,7 @@ MODEL_WINDOWS = {
     "inclusionai/ling-1t": 64_000,  # ajuste se o provedor publicar outro contexto
     "thedrummer/cydonia-24b-v4.1": 64_000,
     "x-ai/grok-4-fast": 64_000,
+    "moonshotai/kimi-k2-0905": 64_000,
     }
 DEFAULT_WINDOW = 32_000
 
