@@ -43,6 +43,7 @@ MODEL_WINDOWS = {
     "deepseek/deepseek-chat-v3-0324": 32_000,
     "inclusionai/ling-1t": 64_000,  # ajuste se o provedor publicar outro contexto
     "thedrummer/cydonia-24b-v4.1": 64_000,
+    "x-ai/grok-4-fast": 64_000,
     }
 DEFAULT_WINDOW = 32_000
 
