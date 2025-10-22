@@ -48,7 +48,7 @@ MODEL_WINDOWS = {
     "x-ai/grok-code-fast-1": 64_000,
     "google/gemma-3-27b-it": 64_000,
     "google/gemini-2.5-flash": 64_000,
-    "openai/gpt-4o-mini: 64_000,
+    "openai/gpt-4o-mini": 64_000,
     }
 DEFAULT_WINDOW = 32_000
 
