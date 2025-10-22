@@ -338,6 +338,10 @@ if "google/gemma-3-27b-it" not in all_models:
 if "google/gemini-2.5-flash" not in all_models:
     all_models.append("google/gemini-2.5-flash")
 
+# 👉 Força aparecer o modelo do OpenRouter mesmo se o router não listar
+if "openai/gpt-4o-mini" not in all_models:
+    all_models.append("openai/gpt-4o-mini")
+
 
 st.session_state.setdefault("model", (all_models[0] if all_models else "deepseek/deepseek-chat-v3-0324"))
 st.session_state.setdefault("history", [])  # List[Tuple[str, str]]
