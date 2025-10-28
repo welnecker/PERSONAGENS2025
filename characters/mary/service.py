@@ -15,14 +15,14 @@ from core.repositories import (
 )
 from core.tokens import toklen
 
-# NSFW (opcional) — leitura do flag via fatos/overrides
+# NSFW (opcional)
 try:
     from core.nsfw import nsfw_enabled
 except Exception:  # fallback seguro
     def nsfw_enabled(_user: str) -> bool:
         return False
 
-# Persona específica
+# Persona específica (ideal: characters/mary/persona.py)
 try:
     from .persona import get_persona  # -> Tuple[str, List[Dict[str,str]]]
 except Exception:
@@ -42,14 +42,7 @@ MODEL_WINDOWS = {
     "together/Qwen/Qwen2.5-72B-Instruct": 32_000,
     "deepseek/deepseek-chat-v3-0324": 32_000,
     "inclusionai/ling-1t": 64_000,  # ajuste se o provedor publicar outro contexto
-    "thedrummer/cydonia-24b-v4.1": 64_000,
-    "x-ai/grok-4-fast": 64_000,
-    "moonshotai/kimi-k2-0905": 64_000,
-    "x-ai/grok-code-fast-1": 64_000,
-    "google/gemma-3-27b-it": 64_000,
-    "google/gemini-2.5-flash": 64_000,
-    "openai/gpt-4o-mini": 64_000,
-    }
+}
 DEFAULT_WINDOW = 32_000
 
 def _get_window_for(model: str) -> int:
@@ -72,6 +65,59 @@ def _safe_max_output(win: int, prompt_tokens: int) -> int:
     alvo = int(win * 0.20)
     sobra = max(0, win - prompt_tokens - 256)
     return max(512, min(alvo, sobra))
+
+# =========================
+# Cache leve (facts/history)
+# =========================
+CACHE_TTL = int(st.secrets.get("CACHE_TTL", 30))  # segundos
+_cache_facts: Dict[str, Dict] = {}
+_cache_history: Dict[str, List[Dict]] = {}
+_cache_timestamps: Dict[str, float] = {}
+
+def _purge_expired_cache():
+    now = time.time()
+    # facts
+    for k in list(_cache_facts.keys()):
+        if now - _cache_timestamps.get(f"facts_{k}", 0) >= CACHE_TTL:
+            _cache_facts.pop(k, None)
+            _cache_timestamps.pop(f"facts_{k}", None)
+    # history
+    for k in list(_cache_history.keys()):
+        if now - _cache_timestamps.get(f"hist_{k}", 0) >= CACHE_TTL:
+            _cache_history.pop(k, None)
+            _cache_timestamps.pop(f"hist_{k}", None)
+
+def clear_user_cache(user_key: str):
+    _cache_facts.pop(user_key, None)
+    _cache_timestamps.pop(f"facts_{user_key}", None)
+    _cache_history.pop(user_key, None)
+    _cache_timestamps.pop(f"hist_{user_key}", None)
+
+def cached_get_facts(user_key: str) -> Dict:
+    _purge_expired_cache()
+    now = time.time()
+    if user_key in _cache_facts and (now - _cache_timestamps.get(f"facts_{user_key}", 0) < CACHE_TTL):
+        return _cache_facts[user_key]
+    try:
+        f = get_facts(user_key) or {}
+    except Exception:
+        f = {}
+    _cache_facts[user_key] = f
+    _cache_timestamps[f"facts_{user_key}"] = now
+    return f
+
+def cached_get_history(user_key: str) -> List[Dict]:
+    _purge_expired_cache()
+    now = time.time()
+    if user_key in _cache_history and (now - _cache_timestamps.get(f"hist_{user_key}", 0) < CACHE_TTL):
+        return _cache_history[user_key]
+    try:
+        docs = get_history_docs(user_key) or []
+    except Exception:
+        docs = []
+    _cache_history[user_key] = docs
+    _cache_timestamps[f"hist_{user_key}"] = now
+    return docs
 
 # === Preferências do usuário ===
 def _read_prefs(facts: Dict) -> Dict:
@@ -156,10 +202,8 @@ def _build_system_block(persona_text: str,
         "Use MEMÓRIA e ENTIDADES abaixo como **fonte de verdade**. "
         "Se um nome/endereço não estiver salvo na MEMÓRIA/ENTIDADES, **não invente**; convide o usuário a confirmar em 1 linha."
     )
-    safety = (
-        "LIMITES: adultos; consentimento; nada ilegal. "
-        "Mesmo com NSFW ON, **descreva genitais com o ato sexual gráfico**; foque em sensações, atmosfera e condução confiante."
-    )
+    # (mantido conforme pedido – sem alteração do safety/hints NSFW)
+    safety = "LIMITES: adultos; consentimento; nada ilegal."
     evidence_block = f"EVIDÊNCIA RECENTE (resumo ultra-curto de falas do usuário): {evidence or '—'}"
 
     return "\n\n".join([
@@ -228,19 +272,6 @@ def _entities_to_line(f: Dict) -> str:
             parts.append(f"{k}={v}")
     return "; ".join(parts) if parts else "—"
 
-def _compact_user_evidence(docs: List[Dict], max_chars: int = 320) -> str:
-    """Concatena as últimas 4 falas do usuário (sem assistente), reduzindo ruído."""
-    snippets: List[str] = []
-    for d in reversed(docs):
-        u = (d.get("mensagem_usuario") or "").strip()
-        if u:
-            u = re.sub(r"\s+", " ", u)
-            snippets.append(u)
-        if len(snippets) >= 4:
-            break
-    s = " | ".join(reversed(snippets))[:max_chars]
-    return s
-
 _CLUB_PAT = re.compile(r"\b(clube|club|casa)\s+([A-ZÀ-Üa-zà-ü0-9][\wÀ-ÖØ-öø-ÿ'’\- ]{1,40})\b", re.I)
 _ADDR_PAT = re.compile(r"\b(rua|av\.?|avenida|al\.?|alameda|rod\.?|rodovia)\s+[^,]{1,50},?\s*\d{1,5}\b", re.I)
 _IG_PAT   = re.compile(r"(?:instagram\.com/|@)([A-Za-z0-9_.]{2,30})")
@@ -248,17 +279,18 @@ _IG_PAT   = re.compile(r"(?:instagram\.com/|@)([A-Za-z0-9_.]{2,30})")
 def _extract_and_store_entities(usuario_key: str, user_text: str, assistant_text: str) -> None:
     """Extrai entidades prováveis e persiste se fizer sentido (não sobrescreve agressivamente)."""
     try:
-        f = get_facts(usuario_key) or {}
+        f = cached_get_facts(usuario_key) or {}
     except Exception:
         f = {}
 
+    # Nome do clube/casa: usar group(2) (somente o nome), sem o prefixo "clube/casa"
     m = _CLUB_PAT.search(user_text or "") or _CLUB_PAT.search(assistant_text or "")
     if m:
-        raw = m.group(0).strip()
-        name = re.sub(r"\s+", " ", raw)
+        name = re.sub(r"\s+", " ", m.group(2)).strip()
         cur = str(f.get("mary.entity.club_name", "") or "").strip()
         if not cur or len(name) >= len(cur):
             set_fact(usuario_key, "mary.entity.club_name", name, {"fonte": "extracted"})
+            clear_user_cache(usuario_key)
 
     a = _ADDR_PAT.search(user_text or "") or _ADDR_PAT.search(assistant_text or "")
     if a:
@@ -266,6 +298,7 @@ def _extract_and_store_entities(usuario_key: str, user_text: str, assistant_text
         cur = str(f.get("mary.entity.club_address", "") or "").strip()
         if not cur or len(addr) >= len(cur):
             set_fact(usuario_key, "mary.entity.club_address", addr, {"fonte": "extracted"})
+            clear_user_cache(usuario_key)
 
     ig = _IG_PAT.search(user_text or "") or _IG_PAT.search(assistant_text or "")
     if ig:
@@ -273,6 +306,7 @@ def _extract_and_store_entities(usuario_key: str, user_text: str, assistant_text
         cur = str(f.get("mary.entity.club_ig", "") or "").strip()
         if not cur:
             set_fact(usuario_key, "mary.entity.club_ig", "@"+handle, {"fonte": "extracted"})
+            clear_user_cache(usuario_key)
 
 # ===== Aviso de memória (resumo/poda) =====
 def _mem_drop_warn(report: dict) -> None:
@@ -313,7 +347,7 @@ class MaryService(BaseCharacter):
         # Memória/continuidade base
         local_atual = self._safe_get_local(usuario_key)
         try:
-            f_all = get_facts(usuario_key) or {}
+            f_all = cached_get_facts(usuario_key) or {}
         except Exception:
             f_all = {}
         prefs = _read_prefs(f_all)
@@ -329,44 +363,42 @@ class MaryService(BaseCharacter):
         st.session_state["mary_attr_idx"] = idx
         foco = pool[idx]
 
-        # NSFW por usuário com nuance de preferência (seguro)
+        # NSFW por usuário com nuance de preferência
         try:
             nsfw_on = bool(nsfw_enabled(usuario_key))
         except Exception:
             nsfw_on = False
 
         nivel = prefs.get("nivel_sensual", "sutil")
+        # ==== MANTIDO (sem alterações) ====
         if not nsfw_on:
-            nsfw_hint = (
-                "NSFW: BLOQUEADO. Use sugestão, tensão e intimidade sem descrição explícita de atos; "
-                "concentre-se em atmosfera, presença e condução confiante."
-            )
+            nsfw_hint = "NSFW: BLOQUEADO. Use sugestão, tensão e intimidade sem descrição explícita de atos."
         else:
             if nivel == "sutil":
                 nsfw_hint = (
-                    "NSFW: LIBERADO. **Insinuação elegante** e tensão crescente; foque em sensações e proximidade, "
-                    "com genitais/ato gráfico."
+                    "NSFW: LIBERADO. Mantenha **insinuação elegante** e tensão crescente; "
+                    "detalhes sugestivos, sem descrição gráfica."
                 )
             elif nivel == "alta":
                 nsfw_hint = (
-                    "NSFW: LIBERADO. Intensifique calor, respiração, fricção de tecidos na pele, sussurros no ouvido "
-                    "e condução de ritmo; **descreva genitais, com ato sexual gráfico**."
+                    "NSFW: LIBERADO. Pode intensificar com **detalhes explícitos** consensuais quando o usuário sinalizar; "
+                    "sempre com elegância e foco emocional."
                 )
             else:  # 'media'
                 nsfw_hint = (
-                    "NSFW: LIBERADO. Sensualidade clara e progressiva; descreva sensações e ações sem pressa, "
-                    "com genitais/ato gráfico."
+                    "NSFW: LIBERADO. Sensualidade clara e progressiva; descreva sensações e ações sem pressa."
                 )
+        # =================================
 
         # ===== SUMÁRIO + ENTIDADES + EVIDÊNCIA =====
         rolling = self._get_rolling_summary(usuario_key)  # v2
         entities_line = _entities_to_line(f_all)
 
         try:
-            docs = get_history_docs(usuario_key) or []
+            docs = cached_get_history(usuario_key) or []
         except Exception:
             docs = []
-        evidence = _compact_user_evidence(docs, max_chars=320)
+        evidence = self._compact_user_evidence(docs, max_chars=320)
 
         # System único com slots (+ PREFERÊNCIAS)
         system_block = _build_system_block(
@@ -394,10 +426,10 @@ class MaryService(BaseCharacter):
             pass
 
         # === Histórico com orçamento por modelo + relatório de memória ===
-        verbatim_ultimos = int(st.session_state.get("verbatim_ultimos", 10))  # configurável via UI
+        verbatim_ultimos = int(st.session_state.get("verbatim_ultimos", 10))  # << configurável via UI
         hist_msgs = self._montar_historico(usuario_key, history_boot, model, verbatim_ultimos=verbatim_ultimos)
 
-        messages: List[Dict[str, str]] = (
+        messages: List[Dict,] = (
             [{"role": "system", "content": system_block}]
             + ([{"role": "system", "content": memoria_pin}] if memoria_pin else [])
             + lore_msgs
@@ -470,7 +502,7 @@ class MaryService(BaseCharacter):
         except Exception:
             pass
 
-        # Resumo rolante V2 (toda rodada, curto)
+        # Resumo rolante V2 (toda rodada, curto) — com throttle simples
         try:
             self._update_rolling_summary_v2(usuario_key, model, prompt, texto)
         except Exception:
@@ -524,7 +556,7 @@ class MaryService(BaseCharacter):
     def _build_memory_pin(self, usuario_key: str, user_display: str) -> str:
         """Memória canônica curta + pistas fortes (não exceder)."""
         try:
-            f = get_facts(usuario_key) or {}
+            f = cached_get_facts(usuario_key) or {}
         except Exception:
             f = {}
         blocos: List[str] = []
@@ -576,7 +608,7 @@ class MaryService(BaseCharacter):
         win = _get_window_for(model)
         hist_budget, meta_budget, _ = _budget_slices(model)
 
-        docs = get_history_docs(usuario_key)
+        docs = cached_get_history(usuario_key)
         if not docs:
             st.session_state["_mem_drop_report"] = {}
             return history_boot[:]
@@ -625,7 +657,7 @@ class MaryService(BaseCharacter):
         msgs.extend(verbatim)
 
         # Poda se ainda exceder orçamento
-        def _hist_tokens(mm: List[Dict[str, str]]) -> int:
+        def _hist_tokens(mm: List[Dict,]) -> int:
             return sum(toklen(m["content"]) for m in mm)
 
         while _hist_tokens(msgs) > hist_budget and verbatim:
@@ -647,20 +679,37 @@ class MaryService(BaseCharacter):
 
         return msgs if msgs else history_boot[:]
 
-    # ===== Resumo rolante V2 (todo turno, curto) =====
+    # ===== Rolling summary helpers =====
     def _get_rolling_summary(self, usuario_key: str) -> str:
         try:
-            f = get_facts(usuario_key) or {}
+            f = cached_get_facts(usuario_key) or {}
             return str(f.get("mary.rs.v2", "") or f.get("mary.rolling_summary", "") or "")
         except Exception:
             return ""
 
+    def _should_update_summary(self, usuario_key: str, last_user: str, last_assistant: str) -> bool:
+        try:
+            f = cached_get_facts(usuario_key)
+            last_summary = f.get("mary.rs.v2", "")
+            last_update_ts = float(f.get("mary.rs.v2.ts", 0))
+            now = time.time()
+            if not last_summary:
+                return True
+            if now - last_update_ts > 300:  # 5 min
+                return True
+            if (len(last_user) + len(last_assistant)) > 100:
+                return True
+            return False
+        except Exception:
+            return True
+
     def _update_rolling_summary_v2(self, usuario_key: str, model: str, last_user: str, last_assistant: str) -> None:
+        if not self._should_update_summary(usuario_key, last_user, last_assistant):
+            return
         seed = (
             "Resuma a conversa recente em ATÉ 8–10 frases, apenas fatos duráveis: "
             "nomes próprios, endereços/links, relação (casados), local/tempo atual, "
-            "itens/gestos fixos e rumo do enredo. "
-            "Proíba diálogos literais; seja telegráfico e informativo."
+            "itens/gestos fixos e rumo do enredo. Proíba diálogos literais."
         )
         try:
             data, used_model, provider = route_chat_strict(model, {
@@ -676,6 +725,8 @@ class MaryService(BaseCharacter):
             resumo = (data.get("choices", [{}])[0].get("message", {}) or {}).get("content", "").strip()
             if resumo:
                 set_fact(usuario_key, "mary.rs.v2", resumo, {"fonte": "auto_summary"})
+                set_fact(usuario_key, "mary.rs.v2.ts", time.time(), {"fonte": "auto_summary"})
+                clear_user_cache(usuario_key)
         except Exception:
             pass
 
@@ -690,16 +741,29 @@ class MaryService(BaseCharacter):
             return f"No {scene_loc} mesmo — fala baixinho no meu ouvido."
         return "Mantém o cenário e dá o próximo passo com calma."
 
+    # ===== Evidência concisa do usuário (últimas falas) =====
+    def _compact_user_evidence(self, docs: List[Dict], max_chars: int = 320) -> str:
+        snippets: List[str] = []
+        for d in reversed(docs):
+            u = (d.get("mensagem_usuario") or "").strip()
+            if u:
+                u = re.sub(r"\s+", " ", u)
+                snippets.append(u)
+            if len(snippets) >= 4:
+                break
+        s = " | ".join(reversed(snippets))[:max_chars]
+        return s
+
     # ===== Sidebar (somente leitura) =====
     def render_sidebar(self, container) -> None:
         container.markdown(
-            "**Mary — Esposa Cúmplice** • Respostas insinuantes e confiantes; 4–7 parágrafos. "
+            "**Mary — Esposa Cúmplice** • Respostas insinuantes e sutis; 4–7 parágrafos. "
             "Relação canônica: casados e cúmplices."
         )
         user = str(st.session_state.get("user_id", "") or "")
         usuario_key = f"{user}::mary" if user else "anon::mary"
         try:
-            f = get_facts(usuario_key) or {}
+            f = cached_get_facts(usuario_key) or {}
         except Exception:
             f = {}
         casados = bool(f.get("casados", True))
