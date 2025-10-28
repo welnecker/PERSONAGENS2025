@@ -938,8 +938,9 @@ with st.expander("🔧 Diagnóstico LLM"):
                         {"role": "system", "content": "Você é um ping de diagnóstico. Responda com 'pong'."},
                         {"role": "user", "content": "diga: pong"},
                     ],
-                    max_tokens: 16, temperature: 0.0, top_p: 1.0,
+                    max_tokens=16, temperature=0.0, top_p=1.0,
                 )
+
                 txt = (data.get("choices", [{}])[0].get("message", {}) or {}).get("content", "")
                 st.success(f"{prov} • {used} → {txt!r}")
         except Exception as e:
