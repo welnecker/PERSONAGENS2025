@@ -1,6 +1,5 @@
 # main.py
 from __future__ import annotations
-
 import os
 import sys
 import time
@@ -8,24 +7,25 @@ import hmac
 import hashlib
 import inspect
 import traceback
-import base64
-import re
-import html
 from pathlib import Path
-from typing import Optional, List, Tuple
-
+from typing import Optional, List, Tuple, Dict
 import streamlit as st
+import base64
+import re, html
 
-# ===== Memória longa (garante índices no boot) =====
-from core.memoria_longa import ensure_indexes
-ensure_indexes()
+# ========== BOOT (indexes/paths) ==========
+# Em qualquer ponto de boot do app (ex.: main.py):
+try:
+    from core.memoria_longa import ensure_indexes
+    ensure_indexes()
+except Exception:
+    pass
 
-# ---------- Path / Page ----------
 ROOT = Path(__file__).resolve().parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-# Config inicial da página
+# ========== CONFIG PÁGINA ==========
 st.set_page_config(page_title="PERSONAGENS 2025", page_icon="🎭", layout="centered")
 
 # ===== CSS global (container central + chat + sem vazamento lateral) =====
@@ -65,7 +65,7 @@ except NameError:
         IMG_DIR = Path("./imagem")
         IMG_DIR.mkdir(parents=True, exist_ok=True)
 
-def _encode_image_b64(p: Path) -> str:
+def _encode_file_b64(p: Path) -> str:
     with p.open("rb") as f:
         return base64.b64encode(f.read()).decode("utf-8")
 
@@ -78,8 +78,7 @@ def set_background(image_path: Path, *, darken: float = 0.25, blur_px: int = 0,
         ".jpg": "jpeg", ".jpeg": "jpeg",
         ".png": "png", ".webp": "webp", ".gif": "gif"
     }.get(ext, "jpeg")
-    with image_path.open("rb") as f:
-        b64 = base64.b64encode(f.read()).decode("utf-8")
+    b64 = _encode_file_b64(image_path)
     att = "fixed" if attach_fixed else "scroll"
     darken = max(0.0, min(0.9, float(darken)))
     blur_px = max(0, min(40, int(blur_px)))
@@ -100,7 +99,7 @@ def set_background(image_path: Path, *, darken: float = 0.25, blur_px: int = 0,
     </style>
     """, unsafe_allow_html=True)
 
-# ---------- Gate opcional ----------
+# ========== GATE OPCIONAL (senha) ==========
 def _check_scrypt(pwd: str) -> bool:
     cfg = st.secrets.get("auth", {})
     salt_hex = cfg.get("salt", "")
@@ -157,7 +156,7 @@ def require_password_if_configured(app_name: str = "PERSONAGENS 2025"):
 require_password_if_configured("PERSONAGENS 2025")
 st.title("PERSONAGENS 2025")
 
-# ---------- Carrega secrets → env (antes de importar wrappers/DB) ----------
+# ========== SECRETS → ENV ==========
 def _load_env_from_secrets():
     sec = st.secrets
     mapping = {
@@ -169,26 +168,37 @@ def _load_env_from_secrets():
         "MONGO_CLUSTER":      sec.get("MONGO_CLUSTER", ""),
         "APP_NAME":           sec.get("APP_NAME", "personagens2025"),
         "APP_PUBLIC_URL":     sec.get("APP_PUBLIC_URL", ""),
-        # >>> Mongo como padrão <<<
         "DB_BACKEND":         sec.get("DB_BACKEND", "mongo"),
+        "APP_ENV":            sec.get("APP_ENV", "dev"),  # dev|prod
     }
     for k, v in mapping.items():
         if v and not os.environ.get(k):
             os.environ[k] = str(v)
-
 _load_env_from_secrets()
 
-# ---------- Registry de personagens ----------
+APP_ENV = os.environ.get("APP_ENV", "dev").lower().strip()
+
+# ========== REGISTRY / ROUTER FALLBACKS ==========
+def _safe_error(msg: str, exc: Exception | None = None):
+    """Erro verboso em dev, curto em prod (stack guardado no session_state)."""
+    if APP_ENV == "prod":
+        st.error(msg)
+        if exc:
+            st.session_state["last_traceback"] = traceback.format_exc()
+    else:
+        if exc:
+            st.error(msg + f"\n\n**{exc.__class__.__name__}:** {exc}\n\n```\n{traceback.format_exc()}\n```")
+        else:
+            st.error(msg)
+
 try:
     from characters.registry import get_service, list_characters
 except Exception as e:
-    st.error("Falha ao importar `characters.registry`.\n\n"
-             f"**{e.__class__.__name__}:** {e}\n\n```\n{traceback.format_exc()}\n```")
+    _safe_error("Falha ao importar `characters.registry`.", e)
     st.stop()
 
-# ---------- Router de provedores/modelos ----------
 try:
-    from core.service_router import available_providers, list_models, chat as provider_chat
+    from core.service_router import available_providers, list_models, chat as provider_chat, route_chat_strict
 except Exception:
     def available_providers():
         provs = []
@@ -196,19 +206,13 @@ except Exception:
         provs.append(("Together",   bool(os.environ.get("TOGETHER_API_KEY")), "OK" if os.environ.get("TOGETHER_API_KEY") else "sem chave"))
         return provs
     def list_models(_p: str | None = None):
-        return [
-            "deepseek/deepseek-chat-v3-0324",
-            "anthropic/claude-3.5-haiku",
-            "qwen/qwen3-max",
-            "nousresearch/hermes-3-llama-3.1-405b",
-            "together/meta-llama/Meta-Llama-3.1-405B-Instruct-Turbo",
-            "together/Qwen/Qwen2.5-72B-Instruct",
-            "together/Qwen/QwQ-32B",
-        ]
+        return []  # deixa vazio; vamos injetar forçados com guard-flag
     def provider_chat(model: str, messages: List[dict], **kw):
         raise RuntimeError("service_router indisponível.")
+    def route_chat_strict(model: str, payload: dict):
+        raise RuntimeError("service_router indisponível.")
 
-# ---------- Database helpers ----------
+# ========== DB HELPERS (fallbacks) ==========
 try:
     from core.database import get_backend, set_backend, ping_db, get_col, db_status
 except Exception:
@@ -218,7 +222,7 @@ except Exception:
     def get_col(_name: str): raise RuntimeError("DB indisponível")
     def db_status(): return ("unknown", "core.database ausente")
 
-# --- Força Mongo como padrão se nada tiver sido escolhido explicitamente
+# Força Mongo como padrão se nada tiver sido escolhido explicitamente
 try:
     if os.environ.get("DB_BACKEND", "").strip() == "":
         os.environ["DB_BACKEND"] = "mongo"
@@ -244,20 +248,20 @@ except Exception:
     def get_facts(_u: str): return {}
     def delete_user_history(_u: str): return 0
     def delete_last_interaction(_u: str): return False
-    def delete_all_user_data(_u: str): return {"hist": 0, "state": 0, "eventos": 0, "perfil": 0}
+    def delete_all_user_data(_u: str): return {"hist": 0, "state": 0, "eventos": 0}
     def register_event(*a, **k): ...
     def list_events(_u: str, limit: int = 5): return []
     def save_interaction(*a, **k): ...
     def delete_fact(*a, **k): ...
 
-# ---------- Sidebar: Provedores + DB ----------
+# ========== SIDEBAR: Provedores + DB ==========
 st.sidebar.subheader("🧠 Provedores LLM")
+prov_status = {name: ok for (name, ok, _) in available_providers()}
 for name, ok, detail in available_providers():
     st.sidebar.write(f"- **{name}**: {'✅ OK' if ok else '❌'} ({detail})")
 
 st.sidebar.markdown("---")
 st.sidebar.subheader("🗄️ Banco de Dados")
-
 bk, info = db_status()
 st.sidebar.caption(f"Backend: **{bk}** — {info}")
 
@@ -289,66 +293,92 @@ if choice_backend == "mongo":
             last = col.find_one(sort=[("ts", -1)])
             st.sidebar.success(f"OK (id={r_id}) — last={last}")
         except Exception as e:
-            st.sidebar.error(f"Falha: {e}")
+            _safe_error("Falha no diagnóstico Mongo.", e)
 
 st.sidebar.markdown("---")
 
-# ---------- Estado base ----------
+# ========== ESTADO BASE ==========
 st.session_state.setdefault("user_id", "Janio Donisete")
 st.session_state.setdefault("character", "Mary")
+
+# ----- LISTA DE MODELOS (router + forçados com guard) -----
+FORCED_MODELS = [
+    # já existentes
+    "deepseek/deepseek-chat-v3-0324",
+    "anthropic/claude-3.5-haiku",
+    "qwen/qwen3-max",
+    "nousresearch/hermes-3-llama-3.1-405b",
+    "together/meta-llama/Meta-Llama-3.1-405B-Instruct-Turbo",
+    "together/Qwen/Qwen2.5-72B-Instruct",
+    "together/Qwen/QwQ-32B",
+    "inclusionai/ling-1t",
+
+    # === novos pedidos (OpenRouter) ===
+    "z-ai/glm-4.6",
+    "thedrummer/cydonia-24b-v4.1",
+    "x-ai/grok-4-fast",
+    "moonshotai/kimi-k2-0905",
+    "x-ai/grok-code-fast-1",
+    "google/gemma-3-27b-it",
+    "google/gemini-2.5-flash",
+    "openai/gpt-4o-mini",
+]
+
+def _merge_models() -> List[str]:
+    try:
+        models_router = list_models(None) or []
+    except Exception:
+        models_router = []
+    # De-dup preservando ordem (router primeiro, depois forçados)
+    models = list(dict.fromkeys(models_router + FORCED_MODELS))
+    return models
+
+def _provider_for(model_id: str) -> str:
+    m = (model_id or "").lower()
+    if m.startswith("together/"):
+        return "Together"
+    # Prefixos típicos do catálogo OpenRouter (exibimos como "OpenRouter" no label)
+    if m.startswith(("anthropic/", "qwen/", "nousresearch/", "deepseek/", "inclusionai/",
+                     "z-ai/", "thedrummer/", "x-ai/", "moonshotai/", "google/", "openai/")):
+        return "OpenRouter"
+    return "OpenRouter"  # default
+
+def _has_creds_for(model_id: str) -> bool:
+    prov = _provider_for(model_id)
+    if prov == "Together":
+        return bool(os.environ.get("TOGETHER_API_KEY"))
+    # Todos os demais listados aqui são via OpenRouter
+    return bool(os.environ.get("OPENROUTER_API_KEY"))
+
+def _light_ping_model(model_id: str) -> bool:
+    """Verifica disponibilidade de rota de forma leve (best-effort)."""
+    if "service_router" in sys.modules:
+        try:
+            route_chat_strict(model_id, {
+                "model": model_id,
+                "messages": [
+                    {"role": "system", "content": "ping"},
+                    {"role": "user", "content": "pong?"}
+                ],
+                "max_tokens": 4,
+                "temperature": 0.0
+            })
+            return True
+        except Exception:
+            return False
+    return True  # sem router: não bloquear UI
+
 try:
-    from core.service_router import list_models as _lm_
-    all_models = _lm_(None)
+    all_models = _merge_models()
 except Exception:
-    all_models = [
-        "deepseek/deepseek-chat-v3-0324",
-        "anthropic/claude-3.5-haiku",
-        "qwen/qwen3-max",
-        "nousresearch/hermes-3-llama-3.1-405b",
-        "together/meta-llama/Meta-Llama-3.1-405B-Instruct-Turbo",
-        "together/Qwen/Qwen2.5-72B-Instruct",
-        "together/Qwen/QwQ-32B",
-    ]
-
-# 👉 Força aparecer o modelo do OpenRouter mesmo se o router não listar
-if "inclusionai/ling-1t" not in all_models:
-    all_models.append("inclusionai/ling-1t")
-# 👉 Força aparecer o modelo do OpenRouter mesmo se o router não listar
-if "z-ai/glm-4.6" not in all_models:
-    all_models.append("z-ai/glm-4.6")   
-# 👉 Força aparecer o modelo do OpenRouter mesmo se o router não listar
-if "thedrummer/cydonia-24b-v4.1" not in all_models:
-    all_models.append("thedrummer/cydonia-24b-v4.1")  
-
-# 👉 Força aparecer o modelo do OpenRouter mesmo se o router não listar
-if "x-ai/grok-4-fast" not in all_models:
-    all_models.append("x-ai/grok-4-fast")
-# 👉 Força aparecer o modelo do OpenRouter mesmo se o router não listar
-if "moonshotai/kimi-k2-0905" not in all_models:
-    all_models.append("moonshotai/kimi-k2-0905")
-# 👉 Força aparecer o modelo do OpenRouter mesmo se o router não listar
-if "x-ai/grok-code-fast-1" not in all_models:
-    all_models.append("x-ai/grok-code-fast-1") 
-
-# 👉 Força aparecer o modelo do OpenRouter mesmo se o router não listar
-if "google/gemma-3-27b-it" not in all_models:
-    all_models.append("google/gemma-3-27b-it")
-
-# 👉 Força aparecer o modelo do OpenRouter mesmo se o router não listar
-if "google/gemini-2.5-flash" not in all_models:
-    all_models.append("google/gemini-2.5-flash")
-
-# 👉 Força aparecer o modelo do OpenRouter mesmo se o router não listar
-if "openai/gpt-4o-mini" not in all_models:
-    all_models.append("openai/gpt-4o-mini")
-
+    all_models = FORCED_MODELS[:]
 
 st.session_state.setdefault("model", (all_models[0] if all_models else "deepseek/deepseek-chat-v3-0324"))
 st.session_state.setdefault("history", [])  # List[Tuple[str, str]]
 st.session_state.setdefault("history_loaded_for", "")
 st.session_state.setdefault("_active_key", "")  # <- para detectar troca de thread
 
-# ---------- Controles topo ----------
+# ========== CONTROLES TOPO ==========
 c1, c2 = st.columns([2, 2])
 with c1:
     st.text_input("👤 Usuário", key="user_id", placeholder="Seu nome ou identificador")
@@ -357,28 +387,52 @@ with c2:
     default_idx = names.index("Mary") if "Mary" in names else 0
     st.selectbox("🎭 Personagem", names, index=default_idx, key="character")
 
-st.selectbox("🧠 Modelo", all_models, key="model")
+def _label_model(mid: str) -> str:
+    prov = _provider_for(mid)
+    tag = ""
+    if mid not in (list_models(None) or []):
+        tag = " • forçado"
+    return f"{prov} • {mid}{tag}"
+
+_prev_model = st.session_state.get("_last_model_id", st.session_state.get("model"))
+sel = st.selectbox(
+    "🧠 Modelo",
+    all_models,
+    index=all_models.index(st.session_state["model"]) if st.session_state["model"] in all_models else 0,
+    format_func=_label_model,
+    key="model"
+)
+if sel != _prev_model:
+    if not _has_creds_for(sel):
+        st.warning("Este modelo requer credenciais do provedor correspondentes. Revertendo para o anterior.")
+        st.session_state["model"] = _prev_model
+    else:
+        ok = _light_ping_model(sel)
+        if not ok:
+            st.warning("Modelo não disponível no roteador atual. Revertendo.")
+            st.session_state["model"] = _prev_model
+        else:
+            st.session_state["_last_model_id"] = sel
 
 def render_assistant_bubbles(markdown_text: str) -> None:
-    """Renderiza mensagens da assistente em blocos azuis; preserva ```code```."""
     if not markdown_text:
         return
-    parts = re.split(r"(```[\s\S]*?```)", markdown_text)
+    parts = re.split(r"(```[\\s\\S]*?```)", markdown_text)
     for part in parts:
         if part.startswith("```") and part.endswith("```"):
             st.markdown(part)
         else:
-            paras = [p.strip() for p in re.split(r"\n\s*\n", part) if p.strip()]
+            paras = [p.strip() for p in re.split(r"\\n\\s*\\n", part) if p.strip()]
             for p in paras:
-                safe = html.escape(p).replace("\n", "<br>")
+                safe = html.escape(p).replace("\\n", "<br>")
                 st.markdown(f"<div class='assistant-paragraph'>{safe}</div>", unsafe_allow_html=True)
 
-# ---------- Helpers de histórico ----------
+# ========== HISTÓRICO HELPERS ==========
 def _user_keys_for_history(user_id: str, character_name: str) -> List[str]:
     ch = (character_name or "").strip().lower()
     primary = f"{user_id}::{ch}"
     if ch == "mary":
-        return [primary, user_id]  # inclui legado
+        return [primary, user_id]
     return [primary]
 
 def _reload_history(force: bool = False):
@@ -401,9 +455,9 @@ def _reload_history(force: bool = False):
         st.session_state["history"] = hist
         st.session_state["history_loaded_for"] = key
     except Exception as e:
-        st.sidebar.warning(f"Não foi possível carregar o histórico: {e}")
+        _safe_error("Não foi possível carregar o histórico.", e)
 
-# --- Boot da First Message (somente se o DB estiver vazio) ---
+# ========== Boot da First Message ==========
 try:
     user_id = str(st.session_state.get("user_id", "")).strip()
     char    = str(st.session_state.get("character", "")).strip()
@@ -433,9 +487,9 @@ try:
                 except Exception:
                     pass
 except Exception as e:
-    st.sidebar.warning(f"Boot da First Message falhou: {e}")
+    _safe_error("Boot da primeira mensagem falhou.", e)
 
-# ---------- Troca de thread ao mudar usuário/personagem ----------
+# ========== Troca de thread (usuário/personagem) ==========
 _current_active = f"{st.session_state['user_id']}::{str(st.session_state['character']).lower()}"
 if st.session_state["_active_key"] != _current_active:
     st.session_state["_active_key"] = _current_active
@@ -443,7 +497,7 @@ if st.session_state["_active_key"] != _current_active:
     st.session_state["history_loaded_for"] = ""
     _reload_history(force=True)
 
-# --- Auto-seed: Mary (Esposa Cúmplice) ---
+# ========== Auto-seed: Mary (Esposa Cúmplice) ==========
 try:
     _user = str(st.session_state.get("user_id", "")).strip()
     _char = str(st.session_state.get("character", "")).strip().lower()
@@ -467,26 +521,26 @@ try:
             st.session_state["history_loaded_for"] = ""
             _reload_history(force=True)
 except Exception as _e:
-    st.sidebar.warning(f"Auto-seed Mary falhou: {_e}")
+    _safe_error("Auto-seed Mary falhou.", _e)
 
-# ---------- Instancia serviço ----------
+# ========== Instancia serviço ==========
 try:
     service = get_service(st.session_state["character"])
 except Exception as e:
-    st.error(f"Falha ao instanciar serviço da personagem: {e}\n\n```\n{traceback.format_exc()}\n```")
+    _safe_error("Falha ao instanciar serviço da personagem.", e)
     st.stop()
 
-# Sidebar específico da personagem
+# ========== Sidebar específico da personagem ==========
 render_sidebar = getattr(service, "render_sidebar", None)
 if callable(render_sidebar):
     try:
         render_sidebar(st.sidebar)
     except Exception as e:
-        st.sidebar.error(f"Erro no sidebar de {service.title}:\n\n**{e.__class__.__name__}:** {e}\n\n```\n{traceback.format_exc()}\n```")
+        _safe_error(f"Erro no sidebar de {getattr(service, 'display_name', 'personagem')}.", e)
 else:
     st.sidebar.caption("Sem preferências para esta personagem.")
 
-# ---------- Sidebar: Manutenção ----------
+# ========== Sidebar: Manutenção ==========
 st.sidebar.markdown("---")
 st.sidebar.subheader("🧹 Manutenção")
 
@@ -495,15 +549,15 @@ def _force_reload_history_ui():
     st.session_state["history_loaded_for"] = ""
     _reload_history(force=True)
 
-_user_id = str(st.session_state.get("user_id", ""))
-_char    = str(st.session_state.get("character", "")).strip().lower()
-_key_primary = f"{_user_id}::{_char}" if _user_id and _char else _user_id
-_key_legacy  = _user_id if _char == "mary" else None
-
 colA, colB = st.sidebar.columns(2)
 
 if colA.button("⏪ Apagar último turno"):
     try:
+        _user_id = str(st.session_state.get("user_id", ""))
+        _char    = str(st.session_state.get("character", "")).strip().lower()
+        _key_primary = f"{_user_id}::{_char}" if _user_id and _char else _user_id
+        _key_legacy  = _user_id if _char == "mary" else None
+
         deleted = False
         try:
             deleted = delete_last_interaction(_key_primary)
@@ -521,10 +575,15 @@ if colA.button("⏪ Apagar último turno"):
         else:
             st.sidebar.info("Não havia interações para apagar.")
     except Exception as e:
-        st.sidebar.error(f"Falha ao apagar último turno: {e}")
+        _safe_error("Falha ao apagar último turno.", e)
 
 if colB.button("🔄 Resetar histórico"):
     try:
+        _user_id = str(st.session_state.get("user_id", ""))
+        _char    = str(st.session_state.get("character", "")).strip().lower()
+        _key_primary = f"{_user_id}::{_char}" if _user_id and _char else _user_id
+        _key_legacy  = _user_id if _char == "mary" else None
+
         total = 0
         try:
             total += int(delete_user_history(_key_primary) or 0)
@@ -539,10 +598,15 @@ if colB.button("🔄 Resetar histórico"):
         _force_reload_history_ui()
         st.rerun()
     except Exception as e:
-        st.sidebar.error(f"Falha ao resetar histórico: {e}")
+        _safe_error("Falha ao resetar histórico.", e)
 
 if st.sidebar.button("🧨 Apagar TUDO (chat + memórias)"):
     try:
+        _user_id = str(st.session_state.get("user_id", ""))
+        _char    = str(st.session_state.get("character", "")).strip().lower()
+        _key_primary = f"{_user_id}::{_char}" if _user_id and _char else _user_id
+        _key_legacy  = _user_id if _char == "mary" else None
+
         try:
             delete_all_user_data(_key_primary)
         except Exception:
@@ -556,9 +620,21 @@ if st.sidebar.button("🧨 Apagar TUDO (chat + memórias)"):
         _force_reload_history_ui()
         st.rerun()
     except Exception as e:
-        st.sidebar.error(f"Falha ao apagar TUDO: {e}")
+        _safe_error("Falha ao apagar TUDO.", e)
 
-# ---------- Sidebar: Memória Canônica ----------
+# Botão de limpar cache (dados/recursos)
+if st.sidebar.button("🧹 Limpar cache (dados/recursos)"):
+    try:
+        st.cache_data.clear()
+    except Exception:
+        pass
+    try:
+        st.cache_resource.clear()
+    except Exception:
+        pass
+    st.sidebar.success("Caches limpos. (Se algo estranho persistir, atualize a página.)")
+
+# ========== Sidebar: Memória Canônica ==========
 st.sidebar.subheader("🧠 Memória Canônica")
 
 _user_id = str(st.session_state.get("user_id", ""))
@@ -569,7 +645,7 @@ facts = {}
 try:
     facts = get_facts(user_key_primary) or {}
 except Exception as e:
-    st.sidebar.warning(f"Não foi possível ler memórias: {e}")
+    _safe_error("Não foi possível ler memórias.", e)
 
 if facts:
     for k, v in facts.items():
@@ -592,7 +668,7 @@ with st.sidebar.form("form_add_fact", clear_on_submit=True):
                 st.session_state["history_loaded_for"] = ""
                 st.rerun()
             except Exception as e:
-                st.error(f"Falha ao salvar: {e}")
+                _safe_error("Falha ao salvar memória.", e)
 
 if facts:
     with st.sidebar.form("form_del_fact", clear_on_submit=True):
@@ -606,11 +682,10 @@ if facts:
                 st.session_state["history_loaded_for"] = ""
                 st.rerun()
             except Exception as e:
-                st.error(f"Falha ao remover: {e}")
+                _safe_error("Falha ao remover memória.", e)
 
 with st.sidebar.expander("🗂️ Memória por personagem"):
     try:
-        from characters.registry import list_characters
         for name in list_characters():
             k = f"{_user_id}::{name.lower()}"
             try:
@@ -640,15 +715,17 @@ with st.sidebar.expander("⚡ Seed rápido: Laura + Janio", expanded=False):
             st.session_state["history_loaded_for"] = ""
             st.rerun()
         except Exception as e:
-            st.error(f"Falha ao aplicar seed: {e}")
+            _safe_error("Falha ao aplicar seed Laura.", e)
 
 with st.sidebar.expander("🔓 NSFW rápido: Laura", expanded=False):
+    u2 = (st.session_state.get("user_id") or "Janio Donisete").strip()
+    target2 = f"{u2}::laura"
     if st.button("Ativar NSFW para Laura"):
         try:
-            set_fact(target, "nsfw_override", "on", {"fonte": "seed"})
+            set_fact(target2, "nsfw_override", "on", {"fonte": "seed"})
             st.success("NSFW ON para Laura.")
         except Exception as e:
-            st.error(f"Falha ao ativar NSFW: {e}")
+            _safe_error("Falha ao ativar NSFW para Laura.", e)
 
 # --- Seed rápido: Mary (Esposa Cúmplice) ---
 with st.sidebar.expander("⚡ Seed rápido: Mary (Esposa Cúmplice)", expanded=False):
@@ -666,7 +743,7 @@ with st.sidebar.expander("⚡ Seed rápido: Mary (Esposa Cúmplice)", expanded=F
                 st.session_state["history_loaded_for"] = ""
                 st.rerun()
             except Exception as e:
-                st.error(f"Falha ao aplicar seed: {e}")
+                _safe_error("Falha ao aplicar seed Mary.", e)
     with col2:
         if st.button("Limpar 'casados'"):
             try:
@@ -675,9 +752,9 @@ with st.sidebar.expander("⚡ Seed rápido: Mary (Esposa Cúmplice)", expanded=F
                 st.session_state["history_loaded_for"] = ""
                 st.rerun()
             except Exception as e:
-                st.error(f"Falha ao limpar: {e}")
+                _safe_error("Falha ao limpar 'casados'.", e)
 
-# ---------- Sidebar: NSFW & Primeira vez ----------
+# ========== Sidebar: NSFW & Primeira vez ==========
 st.sidebar.markdown("---")
 st.sidebar.subheader("🔞 NSFW & Primeira vez")
 
@@ -717,7 +794,7 @@ if c_on.button("🔓 Liberar NSFW"):
         st.session_state["history_loaded_for"] = ""
         st.rerun()
     except Exception as e:
-        st.sidebar.error(f"Falha ao liberar NSFW: {e}")
+        _safe_error("Falha ao liberar NSFW.", e)
 
 if c_off.button("🔒 Bloquear NSFW"):
     try:
@@ -726,9 +803,9 @@ if c_off.button("🔒 Bloquear NSFW"):
         st.session_state["history_loaded_for"] = ""
         st.rerun()
     except Exception as e:
-        st.sidebar.error(f"Falha ao bloquear NSFW: {e}")
+        _safe_error("Falha ao bloquear NSFW.", e)
 
-# ---------- Sidebar: Plano de fundo ----------
+# ========== Sidebar: Plano de fundo ==========
 st.sidebar.markdown("---")
 st.sidebar.subheader("🖼️ Plano de fundo")
 
@@ -746,6 +823,18 @@ st.session_state.setdefault("bg_fixed", True)
 st.session_state.setdefault("bg_size", "cover")
 
 bg_sel = st.sidebar.selectbox("Imagem", choices, index=choices.index(st.session_state["bg_file"]))
+bg_path = (IMG_DIR / bg_sel) if bg_sel != "(nenhuma)" else None
+
+# Preview + aviso p/ arquivos muito grandes
+if bg_path and bg_path.exists():
+    try:
+        size_mb = bg_path.stat().st_size / (1024*1024)
+        st.sidebar.image(str(bg_path), caption=f"Preview ({size_mb:.2f} MB)", use_container_width=True)
+        if size_mb > 3.5:
+            st.sidebar.warning("Imagem grande pode deixar o app pesado. Considere comprimir/redimensionar.")
+    except Exception:
+        pass
+
 bg_darken = st.sidebar.slider("Escurecer overlay (%)", 0, 90, st.session_state["bg_darken"])
 bg_blur = st.sidebar.slider("Desfoque (px)", 0, 20, st.session_state["bg_blur"])
 bg_fixed = st.sidebar.checkbox("Fundo fixo", value=st.session_state["bg_fixed"])
@@ -757,43 +846,47 @@ st.session_state["bg_blur"] = bg_blur
 st.session_state["bg_fixed"] = bg_fixed
 st.session_state["bg_size"] = bg_size
 
-if bg_sel != "(nenhuma)":
+if bg_path and bg_path.exists():
     set_background(
-        IMG_DIR / bg_sel,
+        bg_path,
         darken=bg_darken/100.0,
         blur_px=bg_blur,
         attach_fixed=bg_fixed,
         size_mode=bg_size,
     )
 
-# ---------- Preferências rápidas (Mary) ----------
+# ========== Preferências rápidas (Mary) ==========
 st.sidebar.markdown("---")
 st.sidebar.subheader("🎚️ Preferências (Mary)")
 if _char == "mary":
-    def _idx(opt_list, value, default):
-        try:
-            return opt_list.index(value)
-        except Exception:
-            return default
-    nivel_opts = ["sutil", "media", "alta"]
-    ritmo_opts = ["lento", "normal", "rapido"]
+    nivel_opts = ["sutil","media","alta"]
+    ritmo_opts = ["lento","normal","rapido"]
     tam_opts   = ["curta","media","longa"]
-    nivel = st.sidebar.selectbox("Nível sensual", nivel_opts,
-                                 index=_idx(nivel_opts, str(facts.get("mary.pref.nivel_sensual","sutil")).lower(), 0))
-    ritmo = st.sidebar.selectbox("Ritmo", ritmo_opts,
-                                 index=_idx(ritmo_opts, str(facts.get("mary.pref.ritmo","lento")).lower(), 0))
-    tam   = st.sidebar.selectbox("Tamanho da resposta", tam_opts,
-                                 index=_idx(tam_opts, str(facts.get("mary.pref.tamanho_resposta","media")).lower(), 1))
+
+    def _idx_safe(opts: List[str], val: str, default_idx: int) -> int:
+        try:
+            return opts.index(val.lower())
+        except Exception:
+            return default_idx
+
+    nivel_cur = str(facts.get("mary.pref.nivel_sensual","sutil")).lower() if facts else "sutil"
+    ritmo_cur = str(facts.get("mary.pref.ritmo","lento")).lower() if facts else "lento"
+    tam_cur   = str(facts.get("mary.pref.tamanho_resposta","media")).lower() if facts else "media"
+
+    nivel = st.sidebar.selectbox("Nível sensual", nivel_opts, index=_idx_safe(nivel_opts, nivel_cur, 0))
+    ritmo = st.sidebar.selectbox("Ritmo", ritmo_opts, index=_idx_safe(ritmo_opts, ritmo_cur, 0))
+    tam   = st.sidebar.selectbox("Tamanho da resposta", tam_opts, index=_idx_safe(tam_opts, tam_cur, 1))
     if st.sidebar.button("💾 Salvar preferências"):
         try:
             set_fact(user_key, "mary.pref.nivel_sensual", nivel, {"fonte":"prefs"})
             set_fact(user_key, "mary.pref.ritmo", ritmo, {"fonte":"prefs"})
             set_fact(user_key, "mary.pref.tamanho_resposta", tam, {"fonte":"prefs"})
             st.sidebar.success("Preferências salvas.")
+            st.rerun()
         except Exception as e:
-            st.sidebar.error(f"Falha ao salvar preferências: {e}")
+            _safe_error("Falha ao salvar preferências.", e)
 
-# ---------- Janela de contexto ----------
+# ========== Janela de contexto ==========
 st.sidebar.markdown("---")
 st.sidebar.subheader("🧾 Janela de contexto")
 st.session_state.setdefault("verbatim_ultimos", 10)
@@ -801,10 +894,9 @@ st.session_state["verbatim_ultimos"] = st.sidebar.slider(
     "Turnos verbatim (pares recentes)", 4, 18, st.session_state["verbatim_ultimos"]
 )
 
-# ---------- Carrega histórico ----------
+# ========== Carrega & Render histórico ==========
 _reload_history()
 
-# ---------- Render histórico ----------
 _last_role, _last_content = None, None
 for role, content in st.session_state["history"]:
     if role == _last_role and content == _last_content:
@@ -817,24 +909,43 @@ for role, content in st.session_state["history"]:
         else:
             st.markdown(content)
 
-# ---------- LLM Ping ----------
+# ========== LLM Ping ==========
 with st.expander("🔧 Diagnóstico LLM"):
-    if st.button("Ping modelo atual"):
+    can_ping = _has_creds_for(st.session_state["model"])
+    if not can_ping:
+        st.caption("Sem credenciais para o provedor do modelo atual — ping desabilitado.")
+    if st.button("Ping modelo atual", disabled=not can_ping):
         try:
-            data, used, prov = provider_chat(
-                st.session_state["model"],
-                messages=[
-                    {"role": "system", "content": "Você é um ping de diagnóstico. Responda com 'pong'."},
-                    {"role": "user", "content": "diga: pong"},
-                ],
-                max_tokens=16, temperature=0.0, top_p=1.0,
-            )
-            txt = (data.get("choices", [{}])[0].get("message", {}) or {}).get("content", "")
-            st.success(f"{prov} • {used} → {txt!r}")
+            try:
+                from core.service_router import route_chat_strict as _route
+                data = _route(
+                    st.session_state["model"],
+                    {
+                        "model": st.session_state["model"],
+                        "messages": [
+                            {"role": "system", "content": "Você é um ping de diagnóstico. Responda com 'pong'."},
+                            {"role": "user", "content": "diga: pong"},
+                        ],
+                        "max_tokens": 16, "temperature": 0.0, "top_p": 1.0,
+                    }
+                )[0]
+                txt = (data.get("choices", [{}])[0].get("message", {}) or {}).get("content", "")
+                st.success(f"{st.session_state['model']} → {txt!r}")
+            except Exception:
+                data, used, prov = provider_chat(
+                    st.session_state["model"],
+                    messages=[
+                        {"role": "system", "content": "Você é um ping de diagnóstico. Responda com 'pong'."},
+                        {"role": "user", "content": "diga: pong"},
+                    ],
+                    max_tokens: 16, temperature: 0.0, top_p: 1.0,
+                )
+                txt = (data.get("choices", [{}])[0].get("message", {}) or {}).get("content", "")
+                st.success(f"{prov} • {used} → {txt!r}")
         except Exception as e:
-            st.error(f"LLM ping: {e}")
+            _safe_error("LLM ping falhou.", e)
 
-# ---------- Helper de chamada segura ----------
+# ========== Helper de chamada segura ==========
 def _safe_reply_call(_service, *, user: str, model: str, prompt: str) -> str:
     st.session_state["prompt"] = prompt
     fn = getattr(_service, "reply", None)
@@ -920,9 +1031,12 @@ if _has_job and not st.session_state.get("_is_generating"):
                     prompt=final_prompt,
                 )
             except Exception as e:
-                import traceback as _tb
-                tb = _tb.format_exc()
-                text = f"Erro durante a geração:\n\n**{e.__class__.__name__}** — {e}\n\n```\n{tb}\n```"
+                tb = traceback.format_exc()
+                if APP_ENV == "prod":
+                    text = "❌ Ocorreu um erro de geração. Tente novamente em instantes."
+                    st.session_state["last_traceback"] = tb
+                else:
+                    text = f"Erro durante a geração:\n\n**{e.__class__.__name__}** — {e}\n\n```\n{tb}\n```"
 
         # Append garantido
         if text:
@@ -940,25 +1054,3 @@ if _has_job and not st.session_state.get("_is_generating"):
         st.session_state["_pending_auto"] = False
         st.session_state["_job_uid"] = None
         st.session_state["_is_generating"] = False
-
-# ---------- Rodapé fixo: botões auxiliares ----------
-footer = st.empty()
-with footer:
-    st.divider()
-    cols = st.columns(2)
-    with cols[0]:
-        st.button(
-            "🔁 Continuar",
-            help="Prossegue a cena do ponto atual, sem mudar o local salvo.",
-            on_click=lambda: st.session_state.__setitem__("_cont_clicked", True),
-            use_container_width=True,
-            key="continue_bottom",
-        )
-    with cols[1]:
-        st.button(
-            "🧾 Recap curto",
-            help="Resumo telegráfico: nomes, locais/tempo atual, decisões e rumo do enredo.",
-            on_click=lambda: st.session_state.__setitem__("_recap_clicked", True),
-            use_container_width=True,
-            key="recap_bottom",
-        )
