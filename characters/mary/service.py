@@ -363,30 +363,33 @@ class MaryService(BaseCharacter):
         st.session_state["mary_attr_idx"] = idx
         foco = pool[idx]
 
-        # NSFW por usuário com nuance de preferência
+        # NSFW por usuário com nuance de preferência (seguro)
         try:
             nsfw_on = bool(nsfw_enabled(usuario_key))
         except Exception:
             nsfw_on = False
 
         nivel = prefs.get("nivel_sensual", "sutil")
-        # ==== MANTIDO (sem alterações) ====
         if not nsfw_on:
-            nsfw_hint = "NSFW: BLOQUEADO. Use sugestão, tensão e intimidade sem descrição explícita de atos."
+            nsfw_hint = (
+                "NSFW: BLOQUEADO. Use sugestão, tensão e intimidade sem descrição explícita de atos; "
+                "concentre-se em atmosfera, presença e condução confiante."
+            )
         else:
             if nivel == "sutil":
                 nsfw_hint = (
-                    "NSFW: LIBERADO. Mantenha **insinuação elegante** e tensão crescente; "
-                    "detalhes sugestivos, sem descrição gráfica."
+                    "NSFW: LIBERADO. **Insinuação elegante** e tensão crescente; foque em sensações e proximidade, "
+                    "com genitais/ato gráfico."
                 )
             elif nivel == "alta":
                 nsfw_hint = (
-                    "NSFW: LIBERADO. Pode intensificar com **detalhes explícitos** consensuais quando o usuário sinalizar; "
-                    "sempre com elegância e foco emocional."
+                    "NSFW: LIBERADO. Intensifique descrição corporal, sensorial, pêlos pubianos, membro grosso, beijos de língua, mãos na bundas, grêlo pulsante, buceta molhada de tesão "
+                    "e condução de ritmo; **descreva genitais, com ato sexual gráfico**."
                 )
             else:  # 'media'
                 nsfw_hint = (
-                    "NSFW: LIBERADO. Sensualidade clara e progressiva; descreva sensações e ações sem pressa."
+                    "NSFW: LIBERADO. Sensualidade clara e progressiva; descreva sensações e ações sem pressa, demonstrar desejo sexual, sedução, vontade de prosseguir carícias, sensorial "
+                    "com genitais/ato gráfico."
                 )
         # =================================
 
