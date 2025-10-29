@@ -742,6 +742,46 @@ if st.sidebar.button("🧹 Limpar cache (dados/recursos)"):
         pass
     st.sidebar.success("Caches limpos. (Se algo estranho persistir, atualize a página.)")
 
+# Botão de forçar atualização da mensagem inicial
+if st.sidebar.button("🔄 Atualizar Mensagem Inicial"):
+    try:
+        _user_id = str(st.session_state.get("user_id", ""))
+        _char    = str(st.session_state.get("character", "")).strip().lower()
+        _key_primary = f"{_user_id}::{_char}" if _user_id and _char else _user_id
+        _key_legacy  = _user_id if _char == "mary" else None
+        
+        # Deletar histórico (ambas as chaves)
+        total = 0
+        try:
+            total += int(delete_user_history(_key_primary) or 0)
+        except Exception:
+            pass
+        if _key_legacy:
+            try:
+                total += int(delete_user_history(_key_legacy) or 0)
+            except Exception:
+                pass
+        
+        # Limpar cache
+        try:
+            st.cache_data.clear()
+        except Exception:
+            pass
+        try:
+            st.cache_resource.clear()
+        except Exception:
+            pass
+        
+        # Forçar reload
+        st.session_state["history"] = []
+        st.session_state["history_loaded_for"] = ""
+        
+        st.sidebar.success(f"✅ Mensagem inicial atualizada! ({total} itens deletados)")
+        st.rerun()
+    except Exception as e:
+        _safe_error("Falha ao atualizar mensagem inicial.", e)
+
+
 # ========== Sidebar: Memória Canônica ==========
 st.sidebar.subheader("🧠 Memória Canônica")
 
