@@ -289,6 +289,13 @@ def _robust_chat_call(model: str, messages: List[Dict[str, str]], *,
             if tools:
                 payload["tools"] = tools
             return route_chat_strict(model, payload)
+            # JSON Mode → response_format=json_object
+            if st.session_state.get("json_mode_on", False):
+                payload["response_format"] = {"type": "json_object"}
+            # Together LoRA Adapter
+            adapter_id = (st.session_state.get("together_lora_id") or "").strip()
+            if adapter_id and (model or "").startswith("together/"):
+                payload["adapter_id"] = adapter_id
         except Exception as e:
             last_err = str(e)
             if _looks_like_cloudflare_5xx(last_err) or "OpenRouter 502" in last_err:
@@ -305,6 +312,11 @@ def _robust_chat_call(model: str, messages: List[Dict[str, str]], *,
                 if tools:
                     payload_fb["tools"] = tools
                 return route_chat_strict(fb, payload_fb)
+                if st.session_state.get("json_mode_on", False):
+                    payload_fb["response_format"] = {"type": "json_object"}
+                adapter_id = (st.session_state.get("together_lora_id") or "").strip()
+                if adapter_id and (fb or "").startswith("together/"):
+                    payload_fb["adapter_id"] = adapter_id
             except Exception as e2:
                 last_err = str(e2)
     synthetic = {
@@ -535,6 +547,7 @@ class MaryService(BaseCharacter):
         iteration = 0
         texto = ""
         
+        tool_calls = []
         while iteration < max_iterations:
             iteration += 1
             
@@ -598,9 +611,8 @@ class MaryService(BaseCharacter):
             # (o modelo vai processar os resultados das tools e gerar resposta final)
         
         # Aviso se atingiu limite de iterações
-        if iteration >= max_iterations and tool_calls:
+        if iteration >= max_iterations and st.session_state.get("tool_calling_on", False):
             st.warning("⚠️ Limite de iterações de Tool Calling atingido. Resposta pode estar incompleta.")
-
         # Ultra IA (opcional): writer -> critic -> polisher
         try:
             if bool(st.session_state.get("ultra_ia_on", False)) and texto:
