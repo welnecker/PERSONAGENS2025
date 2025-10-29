@@ -414,20 +414,105 @@ if sel != _prev_model:
         else:
             st.session_state["_last_model_id"] = sel
 
+
+
+def _save_json_response_to_mongo(data: dict, *, user: str, personagem: str, modelo: str) -> None:
+    """
+    Salva a resposta JSON estruturada no MongoDB.
+    Requer chaves em st.secrets: MONGO_USER, MONGO_PASS, MONGO_CLUSTER.
+    Banco: roleplay_mary | Coleção: interacoes
+    """
+    try:
+        mongo_user = st.secrets.get("MONGO_USER", "")
+        mongo_pass = st.secrets.get("MONGO_PASS", "")
+        mongo_cluster = st.secrets.get("MONGO_CLUSTER", "")
+        if not (mongo_user and mongo_pass and mongo_cluster):
+            st.warning("⚠️ Credenciais do Mongo ausentes em st.secrets.")
+            return
+        uri = f"mongodb+srv://{mongo_user}:{mongo_pass}@{mongo_cluster}/?retryWrites=true&w=majority"
+        client = MongoClient(uri)
+        db = client["roleplay_mary"]
+        coll = db["interacoes"]
+        doc = {
+            "usuario": user,
+            "personagem": personagem,
+            "fala": (data.get("fala") or "").strip(),
+            "pensamento": (data.get("pensamento") or "").strip(),
+            "acao": (data.get("acao") or "").strip(),
+            "meta": (data.get("meta") or "").strip(),
+            "timestamp": datetime.now().isoformat(timespec="seconds"),
+            "modelo": modelo,
+            "modo_json": True,
+        }
+        coll.insert_one(doc)
+    except Exception as e:
+        st.error(f"❌ Erro ao salvar no MongoDB: {e}")
+
+
 def render_assistant_bubbles(markdown_text: str) -> None:
+    """
+    Renderiza respostas da assistente. Se vier JSON válido (schema: fala/pensamento/acao/meta),
+    formata cada parte com estilos próprios; caso contrário, mantém o renderer Markdown existente.
+    """
     if not markdown_text:
         return
-    parts = re.split(r"(```[\\s\\S]*?```)", markdown_text)
+
+    # 1) Tenta JSON estruturado
+    try:
+        import json, html
+        data = json.loads(markdown_text)
+        if isinstance(data, dict) and ("fala" in data or "pensamento" in data or "acao" in data or "meta" in data):
+            fala = str(data.get("fala", "") or "").strip()
+            pensamento = str(data.get("pensamento", "") or "").strip()
+            acao = str(data.get("acao", "") or "").strip()
+            meta = str(data.get("meta", "") or "").strip()
+
+            # Fala (principal)
+            if fala:
+                safe_fala = html.escape(fala).replace("\n", "<br>")
+                st.markdown(f"<div class='assistant-paragraph'><b>{safe_fala}</b></div>", unsafe_allow_html=True)
+
+            # Pensamento (itálico e discreto)
+            if pensamento:
+                safe_pense = html.escape(pensamento).replace("\n", "<br>")
+                st.markdown(f"<div class='assistant-paragraph'><em>{safe_pense}</em></div>", unsafe_allow_html=True)
+
+            # Ação (legenda discreta)
+            if acao:
+                safe_acao = html.escape(acao).replace("\n", "<br>")
+                st.caption(safe_acao)
+
+            # Meta/comentários (muito discreto)
+            if meta:
+                safe_meta = html.escape(meta).replace("\n", "<br>")
+                st.caption(safe_meta)
+
+            # Salvar no MongoDB (se credenciais existirem)
+            try:
+                _user = st.session_state.get("user_name") or st.session_state.get("usuario") or "desconhecido"
+                _person = "Mary"
+                _model = st.session_state.get("modelo") or st.session_state.get("current_model") or "desconhecido"
+                _save_json_response_to_mongo(data, user=_user, personagem=_person, modelo=_model)
+            except Exception as _e:
+                # Não bloquear a UI por erro de log
+                pass
+
+            return
+    except Exception:
+        pass
+
+    # 2) Fallback para o renderer original (Markdown por parágrafo e blocos de código)
+    parts = re.split(r"(```[\s\S]*?```)", markdown_text)
     for part in parts:
         if part.startswith("```") and part.endswith("```"):
             st.markdown(part)
         else:
-            paras = [p.strip() for p in re.split(r"\\n\\s*\\n", part) if p.strip()]
+            paras = [p.strip() for p in re.split(r"\n\s*\n", part) if p.strip()]
             for p in paras:
-                safe = html.escape(p).replace("\\n", "<br>")
+                import html as _html
+                safe = _html.escape(p).replace("\n", "<br>")
                 st.markdown(f"<div class='assistant-paragraph'>{safe}</div>", unsafe_allow_html=True)
 
-# ========== HISTÓRICO HELPERS ==========
 def _user_keys_for_history(user_id: str, character_name: str) -> List[str]:
     ch = (character_name or "").strip().lower()
     primary = f"{user_id}::{ch}"
