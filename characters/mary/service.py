@@ -14,6 +14,54 @@ from core.repositories import (
     get_facts, get_fact, last_event, set_fact
 )
 from core.tokens import toklen
+import json
+# === Tool Calling: definição de ferramentas disponíveis para a Mary ===
+# Você pode ampliar livremente esta lista conforme precisar.
+TOOLS = [
+    {
+        "type": "function",
+        "function": {
+            "name": "get_memory_pin",
+            "description": "Retorna fatos canônicos curtos do casal e entidades salvas (linha compacta).",
+            "parameters": {"type": "object", "properties": {}, "required": []}
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "set_fact",
+            "description": "Salva ou atualiza um fato canônico (chave/valor) para Mary.",
+            "parameters": {
+                "type": "object",
+                "properties": {"key": {"type": "string"}, "value": {"type": "string"}},
+                "required": ["key", "value"]
+            }
+        }
+    },
+]
+
+def _exec_tool_call(self, name: str, args: dict, usuario_key: str) -> str:
+    """
+    Execução das ferramentas chamadas via Tool Calling.
+    Retorna SEMPRE string (conteúdo que será repassado ao modelo como `tool` message).
+    """
+    try:
+        if name == "get_memory_pin":
+            return self._build_memory_pin(usuario_key, st.session_state.get("user_id","") or "")
+        if name == "set_fact":
+            k = (args or {}).get("key", "")
+            v = (args or {}).get("value", "")
+            set_fact(usuario_key, k, v, {"fonte": "tool_call"})
+            # invalidar cache leve, se houver
+            try:
+                clear_user_cache(usuario_key)  # se existir no seu projeto
+            except Exception:
+                pass
+            return f"OK: {k}={v}"
+        return "ERRO: ferramenta desconhecida"
+    except Exception as e:
+        return f"ERRO: {e}"
+
 
 # NSFW (opcional)
 try:
@@ -229,15 +277,18 @@ def _looks_like_cloudflare_5xx(err_text: str) -> bool:
 
 def _robust_chat_call(model: str, messages: List[Dict[str, str]], *,
                       max_tokens: int = 1536, temperature: float = 0.7, top_p: float = 0.95,
-                      fallback_models: List[str] | None = None) -> Tuple[Dict, str, str]:
+                      fallback_models: List[str] | None = None, tools: List[Dict] | None = None) -> Tuple[Dict, str, str]:
     attempts = 3
     last_err = ""
     for i in range(attempts):
         try:
-            return route_chat_strict(model, {
+            payload = {
                 "model": model, "messages": messages,
                 "max_tokens": max_tokens, "temperature": temperature, "top_p": top_p
-            })
+            }
+            if tools:
+                payload["tools"] = tools
+            return route_chat_strict(model, payload)
         except Exception as e:
             last_err = str(e)
             if _looks_like_cloudflare_5xx(last_err) or "OpenRouter 502" in last_err:
@@ -247,10 +298,13 @@ def _robust_chat_call(model: str, messages: List[Dict[str, str]], *,
     if fallback_models:
         for fb in fallback_models:
             try:
-                return route_chat_strict(fb, {
+                payload_fb = {
                     "model": fb, "messages": messages,
                     "max_tokens": max_tokens, "temperature": temperature, "top_p": top_p
-                })
+                }
+                if tools:
+                    payload_fb["tools"] = tools
+                return route_chat_strict(fb, payload_fb)
             except Exception as e2:
                 last_err = str(e2)
     synthetic = {
@@ -471,10 +525,81 @@ class MaryService(BaseCharacter):
             "together/meta-llama/Meta-Llama-3.1-405B-Instruct-Turbo",
             "anthropic/claude-3.5-haiku",
         ]
-        data, used_model, provider = _robust_chat_call(
-            model, messages, max_tokens=max_out, temperature=temperature, top_p=0.95, fallback_models=fallbacks
-        )
-        texto = (data.get("choices", [{}])[0].get("message", {}) or {}).get("content", "") or ""
+        # Preparar tools se Tool Calling estiver ativo
+        tools_to_use = None
+        if st.session_state.get("tool_calling_on", False):
+            tools_to_use = TOOLS
+        
+        # Loop de Tool Calling (máximo 3 iterações para evitar loops infinitos)
+        max_iterations = 3
+        iteration = 0
+        texto = ""
+        
+        while iteration < max_iterations:
+            iteration += 1
+            
+            # Chamada robusta (Writer) com tools
+            data, used_model, provider = _robust_chat_call(
+                model, messages, max_tokens=max_out, temperature=temperature, top_p=0.95, 
+                fallback_models=fallbacks, tools=tools_to_use
+            )
+            
+            # Extrair resposta
+            msg = (data.get("choices", [{}])[0].get("message", {}) or {})
+            texto = (msg.get("content", "") or "").strip()
+            tool_calls = msg.get("tool_calls", [])
+            
+            # Se não há tool calls, termina o loop
+            if not tool_calls or not st.session_state.get("tool_calling_on", False):
+                break
+            
+            # Processar tool calls
+            st.caption(f"🔧 Executando {len(tool_calls)} ferramenta(s)...")
+            
+            # Adiciona a mensagem do assistente com tool_calls
+            messages.append({
+                "role": "assistant",
+                "content": texto or None,
+                "tool_calls": tool_calls
+            })
+            
+            # Executa cada tool call
+            for tc in tool_calls:
+                tool_id = tc.get("id", f"call_{iteration}")
+                func_name = tc.get("function", {}).get("name", "")
+                func_args_str = tc.get("function", {}).get("arguments", "{}")
+                
+                try:
+                    # Parse dos argumentos
+                    func_args = json.loads(func_args_str) if func_args_str else {}
+                    
+                    # Executa a ferramenta
+                    result = _exec_tool_call(self, func_name, func_args, usuario_key)
+                    
+                    # Adiciona resultado às mensagens
+                    messages.append({
+                        "role": "tool",
+                        "tool_call_id": tool_id,
+                        "content": result
+                    })
+                    
+                    st.caption(f"  ✓ {func_name}: {result[:50]}...")
+                    
+                except Exception as e:
+                    error_msg = f"ERRO ao executar {func_name}: {str(e)}"
+                    messages.append({
+                        "role": "tool",
+                        "tool_call_id": tool_id,
+                        "content": error_msg
+                    })
+                    st.warning(f"⚠️ {error_msg}")
+            
+            # Se chegou aqui, há tool calls - continua o loop para nova chamada
+            # (o modelo vai processar os resultados das tools e gerar resposta final)
+        
+        # Aviso se atingiu limite de iterações
+        if iteration >= max_iterations and tool_calls:
+            st.warning("⚠️ Limite de iterações de Tool Calling atingido. Resposta pode estar incompleta.")
 
         # Ultra IA (opcional): writer -> critic -> polisher
         try:
@@ -775,6 +900,14 @@ class MaryService(BaseCharacter):
         prefs = _read_prefs(f)
 
         container.caption(f"Estado da relação: **{'Casados' if casados else '—'}**")
+        
+        container.markdown("---")
+        json_on = container.checkbox("JSON Mode", value=bool(st.session_state.get("json_mode_on", False)))
+        tool_on = container.checkbox("Tool-Calling", value=bool(st.session_state.get("tool_calling_on", False)))
+        st.session_state["json_mode_on"] = json_on
+        st.session_state["tool_calling_on"] = tool_on
+        lora = container.text_input("Adapter ID (Together LoRA) — opcional", value=st.session_state.get("together_lora_id", ""))
+        st.session_state["together_lora_id"] = lora
         if ent and ent != "—":
             container.caption(f"Entidades salvas: {ent}")
         if rs:
