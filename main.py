@@ -11,7 +11,10 @@ from pathlib import Path
 from typing import Optional, List, Tuple, Dict
 import streamlit as st
 import base64
-import re, html
+import re
+from pymongo import MongoClient
+from datetime import datetime
+import html
 
 # ========== BOOT (indexes/paths) ==========
 # Em qualquer ponto de boot do app (ex.: main.py):
@@ -416,23 +419,42 @@ if sel != _prev_model:
 
 
 
-def _save_json_response_to_mongo(data: dict, *, user: str, personagem: str, modelo: str) -> None:
+
+@st.cache_resource
+def _mongo():
     """
-    Salva a resposta JSON estruturada no MongoDB.
-    Requer chaves em st.secrets: MONGO_USER, MONGO_PASS, MONGO_CLUSTER.
-    Banco: roleplay_mary | Coleção: interacoes
+    Retorna coleção MongoDB com cache de conexão.
+    Cache persiste durante toda a sessão do Streamlit.
     """
     try:
         mongo_user = st.secrets.get("MONGO_USER", "")
         mongo_pass = st.secrets.get("MONGO_PASS", "")
         mongo_cluster = st.secrets.get("MONGO_CLUSTER", "")
+        
         if not (mongo_user and mongo_pass and mongo_cluster):
-            st.warning("⚠️ Credenciais do Mongo ausentes em st.secrets.")
-            return
+            return None
+        
         uri = f"mongodb+srv://{mongo_user}:{mongo_pass}@{mongo_cluster}/?retryWrites=true&w=majority"
-        client = MongoClient(uri)
+        client = MongoClient(uri, serverSelectionTimeoutMS=5000)
         db = client["roleplay_mary"]
         coll = db["interacoes"]
+        
+        # Teste de conexão
+        coll.find_one()
+        
+        return coll
+    except Exception as e:
+        st.error(f"❌ Erro ao conectar MongoDB: {e}")
+        return None
+
+
+def _save_json_response_to_mongo(data: dict, *, user: str, personagem: str, modelo: str) -> None:
+    """Salva resposta JSON estruturada no MongoDB com cache de conexão."""
+    try:
+        coll = _mongo()
+        if not coll:
+            st.warning("⚠️ Credenciais do Mongo ausentes em st.secrets.")
+            return
         doc = {
             "usuario": user,
             "personagem": personagem,
@@ -447,6 +469,7 @@ def _save_json_response_to_mongo(data: dict, *, user: str, personagem: str, mode
         coll.insert_one(doc)
     except Exception as e:
         st.error(f"❌ Erro ao salvar no MongoDB: {e}")
+
 
 
 def render_assistant_bubbles(markdown_text: str) -> None:
@@ -491,7 +514,7 @@ def render_assistant_bubbles(markdown_text: str) -> None:
             try:
                 _user = st.session_state.get("user_name") or st.session_state.get("usuario") or "desconhecido"
                 _person = "Mary"
-                _model = st.session_state.get("modelo") or st.session_state.get("current_model") or "desconhecido"
+                _model = st.session_state.get("model") or st.session_state.get("current_model") or "desconhecido"
                 _save_json_response_to_mongo(data, user=_user, personagem=_person, modelo=_model)
             except Exception as _e:
                 # Não bloquear a UI por erro de log
