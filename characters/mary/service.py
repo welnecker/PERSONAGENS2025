@@ -852,9 +852,8 @@ class MaryService(BaseCharacter):
             "registre o fato",
         )
         plow = prompt.lower()
-        if any(t in plow for t in mem_triggers):
+                if any(t in plow for t in mem_triggers):
             try:
-                # 1) nome do evento
                 low = plow
                 if "carlos" in low and "beatriz" in low:
                     label = "carlos_beatriz_2025-10-30"
@@ -864,16 +863,17 @@ class MaryService(BaseCharacter):
 
                 fact_key = f"mary.evento.{label}"
 
-                # 2) conteúdo a salvar = a própria resposta da Mary
+                # conteúdo = a fala da Mary
                 content = texto.strip() or "(sem conteúdo)"
 
-                # 3) salva de verdade
+                # 👉 salva no formato PLANO
                 set_fact(usuario_key, fact_key, content, {"fonte": "auto_gravado"})
-                clear_user_cache(usuario_key)
 
-                # 4) deixa a chave visível na sessão pro sidebar
+                # 👉 e guarda na sessão pro sidebar mostrar mesmo se o cache demorar
                 st.session_state["last_saved_mary_event_key"] = fact_key
+                st.session_state["last_saved_mary_event_val"] = content
 
+                clear_user_cache(usuario_key)
                 st.caption(f"🧠 Memória fixa registrada automaticamente como: **{fact_key}**")
             except Exception as e:
                 st.warning(f"⚠️ Falha ao registrar memória fixa: {e}")
@@ -1203,53 +1203,73 @@ class MaryService(BaseCharacter):
                         vs = vs[:120] + "..."
                     st.write(f"- **{k}** = {vs}")
 
-               # ============================
+             # ============================
         # 🧠 Memórias fixas de Mary
         # ============================
         with container.expander("🧠 Memórias fixas de Mary", expanded=True):
-            # 1) facts mais recentes
             try:
                 f_all = cached_get_facts(usuario_key) or {}
             except Exception:
                 f_all = {}
 
-            # 2) força exibir a última chave salva nesta sessão (mesmo se o cache não recarregou ainda)
+            # pode vir em 2 formatos:
+            # 1) plano:  "mary.evento.xyz": "..."
+            # 2) aninhado: "mary": { "evento": { "xyz": "..." } }
+            eventos: dict[str, str] = {}
+
+            # --- formato 1: plano
+            for k, v in f_all.items():
+                if isinstance(k, str) and k.startswith("mary.evento.") and v:
+                    label = k.replace("mary.evento.", "")
+                    eventos[label] = str(v)
+
+            # --- formato 2: aninhado
+            mary_obj = f_all.get("mary", {})
+            if isinstance(mary_obj, dict):
+                evt_block = mary_obj.get("evento") or mary_obj.get("eventos") or {}
+                if isinstance(evt_block, dict):
+                    for label, val in evt_block.items():
+                        if not val:
+                            continue
+                        # se já veio pelo formato plano, não sobrescreve
+                        if label not in eventos:
+                            eventos[label] = str(val)
+
+            # --- também mostra o que acabou de ser salvo nesta sessão (cache ainda não voltou)
             last_key = st.session_state.get("last_saved_mary_event_key", "")
-            if last_key and last_key not in f_all:
-                # mostra mesmo assim
-                container.markdown(f"**{last_key.replace('mary.evento.', '')}**")
-                container.caption("_(ainda não voltou do banco, mas já foi pedida para salvar nesta sessão)_")
+            last_val = st.session_state.get("last_saved_mary_event_val", "")
+            if last_key:
+                short = last_key.replace("mary.evento.", "")
+                if short not in eventos:
+                    eventos[short] = last_val or "(salvo nesta sessão; aguardando backend)"
 
-            # 3) agora filtra o que de fato veio do banco
-            eventos = {
-                k: v for k, v in f_all.items()
-                if isinstance(k, str) and k.startswith("mary.evento.")
-            }
-
-            if not eventos and not last_key:
+            if not eventos:
                 container.caption(
                     "Nenhuma memória salva ainda.\n"
                     "Ex.: **Mary, use sua ferramenta de memória para registrar o fato: ...**"
                 )
             else:
-                for ev_key, ev_val in sorted(eventos.items()):
-                    nome_curto = ev_key.replace("mary.evento.", "")
-                    container.markdown(f"**{nome_curto}**")
-                    container.caption(str(ev_val)[:280] + ("..." if len(str(ev_val)) > 280 else ""))
+                for label, val in sorted(eventos.items()):
+                    container.markdown(f"**{label}**")
+                    container.caption(val[:280] + ("..." if len(val) > 280 else ""))
 
                     col1, col2 = container.columns([1, 1])
                     with col1:
-                        if container.button("🗑 Apagar", key=f"del_{usuario_key}_{ev_key}"):
+                        # botão apagar (só funciona se seu repo tiver delete_fact)
+                        if container.button("🗑 Apagar", key=f"del_{usuario_key}_{label}"):
                             try:
                                 from core.repositories import delete_fact
                             except Exception:
                                 delete_fact = None
+
                             if delete_fact:
-                                delete_fact(usuario_key, ev_key)
+                                # tenta apagar nos dois formatos
+                                delete_fact(usuario_key, f"mary.evento.{label}")
+                                delete_fact(usuario_key, f"mary.eventos.{label}")
                             clear_user_cache(usuario_key)
-                            container.success(f"Memória **{nome_curto}** apagada.")
+                            container.success(f"Memória **{label}** apagada.")
                             st.experimental_rerun()
                     with col2:
-                        container.caption(ev_key)
+                        container.caption(f"mary.evento.{label}")
 
 
