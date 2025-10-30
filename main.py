@@ -316,16 +316,20 @@ FORCED_MODELS = [
     "together/Qwen/QwQ-32B",
     "inclusionai/ling-1t",
 
-    # === novos pedidos (OpenRouter) ===
+    # === novos pedidos (OpenRouter / Together misto) ===
     "z-ai/glm-4.6",
     "thedrummer/cydonia-24b-v4.1",
     "x-ai/grok-4-fast",
-    "moonshotai/kimi-k2-0905",
+
+    # 👉 aqui o correto:
+    "moonshotai/Kimi-K2-Instruct-0905",
+
     "x-ai/grok-code-fast-1",
     "google/gemma-3-27b-it",
     "google/gemini-2.5-flash",
     "openai/gpt-4o-mini",
 ]
+
 
 def _merge_models() -> List[str]:
     try:
