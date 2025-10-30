@@ -343,22 +343,37 @@ def _merge_models() -> List[str]:
 def _provider_for(model_id: str) -> str:
     m = (model_id or "").lower()
 
-    # 1) modelos que sabemos que são do Together
-    if m.startswith("together/"):
+    # 1) modelos específicos do Together
+    if any(
+        m.startswith(x)
+        for x in (
+            "together/",
+            "moonshotai/kimi-k2-instruct-0905",  # ✅ Kimi
+            "google/gemma-3-27b-it",
+            "google/gemini-2.5-flash",
+        )
+    ):
         return "Together"
 
-    # 2) Kimi da Moonshot que só existe no Together
-    if m.startswith("moonshotai/kimi-k2-instruct-0905"):
-        return "Together"
-
-    # 3) demais modelos (OpenRouter)
-    if m.startswith((
-        "anthropic/", "qwen/", "nousresearch/", "deepseek/", "inclusionai/",
-        "z-ai/", "thedrummer/", "x-ai/", "moonshotai/", "google/", "openai/"
-    )):
+    # 2) modelos que vêm do catálogo OpenRouter
+    if any(
+        m.startswith(x)
+        for x in (
+            "anthropic/",
+            "qwen/",
+            "nousresearch/",
+            "deepseek/",
+            "inclusionai/",
+            "z-ai/",
+            "thedrummer/",
+            "x-ai/",
+            "openai/",
+        )
+    ):
         return "OpenRouter"
 
     return "OpenRouter"
+
 
 
 def _has_creds_for(model_id: str) -> bool:
