@@ -323,6 +323,7 @@ FORCED_MODELS = [
 
     # 👉 aqui o correto:
     "moonshotai/Kimi-K2-Instruct-0905",
+    "deepseek-ai/DeepSeek-R1-0528-tput",
 
     "x-ai/grok-code-fast-1",
     "google/gemma-3-27b-it",
