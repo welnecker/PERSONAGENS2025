@@ -342,13 +342,24 @@ def _merge_models() -> List[str]:
 
 def _provider_for(model_id: str) -> str:
     m = (model_id or "").lower()
+
+    # 1) modelos que sabemos que são do Together
     if m.startswith("together/"):
         return "Together"
-    # Prefixos típicos do catálogo OpenRouter (exibimos como "OpenRouter" no label)
-    if m.startswith(("anthropic/", "qwen/", "nousresearch/", "deepseek/", "inclusionai/",
-                     "z-ai/", "thedrummer/", "x-ai/", "moonshotai/", "google/", "openai/")):
+
+    # 2) Kimi da Moonshot que só existe no Together
+    if m.startswith("moonshotai/kimi-k2-instruct-0905"):
+        return "Together"
+
+    # 3) demais modelos (OpenRouter)
+    if m.startswith((
+        "anthropic/", "qwen/", "nousresearch/", "deepseek/", "inclusionai/",
+        "z-ai/", "thedrummer/", "x-ai/", "moonshotai/", "google/", "openai/"
+    )):
         return "OpenRouter"
-    return "OpenRouter"  # default
+
+    return "OpenRouter"
+
 
 def _has_creds_for(model_id: str) -> bool:
     prov = _provider_for(model_id)
