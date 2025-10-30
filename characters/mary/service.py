@@ -40,6 +40,57 @@ TOOLS = [
     },
 ]
 
+# ====== MEMÓRIA TEMÁTICA (gravar e recuperar) ======
+
+# frases que disparam o modo "grava o que a MARY VAI FALAR"
+SAVE_PROMPTS = (
+    "mary, use sua ferramenta de memória para registrar",
+    "mary use sua ferramenta de memória para registrar",
+    "mary, registre na sua memória",
+    "mary registre na sua memória",
+    "mary, salve na memória",
+    "mary salve na memória",
+)
+
+def _user_is_asking_to_save_assistant_version(prompt: str) -> bool:
+    p = (prompt or "").lower().strip()
+    if not p:
+        return False
+    return any(p.startswith(s) for s in SAVE_PROMPTS)
+
+
+def _detect_thematic_tags_from_prompt(prompt: str) -> list[str]:
+    """
+    Vê se o usuário está perguntando de um evento específico.
+    Aqui já tratamos o caso 'Carlos e Beatriz'.
+    """
+    p = (prompt or "").lower()
+    tags: list[str] = []
+
+    if "carlos" in p and "beatriz" in p:
+        tags.append("mary.evento.carlos_beatriz")
+
+    return tags
+
+
+def _get_thematic_memories_for_tags(user_key: str, tags: list[str]) -> str:
+    """
+    Dado uma lista de chaves que podem ter sido salvas via set_fact,
+    monta um bloco único pra injetar no system.
+    """
+    if not tags:
+        return ""
+    parts: list[str] = []
+    for tag in tags:
+        try:
+            val = get_fact(user_key, tag, None)
+        except Exception:
+            val = None
+        if val:
+            parts.append(f"{tag}: {val}")
+    return "\n".join(parts)
+
+
 def _exec_tool_call(self, name: str, args: dict, usuario_key: str) -> str:
     """
     Execução das ferramentas chamadas via Tool Calling.
@@ -435,19 +486,73 @@ class MaryService(BaseCharacter):
     display_name: str = "Mary"
 
     def _exec_tool_call(self, name: str, args: dict, usuario_key: str) -> str:
+        """
+        Executa uma ferramenta chamada pelo modelo.
+        Sempre retorna STRING, para ser usada como mensagem de `tool`.
+        """
         try:
+            # 1) pegar user_display só uma vez
+            user_display = st.session_state.get("user_id", "") or ""
+
+            # 2) ferramenta básica: devolver pin de memória
             if name == "get_memory_pin":
-                return self._build_memory_pin(usuario_key, st.session_state.get("user_id","") or "")
+                return self._build_memory_pin(usuario_key, user_display)
+
+            # 3) ferramenta básica: set_fact (genérica)
             if name == "set_fact":
-                k = (args or {}).get("key", "")
-                v = (args or {}).get("value", "")
+                k = (args or {}).get("key", "") if isinstance(args, dict) else ""
+                v = (args or {}).get("value", "") if isinstance(args, dict) else ""
+                if not k:
+                    return "ERRO: chave ('key') não informada."
                 set_fact(usuario_key, k, v, {"fonte": "tool_call"})
                 try:
                     clear_user_cache(usuario_key)
                 except Exception:
                     pass
                 return f"OK: {k}={v}"
-            return "ERRO: ferramenta desconhecida"
+
+            # 4) ferramenta específica: salvar evento narrativo da Mary
+            #    name: "save_event"
+            #    args esperados:
+            #      - label: nome curto da memória (ex.: "carlos_beatriz")
+            #      - content: texto completo que o modelo acabou de produzir
+            # Se não vier label, vamos gerar um.
+            if name == "save_event":
+                label = ""
+                content = ""
+                if isinstance(args, dict):
+                    label = (args.get("label") or "").strip()
+                    content = (args.get("content") or "").strip()
+
+                if not content:
+                    # tenta pegar da última mensagem do assistente, se você estiver guardando
+                    content = st.session_state.get("last_assistant_message", "").strip()
+
+                if not content:
+                    return "ERRO: nenhum conteúdo para salvar."
+
+                # se não veio label, gera um rápido
+                if not label:
+                    # tenta achar nomes no conteúdo
+                    low = content.lower()
+                    if "carlos" in low and "beatriz" in low:
+                        label = "carlos_beatriz"
+                    else:
+                        # fallback com timestamp curtinho
+                        import time
+                        label = f"evento_{int(time.time())}"
+
+                fact_key = f"mary.evento.{label}"
+                set_fact(usuario_key, fact_key, content, {"fonte": "tool_call"})
+                try:
+                    clear_user_cache(usuario_key)
+                except Exception:
+                    pass
+                return f"OK: salvo em {fact_key}"
+
+            # 5) se não reconheceu:
+            return f"ERRO: ferramenta desconhecida: {name}"
+
         except Exception as e:
             return f"ERRO: {e}"
 
@@ -544,21 +649,55 @@ class MaryService(BaseCharacter):
         except Exception:
             pass
 
-        # === Histórico com orçamento por modelo + relatório de memória ===
+                # === Histórico com orçamento por modelo + relatório de memória ===
         verbatim_ultimos = int(st.session_state.get("verbatim_ultimos", 10))  # << configurável via UI
-        hist_msgs = self._montar_historico(usuario_key, history_boot, model, verbatim_ultimos=verbatim_ultimos)
+        hist_msgs = self._montar_historico(
+            usuario_key,
+            history_boot,
+            model,
+            verbatim_ultimos=verbatim_ultimos,
+        )
 
+        # --- 3.a) coletar eventos salvos (mary.evento.*)
+        eventos_block = ""
+        try:
+            # f_all já foi carregado lá em cima:
+            #   try: f_all = cached_get_facts(usuario_key) or {}
+            eventos = []
+            for k, v in (f_all or {}).items():
+                if k.startswith("mary.evento.") and v:
+                    # tira só o sufixo pra ficar mais amigável
+                    label = k.split("mary.evento.", 1)[-1]
+                    eventos.append(f"- {label}: {str(v).strip()}")
+            if eventos:
+                # não exagerar: corta no máx. 800–1000 chars
+                joined = "\n".join(eventos)[:1000]
+                eventos_block = (
+                    "EVENTOS_FIXOS_MARY:\n"
+                    "Use estes registros como FONTE DE VERDADE para perguntas futuras do usuário.\n"
+                    "Se o usuário disser 'lembra do encontro com Carlos e Beatriz?', recupere o evento correspondente.\n"
+                    + joined
+                )
+        except Exception:
+            eventos_block = ""
+
+        # --- 3.b) montar messages final
         messages: List[Dict,] = (
             [{"role": "system", "content": system_block}]
             + ([{"role": "system", "content": memoria_pin}] if memoria_pin else [])
+            + ([{"role": "system", "content": eventos_block}] if eventos_block else [])
             + lore_msgs
-            + [{"role": "system", "content": (
-                f"LOCAL_ATUAL: {local_atual or '—'}. "
-                "Regra dura: NÃO mude tempo/lugar sem pedido explícito do usuário."
-            )}]
+            + [{
+                "role": "system",
+                "content": (
+                    f"LOCAL_ATUAL: {local_atual or '—'}. "
+                    "Regra dura: NÃO mude tempo/lugar sem pedido explícito do usuário."
+                )
+            }]
             + hist_msgs
             + [{"role": "user", "content": prompt}]
         )
+
 
         # Aviso visual se houve resumo/poda neste turno
         try:
@@ -683,29 +822,59 @@ class MaryService(BaseCharacter):
         except Exception:
             pass
 
-        # Persistência da interação
-        save_interaction(usuario_key, prompt, texto, f"{provider}:{used_model}")
+        # ============================================================
+        # Persistência da interação (com gravação automática de memórias)
+        # ============================================================
+        try:
+            save_interaction(usuario_key, prompt, texto, f"{provider}:{used_model}")
+        except Exception:
+            pass
 
-        # Atualiza ENTIDADES
+        # === 4.a) detectar se o usuário pediu gravação explícita ===
+        # Gatilhos como: "use sua ferramenta de memória", "registre", "salve na memória"
+        mem_triggers = ("use sua ferramenta de memória", "registre", "salve na memória", "gravar memória")
+        if any(t in prompt.lower() for t in mem_triggers):
+            try:
+                label = ""
+                # tenta identificar nomes no prompt para gerar nome de evento
+                low = prompt.lower()
+                if "carlos" in low and "beatriz" in low:
+                    label = "carlos_beatriz"
+                elif "clube" in low and "surpresa" in low:
+                    label = "clube_surpresas"
+                elif "praia" in low:
+                    label = "praia"
+                else:
+                    import time
+                    label = f"evento_{int(time.time())}"
+
+                fact_key = f"mary.evento.{label}"
+                set_fact(usuario_key, fact_key, texto, {"fonte": "auto_gravado"})
+                clear_user_cache(usuario_key)
+                st.caption(f"🧠 Memória fixa registrada automaticamente como: **{fact_key}**")
+            except Exception as e:
+                st.warning(f"⚠️ Falha ao registrar memória fixa: {e}")
+
+        # === 4.b) Atualiza ENTIDADES
         try:
             _extract_and_store_entities(usuario_key, prompt, texto)
         except Exception:
             pass
 
-        # Resumo rolante V2 (toda rodada, curto) — com throttle simples
+        # === 4.c) Atualiza resumo rolante
         try:
             self._update_rolling_summary_v2(usuario_key, model, prompt, texto)
         except Exception:
             pass
 
-        # Memória longa: salva fragmento curto do turno
+        # === 4.d) Memória longa (lore)
         try:
             frag = f"[USER] {prompt}\n[MARY] {texto}"
             lore_save(usuario_key, frag, tags=["mary", "chat"])
         except Exception:
             pass
 
-        # Placeholder sugestivo leve
+        # === 4.e) Placeholder e cache leve
         try:
             ph = self._suggest_placeholder(texto, local_atual)
             st.session_state["suggestion_placeholder"] = ph
@@ -713,7 +882,7 @@ class MaryService(BaseCharacter):
         except Exception:
             st.session_state["suggestion_placeholder"] = ""
 
-        # Sinaliza failover
+        # === 4.f) Sinaliza failover
         try:
             if provider == "synthetic-fallback":
                 st.info("⚠️ Provedor instável. Resposta em fallback — pode continuar normalmente.")
@@ -977,3 +1146,46 @@ class MaryService(BaseCharacter):
         container.caption(
             f"Prefs: nível={prefs.get('nivel_sensual')}, ritmo={prefs.get('ritmo')}, tamanho={prefs.get('tamanho_resposta')}"
         )
+
+        # ============================
+        # 🧠 Memórias fixas de Mary
+        # ============================
+        with container.expander("🧠 Memórias fixas de Mary", expanded=False):
+            try:
+                f_all = cached_get_facts(usuario_key) or {}
+            except Exception:
+                f_all = {}
+
+            # pega só as chaves que começam com mary.evento.
+            eventos = {k: v for k, v in f_all.items() if k.startswith("mary.evento.")}
+
+            if not eventos:
+                container.caption(
+                    "Nenhuma memória salva ainda.\n"
+                    "Ex.: **Mary, use sua ferramenta de memória para registrar o fato: ...**"
+                )
+            else:
+                # para cada memória salva, mostra e dá botão de apagar
+                for ev_key, ev_val in sorted(eventos.items()):
+                    nome_curto = ev_key.replace("mary.evento.", "")
+                    # abre uma mini-área pra cada memória
+                    st.write(f"**{nome_curto}**")
+                    st.caption(ev_val[:280] + ("..." if len(ev_val) > 280 else ""))
+                    col_a, col_b = st.columns([1, 1])
+                    with col_a:
+                        if st.button("🗑 Apagar", key=f"del_{usuario_key}_{ev_key}"):
+                            try:
+                                from core.repositories import delete_fact
+                            except Exception:
+                                delete_fact = None
+                            if delete_fact:
+                                delete_fact(usuario_key, ev_key)
+                            # limpa cache pra refletir na hora
+                            clear_user_cache(usuario_key)
+                            st.success(f"Memória **{nome_curto}** apagada.")
+                            st.experimental_rerun()
+                    with col_b:
+                        st.caption(ev_key)
+
+
+
