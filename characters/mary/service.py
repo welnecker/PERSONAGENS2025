@@ -572,8 +572,8 @@ class MaryService(BaseCharacter):
         if not prompt:
             return ""
 
+        usuario_key = _current_user_key()   # << primeiro
         persona_text, history_boot = self._load_persona()
-        usuario_key = _current_user_key()
 
         # Memória/continuidade base
         local_atual = self._safe_get_local(usuario_key)
@@ -1157,42 +1157,44 @@ class MaryService(BaseCharacter):
             f"Prefs: nível={prefs.get('nivel_sensual')}, ritmo={prefs.get('ritmo')}, tamanho={prefs.get('tamanho_resposta')}"
         )
 
-                # ============================
-        # 🧠 Memórias fixas de Mary
         # ============================
-        with container.expander("🧠 Memórias fixas de Mary", expanded=False):
-            try:
-                f_all = cached_get_facts(usuario_key) or {}
-            except Exception:
-                f_all = {}
+    # 🧠 Memórias fixas de Mary
+    # ============================
+    with container.expander("🧠 Memórias fixas de Mary", expanded=True):
+        try:
+            f_all = cached_get_facts(usuario_key) or {}
+        except Exception:
+            f_all = {}
 
-            eventos = {k: v for k, v in f_all.items() if k.startswith("mary.evento.")}
+        # pega só as chaves que começam com mary.evento.
+        eventos = {k: v for k, v in f_all.items() if k.startswith("mary.evento.")}
 
-            if not eventos:
-                container.caption(
-                    "Nenhuma memória salva ainda.\n"
-                    "Ex.: **Mary, use sua ferramenta de memória para registrar o fato: ...**"
-                )
-            else:
-                for ev_key, ev_val in sorted(eventos.items()):
-                    nome_curto = ev_key.replace("mary.evento.", "")
-                    container.markdown(f"**{nome_curto}**")
-                    container.caption(ev_val[:280] + ("..." if len(ev_val) > 280 else ""))
+        if not eventos:
+            st.caption(
+                "Nenhuma memória salva ainda.\n"
+                "Ex.: **Mary, use sua ferramenta de memória para registrar o fato: ...**"
+            )
+        else:
+            # ordena pelas chaves pra ficar estável
+            for ev_key in sorted(eventos.keys()):
+                ev_val = eventos[ev_key] or ""
+                nome_curto = ev_key.replace("mary.evento.", "")
+                st.markdown(f"**{nome_curto}**")
+                st.caption(ev_val[:280] + ("..." if len(ev_val) > 280 else ""))
 
-                    col_a, col_b = container.columns([1, 1])
-                    with col_a:
-                        if container.button("🗑 Apagar", key=f"del_{usuario_key}_{ev_key}"):
-                            try:
-                                from core.repositories import delete_fact
-                            except Exception:
-                                delete_fact = None
-                            if delete_fact:
-                                delete_fact(usuario_key, ev_key)
-                            clear_user_cache(usuario_key)
-                            container.success(f"Memória **{nome_curto}** apagada.")
-                            st.experimental_rerun()
-                    with col_b:
-                        container.caption(ev_key)
-
+                col1, col2 = st.columns([1, 1])
+                with col1:
+                    if st.button("🗑 Apagar", key=f"del_{usuario_key}_{ev_key}"):
+                        try:
+                            from core.repositories import delete_fact
+                        except Exception:
+                            delete_fact = None
+                        if delete_fact:
+                            delete_fact(usuario_key, ev_key)
+                        clear_user_cache(usuario_key)
+                        st.success(f"Memória **{nome_curto}** apagada.")
+                        st.experimental_rerun()
+                with col2:
+                    st.caption(ev_key)
 
 
