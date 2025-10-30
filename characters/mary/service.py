@@ -39,6 +39,16 @@ TOOLS = [
         }
     },
 ]
+def _current_user_key() -> str:
+    """
+    Devolve SEMPRE a mesma chave de usuário para Mary.
+    Se não tiver login, usa 'anon::mary'.
+    """
+    uid = str(st.session_state.get("user_id", "") or "").strip()
+    if not uid:
+        return "anon::mary"
+    return f"{uid}::mary"
+
 
 # ====== MEMÓRIA TEMÁTICA (gravar e recuperar) ======
 
@@ -563,7 +573,7 @@ class MaryService(BaseCharacter):
             return ""
 
         persona_text, history_boot = self._load_persona()
-        usuario_key = f"{user}::mary"
+        usuario_key = _current_user_key()
 
         # Memória/continuidade base
         local_atual = self._safe_get_local(usuario_key)
@@ -1119,8 +1129,8 @@ class MaryService(BaseCharacter):
             "**Mary — Esposa Cúmplice** • Respostas insinuantes e sutis; 4–7 parágrafos. "
             "Relação canônica: casados e cúmplices."
         )
-        user = str(st.session_state.get("user_id", "") or "")
-        usuario_key = f"{user}::mary" if user else "anon::mary"
+        usuario_key = _current_user_key()
+
         try:
             f = cached_get_facts(usuario_key) or {}
         except Exception:
