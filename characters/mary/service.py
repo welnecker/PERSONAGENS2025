@@ -840,7 +840,7 @@ class MaryService(BaseCharacter):
         except Exception:
             pass
 
-                # === 4.a) detectar se o usuário pediu gravação explícita ===
+              # === 4.a) detectar se o usuário pediu gravação explícita ===
         # Gatilhos como: "use sua ferramenta de memória", "registre", "salve na memória"
         mem_triggers = (
             "use sua ferramenta de memória",
@@ -852,7 +852,7 @@ class MaryService(BaseCharacter):
             "registre o fato",
         )
         plow = prompt.lower()
-                if any(t in plow for t in mem_triggers):
+        if any(t in plow for t in mem_triggers):
             try:
                 low = plow
                 if "carlos" in low and "beatriz" in low:
