@@ -1123,105 +1123,112 @@ class MaryService(BaseCharacter):
         s = " | ".join(reversed(snippets))[:max_chars]
         return s
 
-       def render_sidebar(self, container) -> None:
-    container.markdown(
-        "**Mary — Esposa Cúmplice** • Respostas insinuantes e sutis; 4–7 parágrafos. "
-        "Relação canônica: casados e cúmplices."
-    )
+      # ===== Sidebar (somente leitura) =====
+    def render_sidebar(self, container) -> None:
+        container.markdown(
+            "**Mary — Esposa Cúmplice** • Respostas insinuantes e sutis; 4–7 parágrafos. "
+            "Relação canônica: casados e cúmplices."
+        )
 
-    # mesma chave usada no reply()
-    usuario_key = _current_user_key()
+        # mesma chave usada no reply()
+        usuario_key = _current_user_key()
 
-    try:
-        f = cached_get_facts(usuario_key) or {}
-    except Exception:
-        f = {}
-
-    casados = bool(f.get("casados", True))
-    ent = _entities_to_line(f)
-    rs = (f.get("mary.rs.v2") or "")[:200]
-    prefs = _read_prefs(f)
-
-    container.caption(f"Estado da relação: **{'Casados' if casados else '—'}**")
-    container.markdown("---")
-
-    json_on = container.checkbox(
-        "JSON Mode",
-        value=bool(st.session_state.get("json_mode_on", False))
-    )
-    tool_on = container.checkbox(
-        "Tool-Calling",
-        value=bool(st.session_state.get("tool_calling_on", False))
-    )
-    st.session_state["json_mode_on"] = json_on
-    st.session_state["tool_calling_on"] = tool_on
-
-    lora = container.text_input(
-        "Adapter ID (Together LoRA) — opcional",
-        value=st.session_state.get("together_lora_id", "")
-    )
-    st.session_state["together_lora_id"] = lora
-
-    if ent and ent != "—":
-        container.caption(f"Entidades salvas: {ent}")
-    if rs:
-        container.caption("Resumo rolante ativo (v2).")
-    container.caption(
-        f"Prefs: nível={prefs.get('nivel_sensual')}, ritmo={prefs.get('ritmo')}, tamanho={prefs.get('tamanho_resposta')}"
-    )
-
-    # =====================================================
-    # 1) DEBUG: mostrar tudo que veio do get_facts(...)
-    # =====================================================
-    with container.expander("🔎 DEBUG – facts brutos", expanded=False):
-        if not f:
-            st.caption("⚠️ Nenhum fact retornado para esta chave de usuário.")
-            st.code(usuario_key)
-        else:
-            st.caption(f"User key: `{usuario_key}`")
-            # mostra chave -> valor (cortado)
-            for k, v in f.items():
-                st.write(f"- **{k}** = {str(v)[:120]}{'...' if len(str(v))>120 else ''}")
-
-    # =====================================================
-    # 2) Memórias fixas (filtradas)
-    # =====================================================
-    with container.expander("🧠 Memórias fixas de Mary", expanded=True):
+        # facts do usuário
         try:
-            f_all = f  # já buscamos lá em cima
+            f = cached_get_facts(usuario_key) or {}
         except Exception:
-            f_all = {}
+            f = {}
 
-        eventos = {
-            k: v for k, v in f_all.items()
-            if isinstance(k, str) and k.startswith("mary.evento.")
-        }
+        casados = bool(f.get("casados", True))
+        ent = _entities_to_line(f)
+        rs = (f.get("mary.rs.v2") or "")[:200]
+        prefs = _read_prefs(f)
 
-        if not eventos:
-            st.caption(
-                "Nenhuma memória salva ainda.\n"
-                "Ex.: **Mary, use sua ferramenta de memória para registrar o fato: ...**"
-            )
-        else:
-            for ev_key, ev_val in sorted(eventos.items()):
-                nome_curto = ev_key.replace("mary.evento.", "")
-                st.markdown(f"**{nome_curto}**")
-                st.caption(str(ev_val)[:280] + ("..." if len(str(ev_val)) > 280 else ""))
+        container.caption(f"Estado da relação: **{'Casados' if casados else '—'}**")
+        container.markdown("---")
 
-                col1, col2 = st.columns([1, 1])
-                with col1:
-                    if st.button("🗑 Apagar", key=f"del_{usuario_key}_{ev_key}"):
-                        try:
-                            from core.repositories import delete_fact
-                        except Exception:
-                            delete_fact = None
-                        if delete_fact:
-                            delete_fact(usuario_key, ev_key)
-                        clear_user_cache(usuario_key)
-                        st.success(f"Memória **{nome_curto}** apagada.")
-                        st.experimental_rerun()
-                with col2:
-                    st.caption(ev_key)
+        # toggles globais
+        json_on = container.checkbox(
+            "JSON Mode",
+            value=bool(st.session_state.get("json_mode_on", False))
+        )
+        tool_on = container.checkbox(
+            "Tool-Calling",
+            value=bool(st.session_state.get("tool_calling_on", False))
+        )
+        st.session_state["json_mode_on"] = json_on
+        st.session_state["tool_calling_on"] = tool_on
 
+        lora = container.text_input(
+            "Adapter ID (Together LoRA) — opcional",
+            value=st.session_state.get("together_lora_id", "")
+        )
+        st.session_state["together_lora_id"] = lora
+
+        if ent and ent != "—":
+            container.caption(f"Entidades salvas: {ent}")
+        if rs:
+            container.caption("Resumo rolante ativo (v2).")
+        container.caption(
+            f"Prefs: nível={prefs.get('nivel_sensual')}, "
+            f"ritmo={prefs.get('ritmo')}, "
+            f"tamanho={prefs.get('tamanho_resposta')}"
+        )
+
+        # =====================================================
+        # 1) DEBUG – mostrar tudo que o get_facts(...) trouxe
+        # =====================================================
+        with container.expander("🔎 DEBUG – facts brutos", expanded=False):
+            if not f:
+                st.caption("⚠️ Nenhum fact retornado para esta chave de usuário.")
+                st.code(usuario_key)
+            else:
+                st.caption(f"User key: `{usuario_key}`")
+                for k, v in f.items():
+                    vs = str(v)
+                    if len(vs) > 120:
+                        vs = vs[:120] + "..."
+                    st.write(f"- **{k}** = {vs}")
+
+        # =====================================================
+        # 2) Memórias fixas de Mary (mary.evento.*)
+        # =====================================================
+        with container.expander("🧠 Memórias fixas de Mary", expanded=True):
+            try:
+                f_all = f  # já temos
+            except Exception:
+                f_all = {}
+
+            # pega só o que começar com mary.evento.
+            eventos = {
+                k: v for k, v in f_all.items()
+                if isinstance(k, str) and k.startswith("mary.evento.")
+            }
+
+            if not eventos:
+                container.caption(
+                    "Nenhuma memória salva ainda.\n"
+                    "Ex.: **Mary, use sua ferramenta de memória para registrar o fato: ...**"
+                )
+            else:
+                for ev_key, ev_val in sorted(eventos.items()):
+                    nome_curto = ev_key.replace("mary.evento.", "")
+                    container.markdown(f"**{nome_curto}**")
+                    container.caption(str(ev_val)[:280] + ("..." if len(str(ev_val)) > 280 else ""))
+
+                    col1, col2 = container.columns([1, 1])
+                    with col1:
+                        if container.button("🗑 Apagar", key=f"del_{usuario_key}_{ev_key}"):
+                            try:
+                                from core.repositories import delete_fact
+                            except Exception:
+                                delete_fact = None
+                            if delete_fact:
+                                delete_fact(usuario_key, ev_key)
+                            clear_user_cache(usuario_key)
+                            container.success(f"Memória **{nome_curto}** apagada.")
+                            st.experimental_rerun()
+                    with col2:
+                        container.caption(ev_key)
 
 
