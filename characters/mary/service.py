@@ -840,27 +840,40 @@ class MaryService(BaseCharacter):
         except Exception:
             pass
 
-        # === 4.a) detectar se o usuário pediu gravação explícita ===
+                # === 4.a) detectar se o usuário pediu gravação explícita ===
         # Gatilhos como: "use sua ferramenta de memória", "registre", "salve na memória"
-        mem_triggers = ("use sua ferramenta de memória", "registre", "salve na memória", "gravar memória")
-        if any(t in prompt.lower() for t in mem_triggers):
+        mem_triggers = (
+            "use sua ferramenta de memória",
+            "mary, use sua ferramenta de memória",
+            "mary use sua ferramenta de memória",
+            "registre na sua memória",
+            "salve na memória",
+            "gravar memória",
+            "registre o fato",
+        )
+        plow = prompt.lower()
+        if any(t in plow for t in mem_triggers):
             try:
-                label = ""
-                # tenta identificar nomes no prompt para gerar nome de evento
-                low = prompt.lower()
+                # 1) nome do evento
+                low = plow
                 if "carlos" in low and "beatriz" in low:
-                    label = "carlos_beatriz"
-                elif "clube" in low and "surpresa" in low:
-                    label = "clube_surpresas"
-                elif "praia" in low:
-                    label = "praia"
+                    label = "carlos_beatriz_2025-10-30"
                 else:
                     import time
                     label = f"evento_{int(time.time())}"
 
                 fact_key = f"mary.evento.{label}"
-                set_fact(usuario_key, fact_key, texto, {"fonte": "auto_gravado"})
+
+                # 2) conteúdo a salvar = a própria resposta da Mary
+                content = texto.strip() or "(sem conteúdo)"
+
+                # 3) salva de verdade
+                set_fact(usuario_key, fact_key, content, {"fonte": "auto_gravado"})
                 clear_user_cache(usuario_key)
+
+                # 4) deixa a chave visível na sessão pro sidebar
+                st.session_state["last_saved_mary_event_key"] = fact_key
+
                 st.caption(f"🧠 Memória fixa registrada automaticamente como: **{fact_key}**")
             except Exception as e:
                 st.warning(f"⚠️ Falha ao registrar memória fixa: {e}")
@@ -1190,22 +1203,30 @@ class MaryService(BaseCharacter):
                         vs = vs[:120] + "..."
                     st.write(f"- **{k}** = {vs}")
 
-        # =====================================================
-        # 2) Memórias fixas de Mary (mary.evento.*)
-        # =====================================================
+               # ============================
+        # 🧠 Memórias fixas de Mary
+        # ============================
         with container.expander("🧠 Memórias fixas de Mary", expanded=True):
+            # 1) facts mais recentes
             try:
-                f_all = f  # já temos
+                f_all = cached_get_facts(usuario_key) or {}
             except Exception:
                 f_all = {}
 
-            # pega só o que começar com mary.evento.
+            # 2) força exibir a última chave salva nesta sessão (mesmo se o cache não recarregou ainda)
+            last_key = st.session_state.get("last_saved_mary_event_key", "")
+            if last_key and last_key not in f_all:
+                # mostra mesmo assim
+                container.markdown(f"**{last_key.replace('mary.evento.', '')}**")
+                container.caption("_(ainda não voltou do banco, mas já foi pedida para salvar nesta sessão)_")
+
+            # 3) agora filtra o que de fato veio do banco
             eventos = {
                 k: v for k, v in f_all.items()
                 if isinstance(k, str) and k.startswith("mary.evento.")
             }
 
-            if not eventos:
+            if not eventos and not last_key:
                 container.caption(
                     "Nenhuma memória salva ainda.\n"
                     "Ex.: **Mary, use sua ferramenta de memória para registrar o fato: ...**"
