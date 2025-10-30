@@ -1123,32 +1123,48 @@ class MaryService(BaseCharacter):
         s = " | ".join(reversed(snippets))[:max_chars]
         return s
 
-    # ===== Sidebar (somente leitura) =====
+        # ===== Sidebar (somente leitura) =====
     def render_sidebar(self, container) -> None:
         container.markdown(
             "**Mary — Esposa Cúmplice** • Respostas insinuantes e sutis; 4–7 parágrafos. "
             "Relação canônica: casados e cúmplices."
         )
+
+        # mesma chave usada no reply()
         usuario_key = _current_user_key()
 
+        # facts básicos
         try:
             f = cached_get_facts(usuario_key) or {}
         except Exception:
             f = {}
+
         casados = bool(f.get("casados", True))
         ent = _entities_to_line(f)
         rs = (f.get("mary.rs.v2") or "")[:200]
         prefs = _read_prefs(f)
 
         container.caption(f"Estado da relação: **{'Casados' if casados else '—'}**")
-        
         container.markdown("---")
-        json_on = container.checkbox("JSON Mode", value=bool(st.session_state.get("json_mode_on", False)))
-        tool_on = container.checkbox("Tool-Calling", value=bool(st.session_state.get("tool_calling_on", False)))
+
+        # controles
+        json_on = container.checkbox(
+            "JSON Mode",
+            value=bool(st.session_state.get("json_mode_on", False))
+        )
+        tool_on = container.checkbox(
+            "Tool-Calling",
+            value=bool(st.session_state.get("tool_calling_on", False))
+        )
         st.session_state["json_mode_on"] = json_on
         st.session_state["tool_calling_on"] = tool_on
-        lora = container.text_input("Adapter ID (Together LoRA) — opcional", value=st.session_state.get("together_lora_id", ""))
+
+        lora = container.text_input(
+            "Adapter ID (Together LoRA) — opcional",
+            value=st.session_state.get("together_lora_id", "")
+        )
         st.session_state["together_lora_id"] = lora
+
         if ent and ent != "—":
             container.caption(f"Entidades salvas: {ent}")
         if rs:
@@ -1158,43 +1174,42 @@ class MaryService(BaseCharacter):
         )
 
         # ============================
-    # 🧠 Memórias fixas de Mary
-    # ============================
-    with container.expander("🧠 Memórias fixas de Mary", expanded=True):
-        try:
-            f_all = cached_get_facts(usuario_key) or {}
-        except Exception:
-            f_all = {}
+        # 🧠 Memórias fixas de Mary
+        # ============================
+        with container.expander("🧠 Memórias fixas de Mary", expanded=True):
+            try:
+                f_all = cached_get_facts(usuario_key) or {}
+            except Exception:
+                f_all = {}
 
-        # pega só as chaves que começam com mary.evento.
-        eventos = {k: v for k, v in f_all.items() if k.startswith("mary.evento.")}
+            eventos = {k: v for k, v in f_all.items() if k.startswith("mary.evento.")}
 
-        if not eventos:
-            st.caption(
-                "Nenhuma memória salva ainda.\n"
-                "Ex.: **Mary, use sua ferramenta de memória para registrar o fato: ...**"
-            )
-        else:
-            # ordena pelas chaves pra ficar estável
-            for ev_key in sorted(eventos.keys()):
-                ev_val = eventos[ev_key] or ""
-                nome_curto = ev_key.replace("mary.evento.", "")
-                st.markdown(f"**{nome_curto}**")
-                st.caption(ev_val[:280] + ("..." if len(ev_val) > 280 else ""))
+            if not eventos:
+                st.caption(
+                    "Nenhuma memória salva ainda.\n"
+                    "Ex.: **Mary, use sua ferramenta de memória para registrar o fato: ...**"
+                )
+            else:
+                for ev_key in sorted(eventos.keys()):
+                    ev_val = eventos[ev_key] or ""
+                    nome_curto = ev_key.replace("mary.evento.", "")
+                    st.markdown(f"**{nome_curto}**")
+                    st.caption(ev_val[:280] + ("..." if len(ev_val) > 280 else ""))
 
-                col1, col2 = st.columns([1, 1])
-                with col1:
-                    if st.button("🗑 Apagar", key=f"del_{usuario_key}_{ev_key}"):
-                        try:
-                            from core.repositories import delete_fact
-                        except Exception:
-                            delete_fact = None
-                        if delete_fact:
-                            delete_fact(usuario_key, ev_key)
-                        clear_user_cache(usuario_key)
-                        st.success(f"Memória **{nome_curto}** apagada.")
-                        st.experimental_rerun()
-                with col2:
-                    st.caption(ev_key)
+                    col1, col2 = st.columns([1, 1])
+                    with col1:
+                        if st.button("🗑 Apagar", key=f"del_{usuario_key}_{ev_key}"):
+                            try:
+                                from core.repositories import delete_fact
+                            except Exception:
+                                delete_fact = None
+                            if delete_fact:
+                                delete_fact(usuario_key, ev_key)
+                            clear_user_cache(usuario_key)
+                            st.success(f"Memória **{nome_curto}** apagada.")
+                            st.experimental_rerun()
+                    with col2:
+                        st.caption(ev_key)
+
 
 
