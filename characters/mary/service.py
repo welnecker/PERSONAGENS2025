@@ -275,55 +275,88 @@ def _looks_like_cloudflare_5xx(err_text: str) -> bool:
     s = err_text.lower()
     return ("cloudflare" in s) and any(code in s for code in ["500", "502", "503", "504"])
 
-def _robust_chat_call(model: str, messages: List[Dict[str, str]], *,
-                      max_tokens: int = 1536, temperature: float = 0.7, top_p: float = 0.95,
-                      fallback_models: List[str] | None = None, tools: List[Dict] | None = None) -> Tuple[Dict, str, str]:
+def _robust_chat_call(
+    model: str,
+    messages: List[Dict[str, str]],
+    *,
+    max_tokens: int = 1536,
+    temperature: float = 0.7,
+    top_p: float = 0.95,
+    fallback_models: List[str] | None = None,
+    tools: List[Dict] | None = None,
+) -> Tuple[Dict, str, str]:
     attempts = 3
     last_err = ""
     for i in range(attempts):
         try:
             payload = {
-                "model": model, "messages": messages,
-                "max_tokens": max_tokens, "temperature": temperature, "top_p": top_p
+                "model": model,
+                "messages": messages,
+                "max_tokens": max_tokens,
+                "temperature": temperature,
+                "top_p": top_p,
             }
+
+            # 👉 se o sidebar ligou tool-calling, o service passou tools
             if tools:
                 payload["tools"] = tools
-            return route_chat_strict(model, payload)
-            # JSON Mode → response_format=json_object
+
+            # 👉 JSON Mode do sidebar
             if st.session_state.get("json_mode_on", False):
                 payload["response_format"] = {"type": "json_object"}
-            # Together LoRA Adapter
+
+            # 👉 LoRA Together opcional
             adapter_id = (st.session_state.get("together_lora_id") or "").strip()
             if adapter_id and (model or "").startswith("together/"):
                 payload["adapter_id"] = adapter_id
+
+            # ✅ agora sim podemos chamar o router
+            return route_chat_strict(model, payload)
+
         except Exception as e:
             last_err = str(e)
+            # se for erro “instável”, tenta de novo
             if _looks_like_cloudflare_5xx(last_err) or "OpenRouter 502" in last_err:
                 time.sleep((0.7 * (2 ** i)) + random.uniform(0, .4))
                 continue
-            break
+            break  # erro real -> sai do loop
+
+    # ===== FALLBACKS =====
     if fallback_models:
         for fb in fallback_models:
             try:
                 payload_fb = {
-                    "model": fb, "messages": messages,
-                    "max_tokens": max_tokens, "temperature": temperature, "top_p": top_p
+                    "model": fb,
+                    "messages": messages,
+                    "max_tokens": max_tokens,
+                    "temperature": temperature,
+                    "top_p": top_p,
                 }
+
                 if tools:
                     payload_fb["tools"] = tools
-                return route_chat_strict(fb, payload_fb)
+
                 if st.session_state.get("json_mode_on", False):
                     payload_fb["response_format"] = {"type": "json_object"}
+
                 adapter_id = (st.session_state.get("together_lora_id") or "").strip()
                 if adapter_id and (fb or "").startswith("together/"):
                     payload_fb["adapter_id"] = adapter_id
+
+                return route_chat_strict(fb, payload_fb)
             except Exception as e2:
                 last_err = str(e2)
+
+    # ===== fallback sintético final =====
     synthetic = {
-        "choices": [{"message": {"content":
-            "Amor… tive um tropeço técnico agora, mas já mantive nosso fio e cenário. "
-            "Me diz numa linha o próximo passo e eu sigo — sem perder o ritmo."
-        }}]
+        "choices": [{
+            "message": {
+                "content": (
+                    "Amor… o provedor caiu agora, mas mantive o cenário. "
+                    "Me diz numa linha o que você quer fazer e eu continuo."
+                )
+            }
+        }]
     }
     return synthetic, model, "synthetic-fallback"
 
@@ -400,6 +433,23 @@ def _mem_drop_warn(report: dict) -> None:
 class MaryService(BaseCharacter):
     id: str = "mary"
     display_name: str = "Mary"
+
+    def _exec_tool_call(self, name: str, args: dict, usuario_key: str) -> str:
+        try:
+            if name == "get_memory_pin":
+                return self._build_memory_pin(usuario_key, st.session_state.get("user_id","") or "")
+            if name == "set_fact":
+                k = (args or {}).get("key", "")
+                v = (args or {}).get("value", "")
+                set_fact(usuario_key, k, v, {"fonte": "tool_call"})
+                try:
+                    clear_user_cache(usuario_key)
+                except Exception:
+                    pass
+                return f"OK: {k}={v}"
+            return "ERRO: ferramenta desconhecida"
+        except Exception as e:
+            return f"ERRO: {e}"
 
     # ===== API =====
     def reply(self, user: str, model: str) -> str:
@@ -587,7 +637,7 @@ class MaryService(BaseCharacter):
                     func_args = json.loads(func_args_str) if func_args_str else {}
                     
                     # Executa a ferramenta
-                    result = _exec_tool_call(self, func_name, func_args, usuario_key)
+                    result = self._exec_tool_call(func_name, func_args, usuario_key)
                     
                     # Adiciona resultado às mensagens
                     messages.append({
