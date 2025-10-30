@@ -839,9 +839,7 @@ class MaryService(BaseCharacter):
             save_interaction(usuario_key, prompt, texto, f"{provider}:{used_model}")
         except Exception:
             pass
-
-              # === 4.a) detectar se o usuário pediu gravação explícita ===
-        # Gatilhos como: "use sua ferramenta de memória", "registre", "salve na memória"
+        # === 4.a) detectar se o usuário pediu gravação explícita ===
         mem_triggers = (
             "use sua ferramenta de memória",
             "mary, use sua ferramenta de memória",
@@ -852,31 +850,46 @@ class MaryService(BaseCharacter):
             "registre o fato",
         )
         plow = prompt.lower()
+
         if any(t in plow for t in mem_triggers):
             try:
-                low = plow
-                if "carlos" in low and "beatriz" in low:
-                    label = "carlos_beatriz_2025-10-30"
+                # 1) tentar achar nomes conhecidos no prompt pra gerar rótulo melhor
+                nomes_conhecidos = ["carlos", "beatriz", "ricardo", "laura", "janio", "mary"]
+                achados = [n for n in nomes_conhecidos if n in plow]
+
+                # 2) tenta detectar data tipo 30/10/2025
+                import re, time
+                mdata = re.search(r"(\d{1,2})/(\d{1,2})/(\d{4})", plow)
+                data_sufixo = ""
+                if mdata:
+                    d, m, y = mdata.groups()
+                    data_sufixo = f"_{y}-{int(m):02d}-{int(d):02d}"
+
+                # 3) monta o label
+                if len(achados) >= 2:
+                    label = f"{achados[0]}_{achados[1]}{data_sufixo}"
+                elif len(achados) == 1:
+                    label = f"{achados[0]}{data_sufixo}"
                 else:
-                    import time
+                    # fallback timestamp
                     label = f"evento_{int(time.time())}"
 
                 fact_key = f"mary.evento.{label}"
 
-                # conteúdo = a fala da Mary
+                # 4) o que vamos salvar? → A FALA DELA
                 content = texto.strip() or "(sem conteúdo)"
 
-                # 👉 salva no formato PLANO
                 set_fact(usuario_key, fact_key, content, {"fonte": "auto_gravado"})
+                clear_user_cache(usuario_key)
 
-                # 👉 e guarda na sessão pro sidebar mostrar mesmo se o cache demorar
+                # 5) garante que o sidebar já mostre mesmo antes do backend voltar
                 st.session_state["last_saved_mary_event_key"] = fact_key
                 st.session_state["last_saved_mary_event_val"] = content
 
-                clear_user_cache(usuario_key)
                 st.caption(f"🧠 Memória fixa registrada automaticamente como: **{fact_key}**")
             except Exception as e:
                 st.warning(f"⚠️ Falha ao registrar memória fixa: {e}")
+
 
         # === 4.b) Atualiza ENTIDADES
         try:
