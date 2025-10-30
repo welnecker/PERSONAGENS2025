@@ -1147,7 +1147,7 @@ class MaryService(BaseCharacter):
             f"Prefs: nível={prefs.get('nivel_sensual')}, ritmo={prefs.get('ritmo')}, tamanho={prefs.get('tamanho_resposta')}"
         )
 
-        # ============================
+                # ============================
         # 🧠 Memórias fixas de Mary
         # ============================
         with container.expander("🧠 Memórias fixas de Mary", expanded=False):
@@ -1156,7 +1156,6 @@ class MaryService(BaseCharacter):
             except Exception:
                 f_all = {}
 
-            # pega só as chaves que começam com mary.evento.
             eventos = {k: v for k, v in f_all.items() if k.startswith("mary.evento.")}
 
             if not eventos:
@@ -1165,27 +1164,25 @@ class MaryService(BaseCharacter):
                     "Ex.: **Mary, use sua ferramenta de memória para registrar o fato: ...**"
                 )
             else:
-                # para cada memória salva, mostra e dá botão de apagar
                 for ev_key, ev_val in sorted(eventos.items()):
                     nome_curto = ev_key.replace("mary.evento.", "")
-                    # abre uma mini-área pra cada memória
-                    st.write(f"**{nome_curto}**")
-                    st.caption(ev_val[:280] + ("..." if len(ev_val) > 280 else ""))
-                    col_a, col_b = st.columns([1, 1])
+                    container.markdown(f"**{nome_curto}**")
+                    container.caption(ev_val[:280] + ("..." if len(ev_val) > 280 else ""))
+
+                    col_a, col_b = container.columns([1, 1])
                     with col_a:
-                        if st.button("🗑 Apagar", key=f"del_{usuario_key}_{ev_key}"):
+                        if container.button("🗑 Apagar", key=f"del_{usuario_key}_{ev_key}"):
                             try:
                                 from core.repositories import delete_fact
                             except Exception:
                                 delete_fact = None
                             if delete_fact:
                                 delete_fact(usuario_key, ev_key)
-                            # limpa cache pra refletir na hora
                             clear_user_cache(usuario_key)
-                            st.success(f"Memória **{nome_curto}** apagada.")
+                            container.success(f"Memória **{nome_curto}** apagada.")
                             st.experimental_rerun()
                     with col_b:
-                        st.caption(ev_key)
+                        container.caption(ev_key)
 
 
 
