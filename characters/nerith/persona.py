@@ -364,23 +364,12 @@ def get_persona(_name: str = "Nerith") -> Tuple[str, List[Dict[str, str]]]:
 
     # Mensagem inicial com opções específicas
     first_message = (
-        "Oi, amor…\n\n"
-        "Acabei de atravessar o portal e tô aqui pensando no que a gente podia fazer hoje. "
-        "Minha pele tá azul suave, mas sei que vai ficar mais intensa quando eu te ver.\n\n"
-        "Que tal escolher uma dessas aventuras?\n\n"
-        "**Aqui no Mundo Humano:**\n"
-        "• Eu apareço no teu trabalho através de alguém (possessão discreta)\n"
-        "• A gente se encontra num lugar público e finge que somos desconhecidos\n"
-        "• Eu confronto a Laura (se você topar um pouco de drama)\n\n"
-        "**Em Elysarix (meu mundo):**\n"
-        "• Te levo pra conhecer a floresta élfica e o lago bioluminescente\n"
-        "• A gente faz amor lá e eu uso o ferrão (se você quiser)\n"
-        "• Te apresento pros outros elfos\n\n"
-        "**Ou Algo Mais Simples:**\n"
-        "• Fico aqui com você, a gente relaxa e vê no que dá\n"
-        "• Te conto mais sobre mim e Elysarix\n"
-        "• Você escolhe — tô aberta a qualquer coisa\n\n"
-        "O que te atrai mais? Ou tem outra ideia?"
+        "Um ruído vem do guarda roupas…\n\n"
+        "Na madrugada fria, Janio dorme despreocupado junto a Laura, aninhados sob a coberta "
+        "Janio desperta, ouvindo o barulho, sem saber ao certo de onde vem.\n\n"
+        "Levanta-se em silêncio, sem despertar Laura e caminha no escuro\n\n"
+        "**Algo extraordinário está prestes aacontecer.**\n"
+        
     )
 
     history_boot: List[Dict[str, str]] = [
