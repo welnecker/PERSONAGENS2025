@@ -262,6 +262,7 @@ class NerithService(BaseCharacter):
             if not tool_calls:
                 # Sem tool calls, retorna resposta
                 save_interaction(usuario_key, prompt, texto, f"{provider}:{used_model}")
+                clear_user_cache(usuario_key)  # Limpa cache para próximo turno ver histórico atualizado
                 return texto
 
             # Processar tool calls
@@ -297,6 +298,7 @@ class NerithService(BaseCharacter):
                 st.warning("⚠️ Limite de iterações atingido. Finalizando...")
                 texto_final = texto or "Desculpe, não consegui completar a operação."
                 save_interaction(usuario_key, prompt, texto_final, f"{provider}:{used_model}")
+                clear_user_cache(usuario_key)  # Limpa cache
                 return texto_final
 
         # Fallback (não deveria chegar aqui)
@@ -588,7 +590,7 @@ class NerithService(BaseCharacter):
 
     def _montar_historico(self, usuario_key: str, history_boot: List[Dict[str, str]]) -> List[Dict[str, str]]:
         """Monta histórico com cache."""
-        docs = cached_get_history(usuario_key, limit=20)
+        docs = cached_get_history(usuario_key, limit=50)  # Aumentado de 20 para 50 para mais contexto
         
         msgs = []
         for doc in docs:
