@@ -761,6 +761,61 @@ if st.sidebar.button("🧨 Apagar TUDO (chat + memórias)"):
     except Exception as e:
         _safe_error("Falha ao apagar TUDO.", e)
 
+# ===== BOTÃO: FORÇAR RELOAD PERSONA =====
+if st.sidebar.button("🔄 Forçar Reload Persona"):
+    try:
+        import sys
+        import importlib
+        
+        _user_id = str(st.session_state.get("user_id", ""))
+        _char    = str(st.session_state.get("character", "")).strip().lower()
+        _key_primary = f"{_user_id}::{_char}" if _user_id and _char else _user_id
+        _key_legacy  = _user_id if _char == "nerith" else None
+        
+        # 1. Deletar histórico (ambas as chaves)
+        total = 0
+        try:
+            total += int(delete_user_history(_key_primary) or 0)
+        except Exception:
+            pass
+        if _key_legacy:
+            try:
+                total += int(delete_user_history(_key_legacy) or 0)
+            except Exception:
+                pass
+        
+        # 2. FORÇAR REIMPORTAÇÃO DO MÓDULO PERSONA (remove cache Python)
+        mod_name = f"characters.{_char}.persona"
+        if mod_name in sys.modules:
+            del sys.modules[mod_name]
+            st.sidebar.info(f"✅ Módulo {mod_name} removido do cache Python")
+        
+        # 3. Limpar cache Streamlit
+        st.cache_data.clear()
+        st.cache_resource.clear()
+        
+        # 4. Limpar sessão
+        st.session_state.history = []
+        st.session_state.history_loaded_for = ""
+        
+        # 5. Limpar __pycache__ (opcional, mas recomendado)
+        import subprocess
+        try:
+            subprocess.run(
+                ['find', '.', '-type', 'd', '-name', '__pycache__', '-exec', 'rm', '-rf', '{}', '+'],
+                capture_output=True,
+                timeout=5
+            )
+        except Exception:
+            pass
+        
+        st.sidebar.success(f"✅ Persona recarregada! ({total} docs deletados)")
+        time.sleep(1)
+        st.rerun()
+        
+    except Exception as e:
+        st.sidebar.error(f"❌ Erro: {e}")
+
 # Botão de limpar cache (dados/recursos)
 if st.sidebar.button("🧹 Limpar cache (dados/recursos)"):
     try:
