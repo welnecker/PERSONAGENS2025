@@ -226,11 +226,14 @@ class NerithService(BaseCharacter):
         if portal_aberto:
             elysarix_hint += "\n⚠️ Já estamos em Elysarix — não repita a travessia nem a introdução. Continue a cena do ponto atual."
 # Monta system
-                system_block = "\n\n".join([
+       system_block = "\n\n".join([
             persona_text, tone_hint, length_hint, sensory_hint,
             nsfw_hint, ferrao_hint, controle_hint, ciume_hint,
             pubis_hint, elysarix_hint,
-            "FERRAMENTAS: use get_memory_pin para recuperar estado persistente, get_fact para saber se o portal já foi atravessado e set_fact para marcar portal_aberto=True assim que a cena mudar para Elysarix. Nunca repita a cena de travessia se portal_aberto=True."
+            "FERRAMENTAS: use get_memory_pin para recuperar estado persistente, "
+            "get_fact para saber se o portal já foi atravessado e set_fact para marcar "
+            "portal_aberto=True assim que a cena mudar para Elysarix. "
+            "Nunca repita a cena de travessia se portal_aberto=True."
         ])
 
         pre_msgs = state_msgs if state_msgs else []
