@@ -1,3 +1,6 @@
+# nerithservice_patch_stable.py gerado em 2025-11-01T19:14:41
+# Patch automático para estabilizar memória de portal.
+
 # characters/nerith/service.py - VERSÃO OTIMIZADA
 # Baseado em Mary service com mecânicas élficas de Nerith
 from __future__ import annotations
@@ -180,7 +183,9 @@ class NerithService(BaseCharacter):
         # Recarrega fatos (com cache)
         fatos = cached_get_facts(usuario_key)
         
-        # Parâmetros Nerith
+        
+        portal_aberto = str(fatos.get("portal_aberto", "")).lower() in ("true", "1", "yes", "sim")
+# Parâmetros Nerith
         dreamworld_detail_level = int(fatos.get("dreamworld_detail_level", 1))
         guide_assertiveness = int(fatos.get("guide_assertiveness", 1))
 
@@ -217,11 +222,17 @@ class NerithService(BaseCharacter):
         ferrao_hint = self._get_ferrao_hint()
         elysarix_hint = self._get_elysarix_hint(fatos)
 
-        # Monta system
-        system_block = "\n\n".join([
+        
+        if portal_aberto:
+            elysarix_hint += "\n⚠️ Já estamos em Elysarix — não repita a travessia nem a introdução. Continue a cena do ponto atual."
+# Monta system
+        system_block = "
+
+".join([
             persona_text, tone_hint, length_hint, sensory_hint,
             nsfw_hint, ferrao_hint, controle_hint, ciume_hint,
-            pubis_hint, elysarix_hint
+            pubis_hint, elysarix_hint,
+            "FERRAMENTAS: use get_memory_pin para recuperar estado persistente, get_fact para saber se o portal já foi atravessado e set_fact para marcar portal_aberto=True assim que a cena mudar para Elysarix. Nunca repita a cena de travessia se portal_aberto=True."
         ])
 
         pre_msgs = state_msgs if state_msgs else []
@@ -270,6 +281,9 @@ class NerithService(BaseCharacter):
                 save_interaction(usuario_key, prompt, texto, f"{provider}:{used_model}")
                 self._detect_and_update_local(usuario_key, texto)  # Detecta mudança de local
                 clear_user_cache(usuario_key)  # Limpa cache para próximo turno ver histórico atualizado
+                if self._detect_elysarix_scene(texto):
+                    set_fact(usuario_key, "portal_aberto", "True", {"fonte": "auto_detect_portal"})
+                    clear_user_cache(usuario_key)
                 return texto
 
             # Processar tool calls
@@ -307,6 +321,9 @@ class NerithService(BaseCharacter):
                 save_interaction(usuario_key, prompt, texto_final, f"{provider}:{used_model}")
                 self._detect_and_update_local(usuario_key, texto_final)  # Detecta mudança de local
                 clear_user_cache(usuario_key)  # Limpa cache
+                if self._detect_elysarix_scene(texto_final):
+                    set_fact(usuario_key, "portal_aberto", "True", {"fonte": "auto_detect_portal"})
+                    clear_user_cache(usuario_key)
                 return texto_final
 
         # Fallback (não deveria chegar aqui)
@@ -453,10 +470,22 @@ class NerithService(BaseCharacter):
         else:
             return "ELYSARIX: Sem escolha ativa. Portal disponível conforme regras."
 
+
+    def _detect_elysarix_scene(self, texto: str) -> bool:
+        if not texto:
+            return False
+        low = texto.lower()
+        gatilhos = [
+            "duas luas", "elysarix", "floresta de cristal", "lago de águas cristalinas",
+            "portal atrás de nós", "retornar para o mundo humano", "quando voltarmos",
+            "um dia inteiro equivale a um minuto", "sob as duas luas"
+        ]
+        return any(g in low for g in gatilhos)
+
     def render_sidebar(self, sidebar):
         """Renderiza configurações na sidebar."""
-        st.session_state.setdefault("json_mode_on", False)
-        st.session_state.setdefault("tool_calling_on", False)
+        st.session_state.setdefault("json_mode_on", True)
+        st.session_state.setdefault("tool_calling_on", True)
         st.session_state.setdefault("adapter_id", "")
         
         sidebar.subheader("⚙️ Configurações Nerith")
