@@ -168,6 +168,12 @@ class NerithService(BaseCharacter):
         state_msgs = self._apply_world_choice_intent(usuario_key, prompt)
 
         # Memória e local
+        # Verifica comando manual de local
+        user_location = self._check_user_location_command(prompt)
+        if user_location:
+            set_fact(usuario_key, "local_cena_atual", user_location, {"fonte": "user_command"})
+            clear_user_cache(usuario_key)
+        
         local_atual = self._safe_get_local(usuario_key)
         memoria_pin = self._build_memory_pin(usuario_key, user)
 
@@ -262,6 +268,7 @@ class NerithService(BaseCharacter):
             if not tool_calls:
                 # Sem tool calls, retorna resposta
                 save_interaction(usuario_key, prompt, texto, f"{provider}:{used_model}")
+                self._detect_and_update_local(usuario_key, texto)  # Detecta mudança de local
                 clear_user_cache(usuario_key)  # Limpa cache para próximo turno ver histórico atualizado
                 return texto
 
@@ -298,6 +305,7 @@ class NerithService(BaseCharacter):
                 st.warning("⚠️ Limite de iterações atingido. Finalizando...")
                 texto_final = texto or "Desculpe, não consegui completar a operação."
                 save_interaction(usuario_key, prompt, texto_final, f"{provider}:{used_model}")
+                self._detect_and_update_local(usuario_key, texto_final)  # Detecta mudança de local
                 clear_user_cache(usuario_key)  # Limpa cache
                 return texto_final
 
@@ -497,6 +505,49 @@ class NerithService(BaseCharacter):
             return get_fact(usuario_key, "local_cena_atual", "") or ""
         except Exception:
             return ""
+
+    def _detect_and_update_local(self, usuario_key: str, assistant_msg: str):
+        """Detecta mudança de local na resposta e atualiza fact."""
+        msg_lower = (assistant_msg or "").lower()
+        
+        # Detecta ida para Elysarix
+        if any(phrase in msg_lower for phrase in [
+            "bem-vindo a elysarix",
+            "bem-vinda a elysarix",
+            "chegamos em elysarix",
+            "entramos em elysarix",
+            "portal se fecha atrás",
+            "você está em elysarix",
+            "estamos em elysarix"
+        ]):
+            set_fact(usuario_key, "local_cena_atual", "Elysarix", {"fonte": "auto_detect"})
+            clear_user_cache(usuario_key)
+            return
+        
+        # Detecta volta para mundo humano
+        if any(phrase in msg_lower for phrase in [
+            "voltamos para o quarto",
+            "de volta ao mundo humano",
+            "atravessamos o portal de volta",
+            "laura ainda dorme",
+            "você está de volta"
+        ]):
+            set_fact(usuario_key, "local_cena_atual", "quarto", {"fonte": "auto_detect"})
+            clear_user_cache(usuario_key)
+            return
+
+    def _check_user_location_command(self, prompt: str) -> str | None:
+        """Verifica se usuário está definindo local manualmente."""
+        pl = (prompt or "").lower()
+        
+        if any(w in pl for w in ["estamos em elysarix", "estou em elysarix", "chegamos em elysarix"]):
+            return "Elysarix"
+        
+        if any(w in pl for w in ["estamos no quarto", "estou no quarto", "voltamos para casa", "voltamos pro quarto"]):
+            return "quarto"
+        
+        return None
+
 
     def _apply_world_choice_intent(self, usuario_key: str, prompt: str) -> List[Dict[str, str]]:
         """Detecta intenção de escolha de mundo e atualiza memórias."""
