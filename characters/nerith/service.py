@@ -226,7 +226,7 @@ class NerithService(BaseCharacter):
         if portal_aberto:
             elysarix_hint += "\n⚠️ Já estamos em Elysarix — não repita a travessia nem a introdução. Continue a cena do ponto atual."
 # Monta system
-        system_block = "\n\n".join([
+                system_block = "\n\n".join([
             persona_text, tone_hint, length_hint, sensory_hint,
             nsfw_hint, ferrao_hint, controle_hint, ciume_hint,
             pubis_hint, elysarix_hint,
