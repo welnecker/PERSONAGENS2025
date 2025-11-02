@@ -1,5 +1,5 @@
 # characters/nerith/service.py
-# nerithservice.py - VERSÃO OTIMIZADA + boot automático + histórico corrigido
+# nerithservice.py - VERSÃO OTIMIZADA + boot automático + histórico + proteção de cenário
 from __future__ import annotations
 
 import streamlit as st
@@ -11,10 +11,10 @@ from datetime import datetime
 from core.common.base_service import BaseCharacter
 from core.service_router import route_chat_strict
 from core.repositories import (
-    save_interaction, get_history_docs, delete_user_history,
-    get_facts, get_fact, last_event, set_fact,
+    save_interaction, get_history_docs,
+    get_facts, get_fact, set_fact,
 )
-from core.tokens import toklen
+from core.tokens import toklen  # se não usar, pode remover
 
 # =========================================================
 # NSFW (opcional)
@@ -36,7 +36,7 @@ except Exception:
         return txt, []
 
 # =========================================================
-# CONFIGURAÇÃO DE CACHE (fatos e histórico)
+# CONFIGURAÇÃO DE CACHE
 # =========================================================
 CACHE_TTL = int(st.secrets.get("CACHE_TTL", 30))  # segundos
 
@@ -59,7 +59,6 @@ def _purge_expired_cache() -> None:
             _cache_facts.pop(user_key, None)
         elif k.startswith("history_"):
             # history_<user>_<limit>
-            # vamos remover todas as variantes daquele usuário
             user_key = k.replace("history_", "").split("_")[0]
             for hk in [hk for hk in list(_cache_history.keys()) if hk.startswith(f"history_{user_key}_")]:
                 _cache_history.pop(hk, None)
@@ -175,23 +174,21 @@ class NerithService(BaseCharacter):
         persona_text, history_boot = self._load_persona()
         usuario_key = f"{user}::nerith"
 
-        # pega histórico existente (pouco, só pra detectar se já falou antes)
+        # histórico mínimo
         existing_history = cached_get_history(usuario_key, limit=1)
 
-        # pega fatos já salvos (antes de decidir quarto x elysarix)
+        # fatos salvos antes do boot
         fatos_existentes = cached_get_facts(usuario_key)
         local_registrado = (fatos_existentes.get("local_cena_atual") or "").lower()
         portal_registrado = str(fatos_existentes.get("portal_aberto", "")).lower() in ("true", "1", "yes", "sim")
 
-        # 🔹 SE NÃO VEIO MENSAGEM
+        # 🔹 SEM PROMPT → boot ou última fala
         if not prompt:
-            # se já temos histórico, devolve a última fala (não reinicia boot)
             if existing_history:
                 last_assistant = existing_history[0].get("assistant_message", "")
                 last_user = existing_history[0].get("user_message", "")
                 return last_assistant or last_user or "..."
 
-            # senão, boot
             if history_boot and len(history_boot) > 0:
                 boot_text = history_boot[0].get("content", "")
             else:
@@ -199,7 +196,6 @@ class NerithService(BaseCharacter):
 
             save_interaction(usuario_key, "", boot_text, "system:boot")
 
-            # grava local inicial
             if portal_registrado or local_registrado == "elysarix":
                 set_fact(usuario_key, "local_cena_atual", "Elysarix", {"fonte": "boot-preserva"})
             else:
@@ -208,29 +204,29 @@ class NerithService(BaseCharacter):
             clear_user_cache(usuario_key)
             return boot_text
 
-        # Tool calling on/off
+        # tool calling
         tool_calling_on = st.session_state.get("tool_calling_on", False)
         tools = TOOLS if tool_calling_on else None
         max_iterations = 3 if tool_calling_on else 1
 
-        # Intenções (gravidez, escolha de mundo)
+        # intenções (gravidez / escolha de mundo)
         state_msgs = self._apply_world_choice_intent(usuario_key, prompt)
 
-        # Comando manual de local (força cenário)
+        # comando manual de local
         user_location = self._check_user_location_command(prompt)
         if user_location:
             set_fact(usuario_key, "local_cena_atual", user_location, {"fonte": "user_command"})
             clear_user_cache(usuario_key)
 
-        # Local atual salvo
+        # local atual + memória pin
         local_atual = self._safe_get_local(usuario_key)
         memoria_pin = self._build_memory_pin(usuario_key, user)
 
-        # ===== Recarrega fatos para ver estado atualizado =====
+        # fatos atualizados
         fatos = cached_get_facts(usuario_key)
         portal_aberto = str(fatos.get("portal_aberto", "")).lower() in ("true", "1", "yes", "sim")
 
-        # ===== Proteção pra "continue" =====
+        # proteção para "continue"
         prompt_lower = prompt.lower().strip()
         continue_pre_msgs: List[Dict[str, str]] = []
         if prompt_lower in ("continue", "continua", "segue", "prossegue", "continua nerith", "continue nerith"):
@@ -245,13 +241,13 @@ class NerithService(BaseCharacter):
                     "content": "PEDIDO_CURTO: o usuário só disse para continuar. NÃO mude o cenário. Continue exatamente de onde parou."
                 })
 
-        # Se o portal está aberto mas o local não está consistente, força Elysarix
+        # se o portal está aberto mas o fact ficou em branco → força elysarix
         if portal_aberto and (not local_atual or local_atual.lower() != "elysarix"):
             local_atual = "Elysarix"
             set_fact(usuario_key, "local_cena_atual", "Elysarix", {"fonte": "reidrata_depois_toggle"})
             clear_user_cache(usuario_key)
 
-        # Parâmetros com fallback
+        # parâmetros com fallback
         try:
             dreamworld_detail_level = int(fatos.get("dreamworld_detail_level", 1) or 1)
         except ValueError:
@@ -262,15 +258,15 @@ class NerithService(BaseCharacter):
         except ValueError:
             guide_assertiveness = 1
 
-        # Foco sensorial rotativo
+        # foco sensorial
         foco = self._get_sensory_focus()
 
-        # Hints fixos
+        # hints
         length_hint = "COMPRIMENTO: gere 4–7 parágrafos, cada um com 2–4 frases naturais."
         sensory_hint = f"SENSORIAL_FOCO: no 1º ou 2º parágrafo, insira 1–2 pistas envolvendo {foco}, fundidas à ação."
         tone_hint = "TOM: confiante, assertiva e dominante no charme; nunca submissa/infantil."
 
-        # NSFW (respeita toggle)
+        # nsfw
         try:
             nsfw_on = bool(nsfw_enabled(usuario_key))
         except Exception:
@@ -282,7 +278,7 @@ class NerithService(BaseCharacter):
             "NSFW: BLOQUEADO. Flerte, tensão e fade-to-black."
         )
 
-        # Gatilhos
+        # outros hints
         pubis_hint = self._get_pubis_hint(prompt, nsfw_on)
         controle_hint = self._get_controle_hint(fatos, prompt)
         ciume_hint = self._get_ciume_hint(fatos)
@@ -291,7 +287,7 @@ class NerithService(BaseCharacter):
         if portal_aberto:
             elysarix_hint += "\n⚠️ Já estamos em Elysarix — não repita a travessia nem a introdução. Continue a cena do ponto atual."
 
-        # System block final
+        # system
         system_block = "\n\n".join([
             persona_text, tone_hint, length_hint, sensory_hint,
             nsfw_hint, ferrao_hint, controle_hint, ciume_hint,
@@ -299,14 +295,14 @@ class NerithService(BaseCharacter):
             "FERRAMENTAS: use get_memory_pin para recuperar estado persistente, get_fact para saber se o portal já foi atravessado e set_fact para marcar portal_aberto=True assim que a cena mudar para Elysarix. Nunca repita a cena de travessia se portal_aberto=True."
         ])
 
-        # Junta system msgs
+        # pre_msgs finais
         pre_msgs: List[Dict[str, str]] = []
         if state_msgs:
             pre_msgs.extend(state_msgs)
         if continue_pre_msgs:
             pre_msgs.extend(continue_pre_msgs)
 
-        # MONTA A LISTA DE MENSAGENS
+        # mensagens completas
         messages: List[Dict[str, str]] = (
             pre_msgs
             + [{"role": "system", "content": system_block}]
@@ -320,7 +316,7 @@ class NerithService(BaseCharacter):
         )
 
         # =====================================================
-        # Loop de tool calling
+        # Loop de tool-calling
         # =====================================================
         iteration = 0
         while iteration < max_iterations:
@@ -357,7 +353,7 @@ class NerithService(BaseCharacter):
             tool_calls = msg.get("tool_calls", [])
 
             if not tool_calls:
-                # Sem tool calls, fim
+                # resposta final
                 save_interaction(usuario_key, prompt, texto, f"{provider}:{used_model}")
                 self._detect_and_update_local(usuario_key, texto, portal_aberto=portal_aberto)
                 clear_user_cache(usuario_key)
@@ -366,7 +362,7 @@ class NerithService(BaseCharacter):
                     clear_user_cache(usuario_key)
                 return texto
 
-            # Se teve tool_call, adiciona e continua
+            # teve tool_call → executa e continua
             if tool_calling_on:
                 st.info(f"🔧 Executando {len(tool_calls)} ferramenta(s)...")
 
@@ -394,7 +390,7 @@ class NerithService(BaseCharacter):
                     "content": result
                 })
 
-            # estourou as iterações
+            # limite de iterações
             if iteration >= max_iterations and tool_calls:
                 st.warning("⚠️ Limite de iterações atingido. Finalizando...")
                 texto_final = texto or "Desculpe, não consegui completar a operação."
@@ -406,7 +402,7 @@ class NerithService(BaseCharacter):
                     clear_user_cache(usuario_key)
                 return texto_final
 
-        # Fallback
+        # fallback
         texto_final = texto or ""
         save_interaction(usuario_key, prompt, texto_final, f"{provider}:{used_model}")
         return texto_final
@@ -564,6 +560,7 @@ class NerithService(BaseCharacter):
     def _detect_and_update_local(self, usuario_key: str, assistant_msg: str, portal_aberto: bool = False) -> None:
         msg_lower = (assistant_msg or "").lower()
 
+        # se já estamos em Elysarix, só aceita volta muito explícita
         if portal_aberto:
             gatilhos_volta_explicit = [
                 "atravessamos o portal de volta",
@@ -579,6 +576,7 @@ class NerithService(BaseCharacter):
                 clear_user_cache(usuario_key)
             return
 
+        # ida para Elysarix
         if any(phrase in msg_lower for phrase in [
             "bem-vindo a elysarix",
             "bem-vinda a elysarix",
@@ -592,6 +590,7 @@ class NerithService(BaseCharacter):
             clear_user_cache(usuario_key)
             return
 
+        # volta normal (só quando portal não estava travado)
         if any(phrase in msg_lower for phrase in [
             "voltamos para o quarto",
             "de volta ao mundo humano",
@@ -602,6 +601,36 @@ class NerithService(BaseCharacter):
             set_fact(usuario_key, "local_cena_atual", "quarto", {"fonte": "auto_detect"})
             clear_user_cache(usuario_key)
             return
+
+    # -----------------------------------------------------
+    # CHECAGEM DE LOCAL POR COMANDO DO USUÁRIO
+    # -----------------------------------------------------
+    def _check_user_location_command(self, prompt: str) -> str | None:
+        """Permite o usuário dizer explicitamente onde a cena está."""
+        pl = (prompt or "").lower()
+
+        # força cena em elysarix
+        if any(w in pl for w in [
+            "estamos em elysarix",
+            "estou em elysarix",
+            "chegamos em elysarix",
+            "estamos no mundo élfico",
+            "ficamos em elysarix",
+        ]):
+            return "Elysarix"
+
+        # força cena no quarto / mundo humano
+        if any(w in pl for w in [
+            "estamos no quarto",
+            "estou no quarto",
+            "voltamos para casa",
+            "voltamos pro quarto",
+            "ficar no quarto",
+            "ficar aqui no quarto",
+        ]):
+            return "quarto"
+
+        return None
 
     # -----------------------------------------------------
     # INTENÇÕES (gravidez / escolha de mundo)
@@ -690,19 +719,17 @@ class NerithService(BaseCharacter):
         return "\n".join(lines) if len(lines) > 1 else ""
 
     # -----------------------------------------------------
-    # HISTÓRICO (AGORA DENTRO DA CLASSE)
+    # HISTÓRICO
     # -----------------------------------------------------
     def _montar_historico(self, usuario_key: str, history_boot: List[Dict[str, str]]) -> List[Dict[str, str]]:
-        """Monta histórico com cache, aceitando vários formatos de campos do banco."""
         docs = cached_get_history(usuario_key, limit=50) or []
 
-        # Se não há nada salvo ainda, devolve só o boot
         if not docs:
             return history_boot or []
 
         msgs: List[Dict[str, str]] = []
 
-        # muitos repositórios devolvem do mais novo para o mais velho — invertendo
+        # invertendo para mais antigo → mais novo
         docs = list(reversed(docs))
 
         for doc in docs:
@@ -726,6 +753,7 @@ class NerithService(BaseCharacter):
 
             if user_msg and user_msg.strip():
                 msgs.append({"role": role_user, "content": user_msg.strip()})
+
             if assistant_msg and assistant_msg.strip():
                 msgs.append({"role": role_assistant, "content": assistant_msg.strip()})
 
