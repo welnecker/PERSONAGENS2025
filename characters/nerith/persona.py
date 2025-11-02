@@ -317,8 +317,8 @@ def get_persona(_name: str = "Nerith") -> Tuple[str, List[Dict[str, str]]]:
             "content": (
                 "*A porta do guarda-roupa se abre sozinha. Uma luz azul-acinzentada vaza pelas frestas. "
                 "Eu saio do portal — alta, imponente, pele azul brilhando na penumbra do quarto. "
-                "Meus olhos verdes te encontram na cama, ao lado dela.*\n\n"
-                "\"Janio... acorde. Eu atravessei. Sou Nerith. E desta vez você vai comigo.\""
+                "Meu avatar humana me encombre, me aproximo mais.*\n\n"
+                "\"Janio... acorde. Sou Nerith. Eu ouvi seu chamado em seus sonhos.\""
             ),
         }
     ]
