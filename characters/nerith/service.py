@@ -746,23 +746,49 @@ class NerithService(BaseCharacter):
         
         return "\n".join(lines) if len(lines) > 1 else ""
 
-    def _montar_historico(self, usuario_key: str, history_boot: List[Dict[str, str]]) -> List[Dict[str, str]]:
-        """Monta histórico com cache."""
-        docs = cached_get_history(usuario_key, limit=50)  # Aumentado de 20 para 50 para mais contexto
-        
-        msgs = []
-        for doc in docs:
-            role_user = doc.get("role_user", "user")
-            role_assistant = doc.get("role_assistant", "assistant")
-            user_msg = doc.get("user_message", "")
-            assistant_msg = doc.get("assistant_message", "")
-            
-            if user_msg:
-                msgs.append({"role": role_user, "content": user_msg})
-            if assistant_msg:
-                msgs.append({"role": role_assistant, "content": assistant_msg})
-        
-        if not msgs and history_boot:
-            return history_boot
-        
-        return msgs
+   def _montar_historico(self, usuario_key: str, history_boot: List[Dict[str, str]]) -> List[Dict[str, str]]:
+    """Monta histórico com cache, aceitando vários formatos de campos do banco."""
+    docs = cached_get_history(usuario_key, limit=50) or []
+
+    # Se NÃO há nada salvo ainda, devolve só o boot
+    if not docs:
+        return history_boot or []
+
+    msgs: List[Dict[str, str]] = []
+
+    # MUITOS repositórios devolvem do mais novo pro mais velho.
+    # A gente inverte pra mandar pro modelo na ordem CERTA (mais antigo -> mais novo).
+    docs = list(reversed(docs))
+
+    for doc in docs:
+        # tenta vários nomes possíveis
+        user_msg = (
+            doc.get("user_message")
+            or doc.get("user")
+            or doc.get("input")
+            or doc.get("prompt")
+            or ""
+        )
+        assistant_msg = (
+            doc.get("assistant_message")
+            or doc.get("assistant")
+            or doc.get("output")
+            or doc.get("response")
+            or ""
+        )
+
+        # papéis (fallback pra padrão)
+        role_user = doc.get("role_user", "user")
+        role_assistant = doc.get("role_assistant", "assistant")
+
+        if user_msg and user_msg.strip():
+            msgs.append({"role": role_user, "content": user_msg.strip()})
+
+        if assistant_msg and assistant_msg.strip():
+            msgs.append({"role": role_assistant, "content": assistant_msg.strip()})
+
+    # Se por algum motivo ainda ficou vazio, cai pro boot
+    if not msgs and history_boot:
+        return history_boot
+
+    return msgs
