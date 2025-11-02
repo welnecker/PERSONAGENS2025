@@ -155,19 +155,41 @@ class NerithService(BaseCharacter):
         persona_text, history_boot = self._load_persona()
         usuario_key = f"{user}::nerith"
 
-        # 🔹 SE NÃO VEIO MENSAGEM: devolve o boot da Nerith
+           # pega histórico existente (pouco, só pra detectar se já falou antes)
+        existing_history = cached_get_history(usuario_key, limit=1)
+
+        # pega fatos já salvos (antes de decidir quarto x elysarix)
+        fatos_existentes = cached_get_facts(usuario_key)
+        local_registrado = (fatos_existentes.get("local_cena_atual") or "").lower()
+        portal_registrado = str(fatos_existentes.get("portal_aberto", "")).lower() in ("true", "1", "yes", "sim")
+
+        # 🔹 SE NÃO VEIO MENSAGEM
         if not prompt:
-            boot_text = ""
+            # se JÁ temos histórico, só devolve a última fala (não reinicia boot)
+            if existing_history:
+                last_assistant = existing_history[0].get("assistant_message", "")
+                last_user = existing_history[0].get("user_message", "")
+                return last_assistant or last_user or "..."
+
+            # se NÃO temos histórico ainda, aí sim manda o boot
             if history_boot and len(history_boot) > 0:
                 boot_text = history_boot[0].get("content", "")
             else:
-                boot_text = "A porta do guarda-roupas se abre sozinha. A luz azul me revela. Eu te encontrei."
-            # salva no histórico pra próxima chamada já vir com isso
+                boot_text = (
+                    "A porta do guarda-roupas se abre sozinha. A luz azul me revela. Eu te encontrei."
+                )
+
             save_interaction(usuario_key, "", boot_text, "system:boot")
-            # marca que estamos no quarto
-            set_fact(usuario_key, "local_cena_atual", "quarto", {"fonte": "boot"})
+
+            # ⚠️ só grava 'quarto' se NÃO estivermos já em Elysarix
+            if portal_registrado or local_registrado == "elysarix":
+                set_fact(usuario_key, "local_cena_atual", "Elysarix", {"fonte": "boot-preserva"})
+            else:
+                set_fact(usuario_key, "local_cena_atual", "quarto", {"fonte": "boot"})
+
             clear_user_cache(usuario_key)
             return boot_text
+
 
         # Tool calling habilitado?
         tool_calling_on = st.session_state.get("tool_calling_on", False)
@@ -187,20 +209,38 @@ class NerithService(BaseCharacter):
         local_atual = self._safe_get_local(usuario_key)
         memoria_pin = self._build_memory_pin(usuario_key, user)
 
-        # Recarrega fatos (com cache)
+                # Recarrega fatos (com cache)
         fatos = cached_get_facts(usuario_key)
         portal_aberto = str(fatos.get("portal_aberto", "")).lower() in ("true", "1", "yes", "sim")
 
-        # Parâmetros Nerith
-        dreamworld_detail_level = int(fatos.get("dreamworld_detail_level", 1))
-        guide_assertiveness = int(fatos.get("guide_assertiveness", 1))
+        # Local atual salvo
+        local_atual = self._safe_get_local(usuario_key)
+
+        # ✅ Se o portal está aberto mas o local não está consistente, força Elysarix
+        if portal_aberto and (not local_atual or local_atual.lower() != "elysarix"):
+            local_atual = "Elysarix"
+            set_fact(usuario_key, "local_cena_atual", "Elysarix", {"fonte": "reidrata_depois_toggle"})
+            clear_user_cache(usuario_key)
+
+        # Parâmetros Nerith (com fallback seguro, evitando int("") )
+        try:
+            dreamworld_detail_level = int(fatos.get("dreamworld_detail_level", 1) or 1)
+        except ValueError:
+            dreamworld_detail_level = 1
+
+        try:
+            guide_assertiveness = int(fatos.get("guide_assertiveness", 1) or 1)
+        except ValueError:
+            guide_assertiveness = 1
 
         # Foco sensorial rotativo
         foco = self._get_sensory_focus()
 
         # Hints
         length_hint = "COMPRIMENTO: gere 4–7 parágrafos, cada um com 2–4 frases naturais."
-        sensory_hint = f"SENSORIAL_FOCO: no 1º ou 2º parágrafo, insira 1–2 pistas envolvendo {foco}, fundidas à ação."
+        sensory_hint = (
+            f"SENSORIAL_FOCO: no 1º ou 2º parágrafo, insira 1–2 pistas envolvendo {foco}, fundidas à ação."
+        )
         tone_hint = "TOM: confiante, assertiva e dominante no charme; nunca submissa/infantil."
 
         # NSFW
