@@ -1,8 +1,4 @@
-# nerithservice_patch_stable.py gerado em 2025-11-01T19:14:41
-# Patch automático para estabilizar memória de portal.
-
-# characters/nerith/service.py - VERSÃO OTIMIZADA
-# Baseado em Mary service com mecânicas élficas de Nerith
+# nerithservice.py - VERSÃO OTIMIZADA + boot automático
 from __future__ import annotations
 
 import streamlit as st
@@ -156,11 +152,22 @@ class NerithService(BaseCharacter):
     def reply(self, user: str, model: str) -> str:
         """Método principal de resposta."""
         prompt = self._get_user_prompt()
-        if not prompt:
-            return ""
-
         persona_text, history_boot = self._load_persona()
         usuario_key = f"{user}::nerith"
+
+        # 🔹 SE NÃO VEIO MENSAGEM: devolve o boot da Nerith
+        if not prompt:
+            boot_text = ""
+            if history_boot and len(history_boot) > 0:
+                boot_text = history_boot[0].get("content", "")
+            else:
+                boot_text = "A porta do guarda-roupas se abre sozinha. A luz azul me revela. Eu te encontrei."
+            # salva no histórico pra próxima chamada já vir com isso
+            save_interaction(usuario_key, "", boot_text, "system:boot")
+            # marca que estamos no quarto
+            set_fact(usuario_key, "local_cena_atual", "quarto", {"fonte": "boot"})
+            clear_user_cache(usuario_key)
+            return boot_text
 
         # Tool calling habilitado?
         tool_calling_on = st.session_state.get("tool_calling_on", False)
@@ -182,10 +189,9 @@ class NerithService(BaseCharacter):
 
         # Recarrega fatos (com cache)
         fatos = cached_get_facts(usuario_key)
-        
-        
         portal_aberto = str(fatos.get("portal_aberto", "")).lower() in ("true", "1", "yes", "sim")
-# Parâmetros Nerith
+
+        # Parâmetros Nerith
         dreamworld_detail_level = int(fatos.get("dreamworld_detail_level", 1))
         guide_assertiveness = int(fatos.get("guide_assertiveness", 1))
 
@@ -222,10 +228,10 @@ class NerithService(BaseCharacter):
         ferrao_hint = self._get_ferrao_hint()
         elysarix_hint = self._get_elysarix_hint(fatos)
 
-        
         if portal_aberto:
             elysarix_hint += "\n⚠️ Já estamos em Elysarix — não repita a travessia nem a introdução. Continue a cena do ponto atual."
-# Monta system
+
+        # Monta system
         system_block = "\n\n".join([
             persona_text, tone_hint, length_hint, sensory_hint,
             nsfw_hint, ferrao_hint, controle_hint, ciume_hint,
@@ -468,7 +474,6 @@ class NerithService(BaseCharacter):
         else:
             return "ELYSARIX: Sem escolha ativa. Portal disponível conforme regras."
 
-
     def _detect_elysarix_scene(self, texto: str) -> bool:
         if not texto:
             return False
@@ -574,7 +579,6 @@ class NerithService(BaseCharacter):
             return "quarto"
         
         return None
-
 
     def _apply_world_choice_intent(self, usuario_key: str, prompt: str) -> List[Dict[str, str]]:
         """Detecta intenção de escolha de mundo e atualiza memórias."""
