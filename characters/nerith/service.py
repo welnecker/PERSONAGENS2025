@@ -212,7 +212,7 @@ class NerithService(BaseCharacter):
                 # Recarrega fatos (com cache)
         fatos = cached_get_facts(usuario_key)
         portal_aberto = str(fatos.get("portal_aberto", "")).lower() in ("true", "1", "yes", "sim")
-                prompt_lower = prompt.lower().strip()
+        prompt_lower = prompt.lower().strip()
         if prompt_lower in ("continue", "continua", "segue", "prossegue", "continua nerith", "continue nerith"):
             if portal_aberto:
                 # trava na cena atual em Elysarix
@@ -594,7 +594,7 @@ class NerithService(BaseCharacter):
         except Exception:
             return ""
 
-        def _detect_and_update_local(self, usuario_key: str, assistant_msg: str, portal_aberto: bool = False):
+    def _detect_and_update_local(self, usuario_key: str, assistant_msg: str, portal_aberto: bool = False):
         """Detecta mudança de local na resposta e atualiza fact, mas NÃO derruba Elysarix à toa."""
         msg_lower = (assistant_msg or "").lower()
 
@@ -746,7 +746,7 @@ class NerithService(BaseCharacter):
         
         return "\n".join(lines) if len(lines) > 1 else ""
 
-   def _montar_historico(self, usuario_key: str, history_boot: List[Dict[str, str]]) -> List[Dict[str, str]]:
+def _montar_historico(self, usuario_key: str, history_boot: List[Dict[str, str]]) -> List[Dict[str, str]]:
     """Monta histórico com cache, aceitando vários formatos de campos do banco."""
     docs = cached_get_history(usuario_key, limit=50) or []
 
