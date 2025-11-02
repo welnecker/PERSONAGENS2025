@@ -212,6 +212,22 @@ class NerithService(BaseCharacter):
                 # Recarrega fatos (com cache)
         fatos = cached_get_facts(usuario_key)
         portal_aberto = str(fatos.get("portal_aberto", "")).lower() in ("true", "1", "yes", "sim")
+                prompt_lower = prompt.lower().strip()
+        if prompt_lower in ("continue", "continua", "segue", "prossegue", "continua nerith", "continue nerith"):
+            if portal_aberto:
+                # trava na cena atual em Elysarix
+                pre_msgs = [{
+                    "role": "system",
+                    "content": "PEDIDO_CURTO: o usuário só disse para continuar. NÃO mude o cenário. Continue exatamente de onde parou em ELYSARIX."
+                }]
+            else:
+                pre_msgs = [{
+                    "role": "system",
+                    "content": "PEDIDO_CURTO: o usuário só disse para continuar. NÃO mude o cenário. Continue exatamente de onde parou."
+                }]
+        else:
+            pre_msgs = []
+
 
         # Local atual salvo
         local_atual = self._safe_get_local(usuario_key)
@@ -323,7 +339,7 @@ class NerithService(BaseCharacter):
             if not tool_calls:
                 # Sem tool calls, retorna resposta
                 save_interaction(usuario_key, prompt, texto, f"{provider}:{used_model}")
-                self._detect_and_update_local(usuario_key, texto)  # Detecta mudança de local
+                self._detect_and_update_local(usuario_key, texto, portal_aberto=portal_aberto)  # Detecta mudança de local respeitando portal
                 clear_user_cache(usuario_key)  # Limpa cache para próximo turno ver histórico atualizado
                 if self._detect_elysarix_scene(texto):
                     set_fact(usuario_key, "portal_aberto", "True", {"fonte": "auto_detect_portal"})
@@ -363,7 +379,7 @@ class NerithService(BaseCharacter):
                 st.warning("⚠️ Limite de iterações atingido. Finalizando...")
                 texto_final = texto or "Desculpe, não consegui completar a operação."
                 save_interaction(usuario_key, prompt, texto_final, f"{provider}:{used_model}")
-                self._detect_and_update_local(usuario_key, texto_final)  # Detecta mudança de local
+                self._detect_and_update_local(usuario_key, texto, portal_aberto=portal_aberto)  # Detecta mudança de local respeitando portal
                 clear_user_cache(usuario_key)  # Limpa cache
                 if self._detect_elysarix_scene(texto_final):
                     set_fact(usuario_key, "portal_aberto", "True", {"fonte": "auto_detect_portal"})
@@ -578,10 +594,29 @@ class NerithService(BaseCharacter):
         except Exception:
             return ""
 
-    def _detect_and_update_local(self, usuario_key: str, assistant_msg: str):
-        """Detecta mudança de local na resposta e atualiza fact."""
+        def _detect_and_update_local(self, usuario_key: str, assistant_msg: str, portal_aberto: bool = False):
+        """Detecta mudança de local na resposta e atualiza fact, mas NÃO derruba Elysarix à toa."""
         msg_lower = (assistant_msg or "").lower()
-        
+
+        # 🔒 Se já estamos com portal aberto, só aceito voltar pro quarto se for MUITO explícito
+        if portal_aberto:
+            # frases que realmente significam "voltamos"
+            gatilhos_volta_explicit = [
+                "atravessamos o portal de volta",
+                "o portal se fecha atrás de nós",
+                "decidimos voltar para o quarto",
+                "voltamos para o quarto humano",
+                "voltamos pro quarto humano",
+                "voltamos para o mundo humano",
+                "voltamos pro mundo humano",
+            ]
+            if any(g in msg_lower for g in gatilhos_volta_explicit):
+                set_fact(usuario_key, "local_cena_atual", "quarto", {"fonte": "auto_detect_explicit"})
+                clear_user_cache(usuario_key)
+            # ⚠️ senão, ignora qualquer menção fraca tipo "laura ainda dorme"
+            return
+
+        # 🟦 Se o portal não está aberto ainda, então o detector normal vale
         # Detecta ida para Elysarix
         if any(phrase in msg_lower for phrase in [
             "bem-vindo a elysarix",
@@ -595,8 +630,8 @@ class NerithService(BaseCharacter):
             set_fact(usuario_key, "local_cena_atual", "Elysarix", {"fonte": "auto_detect"})
             clear_user_cache(usuario_key)
             return
-        
-        # Detecta volta para mundo humano
+
+        # Detecta volta para mundo humano (modo antigo, só quando portal não estava aberto)
         if any(phrase in msg_lower for phrase in [
             "voltamos para o quarto",
             "de volta ao mundo humano",
@@ -607,6 +642,7 @@ class NerithService(BaseCharacter):
             set_fact(usuario_key, "local_cena_atual", "quarto", {"fonte": "auto_detect"})
             clear_user_cache(usuario_key)
             return
+
 
     def _check_user_location_command(self, prompt: str) -> str | None:
         """Verifica se usuário está definindo local manualmente."""
