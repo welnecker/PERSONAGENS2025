@@ -1,129 +1,52 @@
 # characters/nerith/service.py
-# nerithservice.py - VERSÃO OTIMIZADA + boot automático + histórico + proteção de cenário
+# NerithService — com continuidade como Mary (histórico orçado + resumo rolante + lore + mem pin)
 from __future__ import annotations
 
-import streamlit as st
-import time
-import json
+import re, time, json, random
 from typing import List, Dict, Tuple
 from datetime import datetime
+import streamlit as st
 
 from core.common.base_service import BaseCharacter
 from core.service_router import route_chat_strict
 from core.repositories import (
     save_interaction, get_history_docs,
-    get_facts, get_fact, set_fact,
+    get_facts, get_fact, last_event, set_fact,
 )
-from core.tokens import toklen  # se não usar, pode remover
+from core.tokens import toklen
 
-# =========================================================
-# NSFW (opcional)
-# =========================================================
+# ===== LORE opcional (mesma API usada pela Mary) =====
+try:
+    from core.memoria_longa import topk as lore_topk, save_fragment as lore_save
+except Exception:
+    lore_topk = None
+    def lore_save(*_a, **_k): return None
+
+# ===== NSFW (opcional) =====
 try:
     from core.nsfw import nsfw_enabled
 except Exception:
     def nsfw_enabled(_user: str) -> bool:
         return False
 
-# =========================================================
-# Persona específica
-# =========================================================
+# ===== Persona =====
 try:
-    from .persona import get_persona
+    from .persona import get_persona  # -> Tuple[str, List[Dict[str,str]]]
 except Exception:
     def get_persona() -> Tuple[str, List[Dict[str, str]]]:
-        txt = "Você é NERITH, uma elfa de pele azulada."
+        txt = (
+            "Você é **NERITH**, elfa de pele azulada, olhos esmeralda e presença dominante e terna. "
+            "Fale em 1ª pessoa, conduzindo com confiança e charme. 4–7 parágrafos; 2–4 frases cada."
+        )
         return txt, []
 
-# =========================================================
-# CONFIGURAÇÃO DE CACHE
-# =========================================================
-CACHE_TTL = int(st.secrets.get("CACHE_TTL", 30))  # segundos
-
-_cache_facts: Dict[str, Dict] = {}
-_cache_history: Dict[str, List[Dict]] = {}
-_cache_timestamps: Dict[str, datetime] = {}
-
-
-def _purge_expired_cache() -> None:
-    """Remove entradas expiradas do cache."""
-    now = datetime.utcnow()
-    expired_keys = [
-        k for k, ts in _cache_timestamps.items()
-        if (now - ts).total_seconds() > CACHE_TTL
-    ]
-    for k in expired_keys:
-        _cache_timestamps.pop(k, None)
-        if k.startswith("facts_"):
-            user_key = k.replace("facts_", "")
-            _cache_facts.pop(user_key, None)
-        elif k.startswith("history_"):
-            # history_<user>_<limit>
-            user_key = k.replace("history_", "").split("_")[0]
-            for hk in [hk for hk in list(_cache_history.keys()) if hk.startswith(f"history_{user_key}_")]:
-                _cache_history.pop(hk, None)
-
-
-def cached_get_facts(user_key: str) -> Dict:
-    """Busca fatos com cache de {CACHE_TTL}s."""
-    _purge_expired_cache()
-    now = datetime.utcnow()
-
-    if user_key in _cache_facts:
-        cached_at = _cache_timestamps.get(f"facts_{user_key}")
-        if cached_at and (now - cached_at).total_seconds() < CACHE_TTL:
-            return _cache_facts[user_key]
-
-    try:
-        facts = get_facts(user_key) or {}
-    except Exception:
-        facts = {}
-
-    _cache_facts[user_key] = facts
-    _cache_timestamps[f"facts_{user_key}"] = now
-    return facts
-
-
-def cached_get_history(user_key: str, limit: int = 20) -> List[Dict]:
-    """Busca histórico com cache de {CACHE_TTL}s."""
-    _purge_expired_cache()
-    now = datetime.utcnow()
-
-    cache_key = f"history_{user_key}_{limit}"
-    if cache_key in _cache_history:
-        cached_at = _cache_timestamps.get(cache_key)
-        if cached_at and (now - cached_at).total_seconds() < CACHE_TTL:
-            return _cache_history[cache_key]
-
-    try:
-        docs = get_history_docs(user_key, limit=limit) or []
-    except Exception:
-        docs = []
-
-    _cache_history[cache_key] = docs
-    _cache_timestamps[cache_key] = now
-    return docs
-
-
-def clear_user_cache(user_key: str) -> None:
-    """Limpa cache de um usuário específico."""
-    _cache_facts.pop(user_key, None)
-    keys_to_remove = [k for k in list(_cache_history.keys()) if k.startswith(f"history_{user_key}_")]
-    for k in keys_to_remove:
-        _cache_history.pop(k, None)
-        _cache_timestamps.pop(k, None)
-    _cache_timestamps.pop(f"facts_{user_key}", None)
-
-
-# =========================================================
-# FERRAMENTAS (TOOL CALLING)
-# =========================================================
+# ===== Tool Calling =====
 TOOLS = [
     {
         "type": "function",
         "function": {
             "name": "get_memory_pin",
-            "description": "Busca memória canônica (MEMÓRIA_PIN_NERITH) do usuário com informações importantes",
+            "description": "Retorna fatos canônicos curtos persistidos para Nerith (linha compacta).",
             "parameters": {"type": "object", "properties": {}, "required": []}
         }
     },
@@ -131,13 +54,10 @@ TOOLS = [
         "type": "function",
         "function": {
             "name": "set_fact",
-            "description": "Salva ou atualiza um fato na memória do usuário",
+            "description": "Salva/atualiza um fato canônico (chave/valor) para Nerith.",
             "parameters": {
                 "type": "object",
-                "properties": {
-                    "key": {"type": "string", "description": "Chave do fato (ex: 'nome_usuario', 'portal_ativo')"},
-                    "value": {"type": "string", "description": "Valor do fato"}
-                },
+                "properties": {"key": {"type": "string"}, "value": {"type": "string"}},
                 "required": ["key", "value"]
             }
         }
@@ -146,70 +66,181 @@ TOOLS = [
         "type": "function",
         "function": {
             "name": "get_fact",
-            "description": "Busca um fato específico da memória",
+            "description": "Busca um fato específico na memória de Nerith.",
             "parameters": {
                 "type": "object",
-                "properties": {
-                    "key": {"type": "string", "description": "Chave do fato a buscar"}
-                },
+                "properties": {"key": {"type": "string"}},
                 "required": ["key"]
             }
         }
-    }
+    },
 ]
 
+# ===== Janelas por modelo (mesmas heurísticas da Mary) =====
+MODEL_WINDOWS = {
+    "anthropic/claude-3.5-haiku": 200_000,
+    "together/meta-llama/Meta-Llama-3.1-405B-Instruct-Turbo": 128_000,
+    "together/Qwen/Qwen2.5-72B-Instruct": 32_000,
+    "deepseek/deepseek-chat-v3-0324": 32_000,
+    "inclusionai/ling-1t": 64_000,
+}
+DEFAULT_WINDOW = 32_000
 
-# =========================================================
-# CLASSE PRINCIPAL
-# =========================================================
+def _get_window_for(model: str) -> int:
+    return MODEL_WINDOWS.get((model or "").strip(), DEFAULT_WINDOW)
+
+def _budget_slices(model: str) -> tuple[int, int, int]:
+    win = _get_window_for(model)
+    hist = max(8_000, int(win * 0.60))
+    meta = int(win * 0.20)
+    outb = int(win * 0.20)
+    return hist, meta, outb
+
+def _safe_max_output(win: int, prompt_tokens: int) -> int:
+    alvo = int(win * 0.20)
+    sobra = max(0, win - prompt_tokens - 256)
+    return max(512, min(alvo, sobra))
+
+# ===== Cache leve (facts/history) =====
+CACHE_TTL = int(st.secrets.get("CACHE_TTL", 30))
+_cache_facts: Dict[str, Dict] = {}
+_cache_history: Dict[str, List[Dict]] = {}
+_cache_timestamps: Dict[str, float] = {}
+
+def _purge_expired_cache():
+    now = time.time()
+    for k in list(_cache_facts.keys()):
+        if now - _cache_timestamps.get(f"facts_{k}", 0) >= CACHE_TTL:
+            _cache_facts.pop(k, None); _cache_timestamps.pop(f"facts_{k}", None)
+    for k in list(_cache_history.keys()):
+        if now - _cache_timestamps.get(f"hist_{k}", 0) >= CACHE_TTL:
+            _cache_history.pop(k, None); _cache_timestamps.pop(f"hist_{k}", None)
+
+def clear_user_cache(user_key: str):
+    _cache_facts.pop(user_key, None)
+    _cache_timestamps.pop(f"facts_{user_key}", None)
+    _cache_history.pop(user_key, None)
+    _cache_timestamps.pop(f"hist_{user_key}", None)
+
+def cached_get_facts(user_key: str) -> Dict:
+    _purge_expired_cache()
+    now = time.time()
+    if user_key in _cache_facts and (now - _cache_timestamps.get(f"facts_{user_key}", 0) < CACHE_TTL):
+        return _cache_facts[user_key]
+    try:
+        f = get_facts(user_key) or {}
+    except Exception:
+        f = {}
+    _cache_facts[user_key] = f
+    _cache_timestamps[f"facts_{user_key}"] = now
+    return f
+
+def cached_get_history(user_key: str) -> List[Dict]:
+    _purge_expired_cache()
+    now = time.time()
+    if user_key in _cache_history and (now - _cache_timestamps.get(f"hist_{user_key}", 0) < CACHE_TTL):
+        return _cache_history[user_key]
+    try:
+        docs = get_history_docs(user_key) or []
+    except Exception:
+        docs = []
+    _cache_history[user_key] = docs
+    _cache_timestamps[f"hist_{user_key}"] = now
+    return docs
+
+# ===== UI: aviso de poda/resumo =====
+def _mem_drop_warn(report: dict) -> None:
+    if not report: return
+    summarized = int(report.get("summarized_pairs", 0))
+    trimmed    = int(report.get("trimmed_pairs", 0))
+    hist_tokens = int(report.get("hist_tokens", 0))
+    hist_budget = int(report.get("hist_budget", 0))
+    if summarized or trimmed:
+        msg = []
+        if summarized: msg.append(f"**{summarized}** turnos antigos **foram resumidos**")
+        if trimmed:    msg.append(f"**{trimmed}** turnos verbatim **foram podados**")
+        txt = " e ".join(msg)
+        st.info(
+            f"⚠️ Memória ajustada: {txt}. (histórico: {hist_tokens}/{hist_budget} tokens). "
+            "Se notar esquecimentos, peça um **‘recap curto’** ou fixe fatos na **Memória Canônica**.",
+            icon="⚠️",
+        )
+
+# ===== Helpers de resumo (como Mary) =====
+def _heuristic_summarize(texto: str, max_bullets: int = 10) -> str:
+    texto = re.sub(r"\s+", " ", (texto or "").strip())
+    sent = re.split(r"(?<=[\.\!\?])\s+", texto)
+    sent = [s.strip() for s in sent if s.strip()]
+    return " • " + "\n • ".join(sent[:max_bullets])
+
+def _llm_summarize(model: str, user_chunk: str) -> str:
+    seed = (
+        "Resuma em 6–10 frases telegráficas, somente fatos duráveis (decisões, nomes, locais, tempo, "
+        "gestos/itens fixos e rumo da cena). Proibido diálogo literal."
+    )
+    try:
+        data, used_model, provider = route_chat_strict(model, {
+            "model": model,
+            "messages": [
+                {"role": "system", "content": seed},
+                {"role": "user", "content": user_chunk}
+            ],
+            "max_tokens": 220,
+            "temperature": 0.2,
+            "top_p": 0.9
+        })
+        txt = (data.get("choices", [{}])[0].get("message", {}) or {}).get("content", "") or ""
+        return txt.strip() or _heuristic_summarize(user_chunk)
+    except Exception:
+        return _heuristic_summarize(user_chunk)
+
+# ===== Class =====
 class NerithService(BaseCharacter):
     id: str = "nerith"
     display_name: str = "Nerith"
 
-    # -----------------------------------------------------
-    # MÉTODO PRINCIPAL
-    # -----------------------------------------------------
+    # ------------------- API -------------------
     def reply(self, user: str, model: str) -> str:
         prompt = self._get_user_prompt()
         persona_text, history_boot = self._load_persona()
         usuario_key = f"{user}::nerith"
 
-        # histórico mínimo
-        existing_history = cached_get_history(usuario_key, limit=1)
+        # histórico mínimo (só para decidir boot)
+        existing_history = cached_get_history(usuario_key)
 
-        # fatos salvos antes do boot
-        fatos_existentes = cached_get_facts(usuario_key)
-        local_registrado = (fatos_existentes.get("local_cena_atual") or "").lower()
-        portal_registrado = str(fatos_existentes.get("portal_aberto", "")).lower() in ("true", "1", "yes", "sim")
+        # fatos atuais
+        f0 = cached_get_facts(usuario_key)
+        local_registrado = (f0.get("local_cena_atual") or "").lower()
+        portal_registrado = str(f0.get("portal_aberto", "")).lower() in ("true", "1", "yes", "sim")
 
-        # 🔹 SEM PROMPT → boot ou última fala
+        # Boot (sem prompt)
         if not prompt:
             if existing_history:
-                last_assistant = existing_history[0].get("assistant_message", "")
-                last_user = existing_history[0].get("user_message", "")
-                return last_assistant or last_user or "..."
-
-            if history_boot and len(history_boot) > 0:
-                boot_text = history_boot[0].get("content", "")
-            else:
-                boot_text = "A porta do guarda-roupas se abre sozinha. A luz azul me revela. Eu te encontrei."
-
+                # devolve última fala se existir
+                try:
+                    last = existing_history[-1]
+                    return last.get("assistant_message") or last.get("resposta_nerith") or last.get("assistant") or "..."
+                except Exception:
+                    return "..."
+            boot_text = (
+                history_boot[0].get("content", "")
+                if (history_boot and len(history_boot) > 0)
+                else "A porta do guarda-roupas se abre sozinha. A luz azul me revela. Eu te encontrei."
+            )
             save_interaction(usuario_key, "", boot_text, "system:boot")
-
             if portal_registrado or local_registrado == "elysarix":
                 set_fact(usuario_key, "local_cena_atual", "Elysarix", {"fonte": "boot-preserva"})
             else:
                 set_fact(usuario_key, "local_cena_atual", "quarto", {"fonte": "boot"})
-
             clear_user_cache(usuario_key)
             return boot_text
 
-        # tool calling
+        # tool-calling toggles
         tool_calling_on = st.session_state.get("tool_calling_on", False)
         tools = TOOLS if tool_calling_on else None
         max_iterations = 3 if tool_calling_on else 1
 
-        # intenções (gravidez / escolha de mundo)
+        # intenção (gravidez/escolha de mundo)
         state_msgs = self._apply_world_choice_intent(usuario_key, prompt)
 
         # comando manual de local
@@ -218,141 +249,179 @@ class NerithService(BaseCharacter):
             set_fact(usuario_key, "local_cena_atual", user_location, {"fonte": "user_command"})
             clear_user_cache(usuario_key)
 
-        # local atual + memória pin
+        # estado atual
         local_atual = self._safe_get_local(usuario_key)
+        f_all = cached_get_facts(usuario_key)
         memoria_pin = self._build_memory_pin(usuario_key, user)
 
-        # fatos atualizados
-        fatos = cached_get_facts(usuario_key)
-        portal_aberto = str(fatos.get("portal_aberto", "")).lower() in ("true", "1", "yes", "sim")
+        portal_aberto = str(f_all.get("portal_aberto", "")).lower() in ("true", "1", "yes", "sim")
 
         # proteção para "continue"
-        prompt_lower = prompt.lower().strip()
+        pl = prompt.lower().strip()
         continue_pre_msgs: List[Dict[str, str]] = []
-        if prompt_lower in ("continue", "continua", "segue", "prossegue", "continua nerith", "continue nerith"):
+        if pl in ("continue", "continua", "segue", "prossegue", "continua nerith", "continue nerith"):
             if portal_aberto:
-                continue_pre_msgs.append({
-                    "role": "system",
-                    "content": "PEDIDO_CURTO: o usuário só disse para continuar. NÃO mude o cenário. Continue exatamente de onde parou em ELYSARIX."
-                })
+                continue_pre_msgs.append({"role": "system",
+                    "content": "PEDIDO_CURTO: o usuário só disse para continuar. NÃO mude o cenário. Continue exatamente de onde parou em ELYSARIX."})
             else:
-                continue_pre_msgs.append({
-                    "role": "system",
-                    "content": "PEDIDO_CURTO: o usuário só disse para continuar. NÃO mude o cenário. Continue exatamente de onde parou."
-                })
+                continue_pre_msgs.append({"role": "system",
+                    "content": "PEDIDO_CURTO: o usuário só disse para continuar. NÃO mude o cenário. Continue exatamente de onde parou."})
 
-        # se o portal está aberto mas o fact ficou em branco → força elysarix
+        # se portal já aberto mas local não é Elysarix → força
         if portal_aberto and (not local_atual or local_atual.lower() != "elysarix"):
             local_atual = "Elysarix"
             set_fact(usuario_key, "local_cena_atual", "Elysarix", {"fonte": "reidrata_depois_toggle"})
             clear_user_cache(usuario_key)
 
         # parâmetros com fallback
-        try:
-            dreamworld_detail_level = int(fatos.get("dreamworld_detail_level", 1) or 1)
-        except ValueError:
-            dreamworld_detail_level = 1
+        def _safe_int(v, d=1):
+            try: return int(v or d)
+            except Exception: return d
+        dreamworld_detail_level = _safe_int(f_all.get("dreamworld_detail_level"), 1)
+        guide_assertiveness = _safe_int(f_all.get("guide_assertiveness"), 1)
 
-        try:
-            guide_assertiveness = int(fatos.get("guide_assertiveness", 1) or 1)
-        except ValueError:
-            guide_assertiveness = 1
-
-        # foco sensorial
+        # foco sensorial rotativo
         foco = self._get_sensory_focus()
 
-        # hints
-        length_hint = "COMPRIMENTO: gere 4–7 parágrafos, cada um com 2–4 frases naturais."
-        sensory_hint = f"SENSORIAL_FOCO: no 1º ou 2º parágrafo, insira 1–2 pistas envolvendo {foco}, fundidas à ação."
-        tone_hint = "TOM: confiante, assertiva e dominante no charme; nunca submissa/infantil."
-
-        # nsfw
+        # NSFW
         try:
             nsfw_on = bool(nsfw_enabled(usuario_key))
         except Exception:
             nsfw_on = False
-
         nsfw_hint = (
-            "NSFW: LIBERADO. Erotismo consensual e progressivo; pode detalhar com elegância."
+            "NSFW: LIBERADO. Erotismo consensual e progressivo; descreva com elegância."
             if nsfw_on else
             "NSFW: BLOQUEADO. Flerte, tensão e fade-to-black."
         )
 
-        # outros hints
+        # Hints principais
+        length_hint = "COMPRIMENTO: gere 4–7 parágrafos, cada um com 2–4 frases naturais."
+        sensory_hint = f"SENSORIAL_FOCO: no 1º ou 2º parágrafo, insira 1–2 pistas envolvendo **{foco}**, fundidas à ação."
+        tone_hint = "TOM: confiante, assertiva e dominante no charme; nunca submissa/infantil."
+
+        # Demais hints (mantidos do seu service anterior)
         pubis_hint = self._get_pubis_hint(prompt, nsfw_on)
-        controle_hint = self._get_controle_hint(fatos, prompt)
-        ciume_hint = self._get_ciume_hint(fatos)
+        controle_hint = self._get_controle_hint(f_all, prompt)
+        ciume_hint = self._get_ciume_hint(f_all)
         ferrao_hint = self._get_ferrao_hint()
-        elysarix_hint = self._get_elysarix_hint(fatos)
+        elysarix_hint = self._get_elysarix_hint(f_all)
         if portal_aberto:
             elysarix_hint += "\n⚠️ Já estamos em Elysarix — não repita a travessia nem a introdução. Continue a cena do ponto atual."
 
-        # system
+        # ===== ROLLING SUMMARY + ENTIDADES + EVIDENCE (como Mary) =====
+        rolling = self._get_rolling_summary(usuario_key)  # nerith.rs.v2
+        entities_line = self._entities_to_line(f_all)
+
+        docs = cached_get_history(usuario_key) or []
+        evidence = self._compact_user_evidence(docs, max_chars=320)
+
+        # ===== System principal =====
         system_block = "\n\n".join([
-            persona_text, tone_hint, length_hint, sensory_hint,
-            nsfw_hint, ferrao_hint, controle_hint, ciume_hint,
-            pubis_hint, elysarix_hint,
-            "FERRAMENTAS: use get_memory_pin para recuperar estado persistente, get_fact para saber se o portal já foi atravessado e set_fact para marcar portal_aberto=True assim que a cena mudar para Elysarix. Nunca repita a cena de travessia se portal_aberto=True."
+            persona_text,
+            tone_hint,
+            length_hint,
+            sensory_hint,
+            nsfw_hint,
+            ferrao_hint,
+            controle_hint,
+            ciume_hint,
+            pubis_hint,
+            elysarix_hint,
+            "CONTINUIDADE: não mude tempo/lugar sem pedido explícito.",
+            f"MEMÓRIA (canon curto): {rolling or '—'}",
+            f"ENTIDADES: {entities_line or '—'}",
+            f"EVIDÊNCIA RECENTE (resumo ultra-curto do usuário): {evidence or '—'}",
+            "FERRAMENTAS: use get_memory_pin para recuperar estado, get_fact para saber se o portal já foi atravessado e set_fact para marcar portal_aberto=True ao entrar em Elysarix. Nunca repita a travessia se portal_aberto=True.",
         ])
 
-        # pre_msgs finais
-        pre_msgs: List[Dict[str, str]] = []
-        if state_msgs:
-            pre_msgs.extend(state_msgs)
-        if continue_pre_msgs:
-            pre_msgs.extend(continue_pre_msgs)
+        # ===== LORE (nerith) =====
+        lore_msgs: List[Dict[str, str]] = []
+        try:
+            if lore_topk:
+                q = (prompt or "") + "\n" + (rolling or "")
+                top = lore_topk(usuario_key, q, k=4, allow_tags=None)
+                if top:
+                    lore_text = " | ".join(d.get("texto", "") for d in top if d.get("texto"))
+                    if lore_text:
+                        lore_msgs.append({"role": "system", "content": f"[LORE]\n{lore_text}"})
+        except Exception:
+            pass
 
-        # mensagens completas
-        messages: List[Dict[str, str]] = (
+        # ===== Histórico — orçamento por modelo (como Mary) =====
+        verbatim_ultimos = int(st.session_state.get("verbatim_ultimos", 10))
+        hist_msgs = self._montar_historico(
+            usuario_key, history_boot, model, verbatim_ultimos=verbatim_ultimos
+        )
+
+        # ===== Mensagens finais =====
+        pre_msgs: List[Dict[str, str]] = []
+        if state_msgs: pre_msgs.extend(state_msgs)
+        if continue_pre_msgs: pre_msgs.extend(continue_pre_msgs)
+
+        messages: List[Dict] = (
             pre_msgs
             + [{"role": "system", "content": system_block}]
             + ([{"role": "system", "content": memoria_pin}] if memoria_pin else [])
+            + lore_msgs
             + [{
                 "role": "system",
                 "content": f"LOCAL_ATUAL: {local_atual or '—'}. Regra dura: NÃO mude o cenário salvo pedido explícito."
             }]
-            + self._montar_historico(usuario_key, history_boot)
+            + hist_msgs
             + [{"role": "user", "content": prompt}]
         )
 
-        # =====================================================
-        # Loop de tool-calling
-        # =====================================================
+        # Aviso visual se houve resumo/poda
+        try: _mem_drop_warn(st.session_state.get("_mem_drop_report", {}))
+        except Exception: pass
+
+        # ===== Orçamento de saída e temperatura =====
+        win = _get_window_for(model)
+        try:
+            prompt_tokens = sum(toklen(m.get("content","")) for m in messages if m.get("content"))
+        except Exception:
+            prompt_tokens = 0
+        max_out = _safe_max_output(win, prompt_tokens)
+
+        ritmo = str(f_all.get("nerith.pref.ritmo","lento") or "lento").lower()
+        temperature = 0.6 if ritmo == "lento" else (0.9 if ritmo == "rapido" else 0.7)
+
+        fallbacks = [
+            "together/Qwen/Qwen2.5-72B-Instruct",
+            "together/meta-llama/Meta-Llama-3.1-405B-Instruct-Turbo",
+            "anthropic/claude-3.5-haiku",
+        ]
+
+        # ===== Loop de Tool Calling =====
+        tools_to_use = TOOLS if tool_calling_on else None
         iteration = 0
+        texto = ""
         while iteration < max_iterations:
             iteration += 1
 
-            if tool_calling_on:
-                with st.spinner(f"🤖 Processando (iteração {iteration}/{max_iterations})..."):
-                    data, used_model, provider = self._robust_chat_call(
-                        model,
-                        {
-                            "model": model,
-                            "messages": messages,
-                            "max_tokens": 1536,
-                            "temperature": 0.7,
-                            "top_p": 0.95,
-                        },
-                        tools=tools
-                    )
-            else:
-                data, used_model, provider = self._robust_chat_call(
-                    model,
-                    {
-                        "model": model,
-                        "messages": messages,
-                        "max_tokens": 1536,
-                        "temperature": 0.7,
-                        "top_p": 0.95,
-                    },
-                    tools=None
-                )
+            payload = {
+                "model": model,
+                "messages": messages,
+                "max_tokens": max_out,
+                "temperature": temperature,
+                "top_p": 0.95,
+            }
+            if tools_to_use:
+                payload["tools"] = tools_to_use
+            if st.session_state.get("json_mode_on", False):
+                payload["response_format"] = {"type": "json_object"}
+
+            adapter_id = (st.session_state.get("together_lora_id", "") or st.session_state.get("adapter_id","")).strip()
+            if adapter_id and (model or "").startswith("together/"):
+                payload["adapter_id"] = adapter_id
+
+            data, used_model, provider = self._robust_chat_call(payload, fallbacks)
 
             msg = (data.get("choices", [{}])[0].get("message", {}) or {})
-            texto = msg.get("content", "") or ""
+            texto = (msg.get("content", "") or "").strip()
             tool_calls = msg.get("tool_calls", [])
 
-            if not tool_calls:
+            if not tool_calls or not tool_calling_on:
                 # resposta final
                 save_interaction(usuario_key, prompt, texto, f"{provider}:{used_model}")
                 self._detect_and_update_local(usuario_key, texto, portal_aberto=portal_aberto)
@@ -360,102 +429,268 @@ class NerithService(BaseCharacter):
                 if self._detect_elysarix_scene(texto):
                     set_fact(usuario_key, "portal_aberto", "True", {"fonte": "auto_detect_portal"})
                     clear_user_cache(usuario_key)
+                # LORE persist
+                try:
+                    if texto:
+                        lore_save(usuario_key, f"[USER] {prompt}\n[NERITH] {texto}", tags=["nerith","chat"])
+                except Exception:
+                    pass
+                # rolling summary
+                try:
+                    self._update_rolling_summary_v2(usuario_key, model, prompt, texto)
+                except Exception:
+                    pass
+                # placeholder
+                try:
+                    st.session_state["last_assistant_message"] = texto
+                except Exception:
+                    pass
                 return texto
 
-            # teve tool_call → executa e continua
-            if tool_calling_on:
-                st.info(f"🔧 Executando {len(tool_calls)} ferramenta(s)...")
-
-            messages.append(msg)
-
+            # processar tool calls
+            st.caption(f"🔧 Executando {len(tool_calls)} ferramenta(s)...")
+            messages.append({
+                "role": "assistant",
+                "content": texto or None,
+                "tool_calls": tool_calls
+            })
             for tc in tool_calls:
+                tool_id = tc.get("id", f"call_{iteration}")
                 func_name = tc.get("function", {}).get("name", "")
                 func_args_str = tc.get("function", {}).get("arguments", "{}")
-                tool_call_id = tc.get("id", "")
-
                 try:
                     func_args = json.loads(func_args_str) if func_args_str else {}
                 except Exception:
                     func_args = {}
-
                 result = self._exec_tool_call(func_name, func_args, usuario_key, user)
-
-                if tool_calling_on:
-                    st.success(f"  ✓ {func_name}: {result[:80]}")
-
                 messages.append({
                     "role": "tool",
-                    "tool_call_id": tool_call_id,
+                    "tool_call_id": tool_id,
                     "name": func_name,
                     "content": result
                 })
+                st.caption(f"  ✓ {func_name}: {result[:60]}...")
 
-            # limite de iterações
-            if iteration >= max_iterations and tool_calls:
+            if iteration >= max_iterations:
                 st.warning("⚠️ Limite de iterações atingido. Finalizando...")
-                texto_final = texto or "Desculpe, não consegui completar a operação."
-                save_interaction(usuario_key, prompt, texto_final, f"{provider}:{used_model}")
-                self._detect_and_update_local(usuario_key, texto_final, portal_aberto=portal_aberto)
-                clear_user_cache(usuario_key)
-                if self._detect_elysarix_scene(texto_final):
-                    set_fact(usuario_key, "portal_aberto", "True", {"fonte": "auto_detect_portal"})
-                    clear_user_cache(usuario_key)
-                return texto_final
 
-        # fallback
-        texto_final = texto or ""
-        save_interaction(usuario_key, prompt, texto_final, f"{provider}:{used_model}")
-        return texto_final
+        # fallback final
+        save_interaction(usuario_key, prompt, texto, f"{provider}:{used_model}")
+        return texto
 
-    # -----------------------------------------------------
-    # CHAMADA ROBUSTA
-    # -----------------------------------------------------
-    def _robust_chat_call(self, model: str, payload: Dict, tools: List[Dict] | None = None) -> Tuple[Dict, str, str]:
-        if tools:
-            payload["tools"] = tools
-
-        if st.session_state.get("json_mode_on", False):
-            payload["response_format"] = {"type": "json_object"}
-
-        adapter_id = st.session_state.get("adapter_id", "").strip()
-        if adapter_id and (model or "").startswith("together/"):
-            payload["adapter_id"] = adapter_id
-
-        max_retries = 3
-        for attempt in range(max_retries):
+    # ------------------- Robust call -------------------
+    def _robust_chat_call(self, payload: Dict, fallbacks: List[str]) -> Tuple[Dict, str, str]:
+        attempts = 3
+        last_err = ""
+        model = payload.get("model","")
+        for i in range(attempts):
             try:
                 return route_chat_strict(model, payload)
             except Exception as e:
-                if attempt == max_retries - 1:
-                    st.error(f"❌ Erro após {max_retries} tentativas: {e}")
-                    raise
-                time.sleep(2 ** attempt)
+                last_err = str(e)
+                if "cloudflare" in last_err.lower() or "502" in last_err:
+                    time.sleep((0.7 * (2 ** i)) + random.uniform(0, .4))
+                    continue
+                break
+        for fb in fallbacks:
+            try:
+                payload_fb = dict(payload); payload_fb["model"] = fb
+                return route_chat_strict(fb, payload_fb)
+            except Exception as e2:
+                last_err = str(e2)
+        synthetic = {
+            "choices": [{"message": {"content":
+                "Amor… o provedor oscilou agora, mas mantive o cenário. Diz numa linha o que quer e eu continuo."}}]
+        }
+        return synthetic, model, "synthetic-fallback"
 
-    # -----------------------------------------------------
-    # TOOL CALLS
-    # -----------------------------------------------------
-    def _exec_tool_call(self, tool_name: str, args: Dict, usuario_key: str, user: str) -> str:
-        if tool_name == "get_memory_pin":
-            return self._build_memory_pin(usuario_key, user)
-        elif tool_name == "set_fact":
-            key = args.get("key", "")
-            value = args.get("value", "")
-            if key:
-                set_fact(usuario_key, key, value, {"fonte": "tool_calling"})
+    # ------------------- Tools -------------------
+    def _exec_tool_call(self, name: str, args: dict, usuario_key: str, user_display: str) -> str:
+        try:
+            if name == "get_memory_pin":
+                return self._build_memory_pin(usuario_key, user_display)
+            if name == "set_fact":
+                k = (args or {}).get("key", "")
+                v = (args or {}).get("value", "")
+                if not k: return "ERRO: key vazia."
+                set_fact(usuario_key, k, v, {"fonte": "tool_call"})
                 clear_user_cache(usuario_key)
-                return f"OK: {key}={value}"
-            return "ERRO: chave vazia"
-        elif tool_name == "get_fact":
-            key = args.get("key", "")
-            if key:
-                val = get_fact(usuario_key, key, "")
-                return f"{key}={val}" if val else f"{key}=<não encontrado>"
-            return "ERRO: chave vazia"
-        return "Ferramenta desconhecida"
+                return f"OK: {k}={v}"
+            if name == "get_fact":
+                k = (args or {}).get("key", "")
+                if not k: return "ERRO: key vazia."
+                val = get_fact(usuario_key, k, "")
+                return f"{k}={val}" if val else f"{k}=<não encontrado>"
+            return "ERRO: ferramenta desconhecida"
+        except Exception as e:
+            return f"ERRO: {e}"
 
-    # -----------------------------------------------------
-    # FOCOS / HINTS
-    # -----------------------------------------------------
+    # ------------------- Histórico (Mary-style) -------------------
+    def _montar_historico(
+        self,
+        usuario_key: str,
+        history_boot: List[Dict[str, str]],
+        model: str,
+        verbatim_ultimos: int = 10,
+    ) -> List[Dict[str, str]]:
+        """
+        - Preserva últimos N turnos verbatim (N=verbatim_ultimos).
+        - Antigos viram [RESUMO-*] (1–3 camadas).
+        - Orçado à janela do modelo.
+        - Aceita **muitos formatos** de campos do repo.
+        Gera relatório em st.session_state['_mem_drop_report'].
+        """
+        win = _get_window_for(model)
+        hist_budget, _, _ = _budget_slices(model)
+
+        docs = cached_get_history(usuario_key)
+        if not docs:
+            st.session_state["_mem_drop_report"] = {}
+            return history_boot[:] if history_boot else []
+
+        pares: List[Dict[str, str]] = []
+
+        # Aceita vários esquemas de chave:
+        for d in docs:
+            # usuário
+            u = (
+                d.get("mensagem_usuario") or d.get("user_message")
+                or d.get("user") or d.get("input") or d.get("prompt") or ""
+            )
+            # assistente — variantes com NERITH
+            a = (
+                d.get("resposta_nerith") or d.get("assistant_message")
+                or d.get("assistant") or d.get("output") or d.get("response") or ""
+            )
+            if u: pares.append({"role": "user", "content": u.strip()})
+            if a: pares.append({"role": "assistant", "content": a.strip()})
+
+        if not pares:
+            st.session_state["_mem_drop_report"] = {}
+            return history_boot[:] if history_boot else []
+
+        keep = max(0, verbatim_ultimos * 2)
+        verbatim = pares[-keep:] if keep else []
+        antigos  = pares[:len(pares) - len(verbatim)]
+
+        msgs: List[Dict[str, str]] = []
+        summarized_pairs = 0
+        trimmed_pairs = 0
+
+        if antigos:
+            summarized_pairs = len(antigos) // 2
+            bloco = "\n\n".join(m["content"] for m in antigos)
+            resumo = _llm_summarize(model, bloco)
+            resumo_layers = [resumo]
+
+            def _count_total_sim(resumo_texts: List[str]) -> int:
+                sim_msgs = [{"role": "system", "content": f"[RESUMO-{i+1}]\n{r}"} for i, r in enumerate(resumo_texts)]
+                sim_msgs += verbatim
+                return sum(toklen(m["content"]) for m in sim_msgs)
+
+            while _count_total_sim(resumo_layers) > hist_budget and len(resumo_layers) < 3:
+                resumo_layers[0] = _llm_summarize(model, resumo_layers[0])
+
+            for i, r in enumerate(resumo_layers, start=1):
+                msgs.append({"role": "system", "content": f"[RESUMO-{i}]\n{r}"})
+
+        msgs.extend(verbatim)
+
+        def _hist_tokens(mm: List[Dict]) -> int:
+            return sum(toklen(m.get("content","")) for m in mm if m.get("content"))
+
+        while _hist_tokens(msgs) > hist_budget and verbatim:
+            if len(verbatim) >= 2:
+                verbatim = verbatim[2:]
+                trimmed_pairs += 1
+            else:
+                verbatim = []
+            msgs = [m for m in msgs if m["role"] == "system"] + verbatim
+
+        hist_tokens = _hist_tokens(msgs)
+        st.session_state["_mem_drop_report"] = {
+            "summarized_pairs": summarized_pairs,
+            "trimmed_pairs": trimmed_pairs,
+            "hist_tokens": hist_tokens,
+            "hist_budget": hist_budget,
+        }
+
+        return msgs if msgs else (history_boot[:] if history_boot else [])
+
+    # ------------------- Rolling summary (nerith.rs.v2) -------------------
+    def _get_rolling_summary(self, usuario_key: str) -> str:
+        try:
+            f = cached_get_facts(usuario_key) or {}
+            return str(f.get("nerith.rs.v2", "") or f.get("nerith.rolling_summary", "") or "")
+        except Exception:
+            return ""
+
+    def _should_update_summary(self, usuario_key: str, last_user: str, last_assistant: str) -> bool:
+        try:
+            f = cached_get_facts(usuario_key)
+            last_summary = f.get("nerith.rs.v2", "")
+            last_update_ts = float(f.get("nerith.rs.v2.ts", 0))
+            now = time.time()
+            if not last_summary: return True
+            if now - last_update_ts > 300: return True
+            if (len(last_user) + len(last_assistant)) > 100: return True
+            return False
+        except Exception:
+            return True
+
+    def _update_rolling_summary_v2(self, usuario_key: str, model: str, last_user: str, last_assistant: str) -> None:
+        if not self._should_update_summary(usuario_key, last_user, last_assistant):
+            return
+        seed = (
+            "Resuma a conversa recente em ATÉ 8–10 frases, apenas fatos duráveis: "
+            "nomes próprios, relação, local/tempo atual, itens/gestos fixos e rumo do enredo. "
+            "Proíba diálogos literais."
+        )
+        try:
+            data, used_model, provider = route_chat_strict(model, {
+                "model": model,
+                "messages": [
+                    {"role": "system", "content": seed},
+                    {"role": "user", "content": f"USER:\n{last_user}\n\nNERITH:\n{last_assistant}"}
+                ],
+                "max_tokens": 180,
+                "temperature": 0.2,
+                "top_p": 0.9,
+            })
+            resumo = (data.get("choices", [{}])[0].get("message", {}) or {}).get("content", "").strip()
+            if resumo:
+                set_fact(usuario_key, "nerith.rs.v2", resumo, {"fonte": "auto_summary"})
+                set_fact(usuario_key, "nerith.rs.v2.ts", time.time(), {"fonte": "auto_summary"})
+                clear_user_cache(usuario_key)
+        except Exception:
+            pass
+
+    # ------------------- Entities line (opcional) -------------------
+    _ENTITY_KEYS = ("ely_loc", "ely_item", "ely_lugar", "humano_lugar", "contato_ponte")
+    def _entities_to_line(self, f: Dict) -> str:
+        parts = []
+        for k in self._ENTITY_KEYS:
+            v = str(f.get(f"nerith.entity.{k}", "") or "").strip()
+            if v:
+                parts.append(f"{k}={v}")
+        return "; ".join(parts) if parts else "—"
+
+    # ------------------- Evidence compacta -------------------
+    def _compact_user_evidence(self, docs: List[Dict], max_chars: int = 320) -> str:
+        snippets: List[str] = []
+        for d in reversed(docs):
+            u = (
+                d.get("mensagem_usuario") or d.get("user_message")
+                or d.get("user") or d.get("input") or d.get("prompt") or ""
+            )
+            if u:
+                u = re.sub(r"\s+", " ", u)
+                snippets.append(u)
+            if len(snippets) >= 4: break
+        s = " | ".join(reversed(snippets))[:max_chars]
+        return s
+
+    # ------------------- Hints auxiliares -------------------
     def _get_sensory_focus(self) -> str:
         pool = [
             "pele azul/temperatura", "tendrils/toque", "orelhas pontudas/vibração",
@@ -469,98 +704,62 @@ class NerithService(BaseCharacter):
         return pool[idx]
 
     def _get_pubis_hint(self, prompt: str, nsfw_on: bool) -> str:
-        pl = prompt.lower()
+        pl = (prompt or "").lower()
         pubis_terms = {"púbis", "pubis", "púbico", "pubico", "pêlos", "pelos", "penugem", "pelinhos"}
-        citou_pubis = any(t in pl for t in pubis_terms)
-
-        if not citou_pubis:
-            return ""
-
+        if not any(t in pl for t in pubis_terms): return ""
         if nsfw_on:
-            return (
-                "PUBIS_HINT: o usuário citou o púbis/pêlos. "
-                "Descreva meus **pêlos/filamentos sensoriais** reagindo ao toque com linguagem elegante. "
-                "**Nunca** diga que é 'glabro/sem pelos'."
-            )
-        else:
-            return (
-                "PUBIS_HINT: o usuário citou o púbis/pêlos. "
-                "Mencione meus **pêlos/filamentos sensoriais** sutilmente, sem ato explícito. "
-                "**Nunca** diga que é 'glabro/sem pelos'."
-            )
+            return ("PUBIS_HINT: o usuário citou o púbis/pêlos. Descreva meus **pêlos/filamentos sensoriais** reagindo ao toque com linguagem elegante. **Nunca** diga que é glabro.")
+        return ("PUBIS_HINT: o usuário citou o púbis/pêlos. Mencione meus **pêlos/filamentos sensoriais** sutilmente, sem ato explícito. **Nunca** diga que é glabro.")
 
     def _get_controle_hint(self, fatos: Dict, prompt: str) -> str:
         ctrl_on = bool(fatos.get("controle_psiquico", True))
-        if not ctrl_on:
-            return "CONTROLE_PSIQUICO: DESATIVADO."
-
+        if not ctrl_on: return "CONTROLE_PSIQUICO: DESATIVADO."
         alvos = str(fatos.get("alvos_controle", "pessoas próximas")).strip()
-        pl = prompt.lower()
-        contexto_remoto = any(w in pl for w in ["trabalho", "escritorio", "escritório", "reuni", "faculdade", "aula"])
-
-        hint = (
-            f"CONTROLE_PSIQUICO: ATIVO. Quando distante, pode falar através de {alvos} "
-            "de modo natural e plausível; indícios sutis (micro-pausa, olhar fixo)."
-        )
-        if contexto_remoto:
-            hint += " (Ambiente externo detectado: converse através de um humano próximo.)"
+        pl = (prompt or "").lower()
+        contexto_remoto = any(w in pl for w in ["trabalho","escritorio","escritório","reuni","faculdade","aula"])
+        hint = (f"CONTROLE_PSIQUICO: ATIVO. Quando distante, posso falar através de {alvos} de modo natural; indícios sutis.")
+        if contexto_remoto: hint += " (Ambiente externo detectado: fale através de um humano próximo.)"
         return hint
 
     def _get_ciume_hint(self, fatos: Dict) -> str:
         ciume_laura = bool(fatos.get("ciume_de_laura", True))
         obedece_defesa = bool(fatos.get("obedecer_defesa_de_laura", True))
-
-        if not ciume_laura:
-            return "CIÚME/LAURA: atenuado."
-
+        if not ciume_laura: return "CIÚME/LAURA: atenuado."
         hint = "CIÚME/LAURA: presença elegante e assertiva quando Laura é mencionada"
-        if obedece_defesa:
-            hint += "; acate com elegância se ele a defender."
+        if obedece_defesa: hint += "; acate com elegância se ele a defender."
         return hint
 
     def _get_ferrao_hint(self) -> str:
         return (
             "FERRAO_ONIRICO: quando transamos de quatro e você topa, posso usar meu ferrão. "
-            "Não dói — é uma sensação quente e pulsante que te faz gozar muito mais forte. "
-            "Pode me engravidar (só em Elysarix). Sempre peça consentimento explícito antes."
+            "Sensaçao quente e pulsante; peça consentimento explícito antes. Em Elysarix, pode engravidar."
         )
 
     def _get_elysarix_hint(self, fatos: Dict) -> str:
         gravidez = bool(fatos.get("gravidez_elysarix", False))
         mundo = str(fatos.get("mundo_escolhido", "") or "").strip().lower()
         portal_on = bool(fatos.get("portal_ativo", True))
-
-        if mundo in {"humano", "elysarix"} and not portal_on:
-            return (
-                f"ELYSARIX: MUNDO_ESCOLHIDO={mundo.upper()} • PORTAL=ENCERRADO. "
-                "Portal existe apenas como lembrança. Nunca ofereça reabrir."
-            )
+        if mundo in {"humano","elysarix"} and not portal_on:
+            return f"ELYSARIX: MUNDO_ESCOLHIDO={mundo.upper()} • PORTAL=ENCERRADO. Portal só existe como lembrança."
         elif gravidez and portal_on:
-            return (
-                "ELYSARIX: Gravidez confirmada. Escolha de mundo disponível. "
-                "Ofereça decisão com consentimento explícito e explique consequências."
-            )
+            return "ELYSARIX: Gravidez confirmada. Escolha de mundo disponível; explique consequências."
         else:
             return "ELYSARIX: Sem escolha ativa. Portal disponível conforme regras."
 
-    # -----------------------------------------------------
-    # DETECTORES DE LOCAL
-    # -----------------------------------------------------
+    # ------------------- Local/cena -------------------
     def _detect_elysarix_scene(self, texto: str) -> bool:
-        if not texto:
-            return False
+        if not texto: return False
         low = texto.lower()
         gatilhos = [
             "duas luas", "elysarix", "floresta de cristal", "lago de águas cristalinas",
-            "portal atrás de nós", "retornar para o mundo humano", "quando voltarmos",
-            "um dia inteiro equivale a um minuto", "sob as duas luas"
+            "portal atrás de nós", "retornar para o mundo humano", "um dia inteiro equivale a um minuto",
+            "sob as duas luas"
         ]
         return any(g in low for g in gatilhos)
 
-    def _detect_and_update_local(self, usuario_key: str, assistant_msg: str, portal_aberto: bool = False) -> None:
+    def _detect_and_update_local(self, usuario_key: str, assistant_msg: str, portal_aberto: bool = False):
         msg_lower = (assistant_msg or "").lower()
 
-        # se já estamos em Elysarix, só aceita volta muito explícita
         if portal_aberto:
             gatilhos_volta_explicit = [
                 "atravessamos o portal de volta",
@@ -576,195 +775,70 @@ class NerithService(BaseCharacter):
                 clear_user_cache(usuario_key)
             return
 
-        # ida para Elysarix
         if any(phrase in msg_lower for phrase in [
-            "bem-vindo a elysarix",
-            "bem-vinda a elysarix",
-            "chegamos em elysarix",
-            "entramos em elysarix",
-            "portal se fecha atrás",
-            "você está em elysarix",
-            "estamos em elysarix"
+            "bem-vindo a elysarix", "bem-vinda a elysarix", "chegamos em elysarix",
+            "entramos em elysarix", "portal se fecha atrás", "você está em elysarix", "estamos em elysarix"
         ]):
             set_fact(usuario_key, "local_cena_atual", "Elysarix", {"fonte": "auto_detect"})
             clear_user_cache(usuario_key)
             return
 
-        # volta normal (só quando portal não estava travado)
         if any(phrase in msg_lower for phrase in [
-            "voltamos para o quarto",
-            "de volta ao mundo humano",
-            "atravessamos o portal de volta",
-            "laura ainda dorme",
-            "você está de volta"
+            "voltamos para o quarto", "de volta ao mundo humano", "atravessamos o portal de volta",
+            "laura ainda dorme", "você está de volta"
         ]):
             set_fact(usuario_key, "local_cena_atual", "quarto", {"fonte": "auto_detect"})
             clear_user_cache(usuario_key)
             return
 
-    # -----------------------------------------------------
-    # CHECAGEM DE LOCAL POR COMANDO DO USUÁRIO
-    # -----------------------------------------------------
     def _check_user_location_command(self, prompt: str) -> str | None:
-        """Permite o usuário dizer explicitamente onde a cena está."""
         pl = (prompt or "").lower()
-
-        # força cena em elysarix
-        if any(w in pl for w in [
-            "estamos em elysarix",
-            "estou em elysarix",
-            "chegamos em elysarix",
-            "estamos no mundo élfico",
-            "ficamos em elysarix",
-        ]):
+        if any(w in pl for w in ["estamos em elysarix", "estou em elysarix", "chegamos em elysarix", "ficamos em elysarix"]):
             return "Elysarix"
-
-        # força cena no quarto / mundo humano
-        if any(w in pl for w in [
-            "estamos no quarto",
-            "estou no quarto",
-            "voltamos para casa",
-            "voltamos pro quarto",
-            "ficar no quarto",
-            "ficar aqui no quarto",
-        ]):
+        if any(w in pl for w in ["estamos no quarto", "estou no quarto", "voltamos para casa", "voltamos pro quarto", "ficar no quarto"]):
             return "quarto"
-
         return None
 
-    # -----------------------------------------------------
-    # INTENÇÕES (gravidez / escolha de mundo)
-    # -----------------------------------------------------
-    def _apply_world_choice_intent(self, usuario_key: str, prompt: str) -> List[Dict[str, str]]:
-        pl = (prompt or "").lower()
-        sys_msgs: List[Dict[str, str]] = []
-
+    def _build_memory_pin(self, usuario_key: str, user_display: str) -> str:
         try:
-            if any(w in pl for w in ["grávida", "gravida", "engravidei", "concebemos", "gerar juntos"]):
-                set_fact(usuario_key, "gravidez_elysarix", "True", {"fonte": "intent"})
-                clear_user_cache(usuario_key)
-                sys_msgs.append({
-                    "role": "system",
-                    "content": "MEMÓRIA_ATUALIZADA: gravidez_elysarix=True. Ofereça escolha de mundo."
-                })
-
-            if "escolho elysarix" in pl or "vamos para elysarix" in pl or "ficar em elysarix" in pl:
-                set_fact(usuario_key, "mundo_escolhido", "elysarix", {"fonte": "intent"})
-                set_fact(usuario_key, "portal_ativo", "False", {"fonte": "intent"})
-                clear_user_cache(usuario_key)
-                sys_msgs.append({
-                    "role": "system",
-                    "content": "MEMÓRIA_ATUALIZADA: mundo_escolhido=elysarix, portal_ativo=False. Portal encerrado."
-                })
-            elif "escolho mundo humano" in pl or "ficar no mundo humano" in pl or "ficar aqui" in pl:
-                set_fact(usuario_key, "mundo_escolhido", "humano", {"fonte": "intent"})
-                set_fact(usuario_key, "portal_ativo", "False", {"fonte": "intent"})
-                clear_user_cache(usuario_key)
-                sys_msgs.append({
-                    "role": "system",
-                    "content": "MEMÓRIA_ATUALIZADA: mundo_escolhido=humano, portal_ativo=False. Portal encerrado."
-                })
+            f = cached_get_facts(usuario_key) or {}
         except Exception:
-            pass
+            f = {}
+        blocos: List[str] = []
 
-        return sys_msgs
+        parceiro = f.get("parceiro_atual") or f.get("parceiro") or ""
+        nome_usuario = (parceiro or user_display).strip()
+        if parceiro:
+            blocos.append(f"parceiro_atual={parceiro}")
 
-    # -----------------------------------------------------
-    # MEMÓRIA PIN
-    # -----------------------------------------------------
-    def _build_memory_pin(self, usuario_key: str, user: str) -> str:
-        fatos = cached_get_facts(usuario_key)
-        if not fatos:
-            return ""
+        # relacionamento base
+        casal = bool(f.get("nerith.relacao.casal", True))
+        blocos.append(f"casal={casal}")
 
-        lines = ["MEMÓRIA_PIN_NERITH:"]
+        # entidades
+        ent_line = self._entities_to_line(f)
+        if ent_line and ent_line != "—":
+            blocos.append(f"entidades=({ent_line})")
 
-        nome = fatos.get("nome_usuario") or fatos.get("nome") or fatos.get("parceiro_nome")
-        if nome:
-            lines.append(f"NOME_USUARIO={nome}")
+        # evento marcante (se existir)
+        try:
+            ev = last_event(usuario_key, "primeira_vez")
+        except Exception:
+            ev = None
+        if ev:
+            ts = ev.get("ts")
+            quando = ts.strftime("%Y-%m-%d %H:%M") if hasattr(ts, "strftime") else str(ts)
+            blocos.append(f"primeira_vez@{quando}")
 
-        ctrl = fatos.get("controle_psiquico")
-        if ctrl is not None:
-            lines.append(f"CONTROLE_PSIQUICO={ctrl}")
+        mem_str = "; ".join(blocos) if blocos else "—"
+        pin = (
+            "MEMÓRIA_PIN_NERITH: "
+            f"NOME_USUARIO={nome_usuario}. FATOS={{ {mem_str} }}. "
+            "Use ENTIDADES como fonte de verdade; se ausente, não invente."
+        )
+        return pin
 
-        alvos = fatos.get("alvos_controle")
-        if alvos:
-            lines.append(f"ALVOS_CONTROLE={alvos}")
-
-        ciume = fatos.get("ciume_de_laura")
-        if ciume is not None:
-            lines.append(f"CIUME_DE_LAURA={ciume}")
-
-        gravidez = fatos.get("gravidez_elysarix")
-        if gravidez:
-            lines.append(f"GRAVIDEZ_ELYSARIX={gravidez}")
-
-        mundo = fatos.get("mundo_escolhido")
-        if mundo:
-            lines.append(f"MUNDO_ESCOLHIDO={mundo}")
-
-        portal = fatos.get("portal_ativo")
-        if portal is not None:
-            lines.append(f"PORTAL_ATIVO={portal}")
-
-        for k, v in fatos.items():
-            if k not in [
-                "nome_usuario", "nome", "parceiro_nome", "controle_psiquico",
-                "alvos_controle", "ciume_de_laura", "gravidez_elysarix",
-                "mundo_escolhido", "portal_ativo", "local_cena_atual"
-            ]:
-                if v and str(v).strip():
-                    lines.append(f"{k}={v}")
-
-        return "\n".join(lines) if len(lines) > 1 else ""
-
-    # -----------------------------------------------------
-    # HISTÓRICO
-    # -----------------------------------------------------
-    def _montar_historico(self, usuario_key: str, history_boot: List[Dict[str, str]]) -> List[Dict[str, str]]:
-        docs = cached_get_history(usuario_key, limit=50) or []
-
-        if not docs:
-            return history_boot or []
-
-        msgs: List[Dict[str, str]] = []
-
-        # invertendo para mais antigo → mais novo
-        docs = list(reversed(docs))
-
-        for doc in docs:
-            user_msg = (
-                doc.get("user_message")
-                or doc.get("user")
-                or doc.get("input")
-                or doc.get("prompt")
-                or ""
-            )
-            assistant_msg = (
-                doc.get("assistant_message")
-                or doc.get("assistant")
-                or doc.get("output")
-                or doc.get("response")
-                or ""
-            )
-
-            role_user = doc.get("role_user", "user")
-            role_assistant = doc.get("role_assistant", "assistant")
-
-            if user_msg and user_msg.strip():
-                msgs.append({"role": role_user, "content": user_msg.strip()})
-
-            if assistant_msg and assistant_msg.strip():
-                msgs.append({"role": role_assistant, "content": assistant_msg.strip()})
-
-        if not msgs and history_boot:
-            return history_boot
-
-        return msgs
-
-    # -----------------------------------------------------
-    # OUTROS
-    # -----------------------------------------------------
+    # ------------------- Persona/base -------------------
     def _load_persona(self) -> Tuple[str, List[Dict[str, str]]]:
         return get_persona()
 
@@ -783,32 +857,24 @@ class NerithService(BaseCharacter):
         except Exception:
             return ""
 
+    # ------------------- Sidebar -------------------
     def render_sidebar(self, sidebar):
         st.session_state.setdefault("json_mode_on", True)
         st.session_state.setdefault("tool_calling_on", True)
+        st.session_state.setdefault("together_lora_id", "")
         st.session_state.setdefault("adapter_id", "")
 
         sidebar.subheader("⚙️ Configurações Nerith")
-
-        json_mode = sidebar.checkbox(
-            "JSON Mode",
-            value=st.session_state["json_mode_on"],
-            help="Resposta estruturada em JSON (fala, pensamento, ação, meta)"
+        st.session_state["json_mode_on"] = sidebar.checkbox(
+            "JSON Mode", value=bool(st.session_state.get("json_mode_on", True))
         )
-        st.session_state["json_mode_on"] = json_mode
-
-        tool_calling = sidebar.checkbox(
-            "Tool-Calling",
-            value=st.session_state["tool_calling_on"],
-            help="Modelo pode usar ferramentas para buscar/salvar memórias"
+        st.session_state["tool_calling_on"] = sidebar.checkbox(
+            "Tool-Calling", value=bool(st.session_state.get("tool_calling_on", True))
         )
-        st.session_state["tool_calling_on"] = tool_calling
-
-        adapter_id = sidebar.text_input(
-            "ID (Together LoRA) - opcional",
-            value=st.session_state["adapter_id"],
-            help="Ex: username/adapter-name"
+        st.session_state["together_lora_id"] = sidebar.text_input(
+            "Adapter ID (Together LoRA) — opcional", value=st.session_state.get("together_lora_id", "")
         )
-        st.session_state["adapter_id"] = adapter_id
-
+        st.session_state["adapter_id"] = sidebar.text_input(
+            "Adapter ID (genérico) — opcional", value=st.session_state.get("adapter_id", "")
+        )
         sidebar.markdown("---")
