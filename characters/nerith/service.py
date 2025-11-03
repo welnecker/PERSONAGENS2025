@@ -209,7 +209,7 @@ class NerithService(BaseCharacter):
         fatos = cached_get_facts(usuario_key)
         local_atual = (fatos.get("local_cena_atual") or "quarto").strip()
         portal_aberto = str(fatos.get("portal_aberto", "")).lower() in ("true", "1", "yes", "sim")
-        gravidez_ely = bool(fatos.get("gravidez_elysarix", False))
+        gravidez_elysarix = bool(fatos.get("gravidez_elysarix", False))
 
         # ===== Trava de cenário: só muda com pedido claro =====
         user_location_cmd = self._check_user_location_command(prompt)
@@ -259,11 +259,10 @@ class NerithService(BaseCharacter):
             ),
             "ESTILO: 4–6 parágrafos, 2–4 frases por parágrafo, sem listas numeradas, sem metacomentário.",
         ]
-        if gravidez_ely:
+        if gravidez_elysarix:
             system_parts.append("ELYSARIX: gravidez ativa registrada; trate com cuidado a decisão de mundos.")
 
         if q_now:
-            # Sutil: instrução curta para responder orgânico no primeiro parágrafo (sem formato de lista)
             system_parts.append(
                 f"PERGUNTA_DO_USUÁRIO: responda naturalmente no primeiro parágrafo a: { ' | '.join(q_now) }."
             )
@@ -514,3 +513,8 @@ class NerithService(BaseCharacter):
         if scene_loc:
             return f"No {scene_loc} mesmo. Me guia devagar."
         return "Mantém o cenário e vem mais perto."
+
+    # ---------- Persona loader (FALTAVA) ----------
+    def _load_persona(self) -> Tuple[str, List[Dict[str, str]]]:
+        """Retorna texto de persona e mensagens de boot opcionais."""
+        return get_persona()
