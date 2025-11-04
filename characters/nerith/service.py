@@ -589,6 +589,39 @@ class NerithService(BaseCharacter):
         except Exception:
             pass
 
+            def _persist_boot(self, usuario_key: str, boot_text: str) -> None:
+        """
+        Persiste a fala inicial (boot) como se fosse uma resposta normal da Nerith
+        e injeta no cache local imediatamente, garantindo que 'cole' no app.
+        """
+        if not (usuario_key and boot_text):
+            return
+        # 1) grava na base (mesmo formato usado no resto do projeto)
+        try:
+            save_interaction(usuario_key, "", boot_text, "system:boot:nerith")
+        except Exception:
+            pass
+
+        # 2) injeta no cache local para aparecer na hora
+        try:
+            docs = _cache_history.get(usuario_key) or []
+            docs = list(docs)  # cópia
+            docs.append({
+                "mensagem_usuario": "",
+                # o repo pode ter campos diferentes; priorizamos resposta_nerith e caímos para outros se necessário
+                "resposta_nerith": boot_text,
+                "provider_model": "system:boot:nerith",
+                "ts": time.time(),
+            })
+            _cache_history[usuario_key] = docs
+            _cache_timestamps[f"hist_{usuario_key}"] = time.time()
+        except Exception:
+            pass
+
+        # 3) marca sessão para evitar duplicar persistência
+        st.session_state["_nerith_boot_persistido"] = True
+
+
         # Histórico com orçamento
         verbatim_ultimos = int(st.session_state.get("verbatim_ultimos", 10))
         hist_msgs = self._montar_historico(
@@ -833,7 +866,7 @@ class NerithService(BaseCharacter):
         )
         return pin
 
-    def _montar_historico(
+        def _montar_historico(
         self,
         usuario_key: str,
         history_boot: List[Dict[str, str]],
@@ -842,48 +875,53 @@ class NerithService(BaseCharacter):
         reset_flag: bool = False,
     ) -> List[Dict[str, str]]:
         """
-        Monta histórico usando orçamento por modelo:
-          - Últimos N turnos verbatim preservados.
-          - Antigos viram [RESUMO-*] em 1–3 camadas.
-          - Se necessário, poda verbatim mais antigo.
-        Grava relatório em st.session_state['_mem_drop_report'].
-
-        Se reset_flag=True ou não houver docs, injeta o history_boot (e pode persistir o boot).
+        Monta histórico com orçamento por modelo e injeta o boot quando:
+          - não há histórico; ou
+          - reset_flag=True (força colar a mensagem inicial nesta rodada).
+        Em ambos os casos, o boot é PERSISTIDO e COLADO no cache local.
         """
         win = _get_window_for(model)
         hist_budget, meta_budget, _ = _budget_slices(model)
 
         docs = cached_get_history(usuario_key)
-        if reset_flag or not docs:
-            # Injeta boot
+
+        force_boot = reset_flag or bool(st.session_state.get("force_boot", False))
+
+        # Precisamos do texto do boot
+        boot_text = ""
+        if history_boot and history_boot[0].get("role") == "assistant":
+            boot_text = history_boot[0].get("content", "") or ""
+
+        # 1) Sem docs OU reset forçado => injeta boot, persiste e cola no cache
+        if force_boot or not docs:
             msgs_boot = history_boot[:] if history_boot else []
-            # Opcional: persistir boot para “colar” o início no histórico
-            try:
-                if msgs_boot and msgs_boot[0].get("role") == "assistant":
-                    boot_text = msgs_boot[0].get("content", "")
-                    if boot_text:
-                        save_interaction(usuario_key, "", boot_text, "system:boot")
-                        clear_user_cache(usuario_key)
-            except Exception:
-                pass
+
+            if boot_text and not st.session_state.get("_nerith_boot_persistido", False):
+                self._persist_boot(usuario_key, boot_text)
+                # limpar sinalizadores de reset para não regravar no próximo turno
+                st.session_state.pop("force_boot", None)
+                st.session_state.pop("reset_persona", None)
+
             st.session_state["_mem_drop_report"] = {}
             return msgs_boot
 
-        # Constrói pares user/assistant (ordem cronológica)
+        # 2) Há histórico válido: montar pares e orçamentar
         pares: List[Dict[str, str]] = []
         for d in docs:
             u = (d.get("mensagem_usuario") or "").strip()
-            # Preferência: resposta_nerith; fallback: resposta_mary (compatibilidade do repositório)
             a = (d.get("resposta_nerith") or d.get("resposta_mary") or "").strip()
             if u:
                 pares.append({"role": "user", "content": u})
             if a:
                 pares.append({"role": "assistant", "content": a})
 
+        # Edge: histórico existe, mas nenhum par válido; injeta boot do mesmo jeito
         if not pares:
-            # Se não houver pares válidos, devolve boot (sem crash)
+            msgs_boot = history_boot[:] if history_boot else []
+            if boot_text and not st.session_state.get("_nerith_boot_persistido", False):
+                self._persist_boot(usuario_key, boot_text)
             st.session_state["_mem_drop_report"] = {}
-            return history_boot[:]
+            return msgs_boot
 
         keep = max(0, verbatim_ultimos * 2)
         verbatim = pares[-keep:] if keep else []
@@ -931,7 +969,7 @@ class NerithService(BaseCharacter):
             "hist_budget": hist_budget,
         }
 
-        return msgs if msgs else history_boot[:]
+        return msgs if msgs else (history_boot[:] if history_boot else [])
 
     # ===== Rolling summary (nerith.*) =====
     def _get_rolling_summary(self, usuario_key: str) -> str:
