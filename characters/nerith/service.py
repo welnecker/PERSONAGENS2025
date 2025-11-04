@@ -1,4 +1,3 @@
-
 # characters/nerith/service.py
 from __future__ import annotations
 
@@ -787,6 +786,13 @@ class NerithService(BaseCharacter):
         )
         return pin
 
+    def _pick_first(self, d: Dict[str, str], keys: List[str]) -> str:
+        for k in keys:
+            v = (d.get(k) or "").strip()
+            if v:
+                return v
+        return ""
+
     def _montar_historico(
         self,
         usuario_key: str,
@@ -828,9 +834,15 @@ class NerithService(BaseCharacter):
 
         # 2) Há histórico válido: montar pares e orçamentar
         pares: List[Dict[str, str]] = []
+        USER_KEYS = ["mensagem_usuario", "user", "prompt", "input", "texto_usuario"]
+        ASSIST_KEYS = [
+            "resposta_nerith", "resposta_mary", "resposta",
+            "assistant", "reply", "output", "conteudo_assistente"
+        ]
+
         for d in docs:
-            u = (d.get("mensagem_usuario") or "").strip()
-            a = (d.get("resposta_nerith") or d.get("resposta_mary") or "").strip()
+            u = self._pick_first(d, USER_KEYS)
+            a = self._pick_first(d, ASSIST_KEYS)
             if u:
                 pares.append({"role": "user", "content": u})
             if a:
@@ -890,8 +902,8 @@ class NerithService(BaseCharacter):
             "hist_budget": hist_budget,
         }
 
-        # CORREÇÃO: Sempre injeta boot no início do histórico
-        return (history_boot[:] if history_boot else []) + msgs
+        # Retorna só o histórico orçamentado (boot já está persistido e visível no chat)
+        return msgs
 
     # ===== Rolling summary (nerith.*) =====
     def _get_rolling_summary(self, usuario_key: str) -> str:
@@ -976,13 +988,20 @@ class NerithService(BaseCharacter):
         """
         if not (usuario_key and boot_text):
             return
-        # 1) grava na base (mesmo formato usado no resto do projeto)
+        # 1) grava na base
         try:
             save_interaction(usuario_key, "", boot_text, "system:boot:nerith")
         except Exception:
             pass
 
-        # 2) injeta no cache local para aparecer na hora
+        # 2) limpa cache de histórico para forçar recarregar já contendo o boot
+        try:
+            _cache_history.pop(usuario_key, None)
+            _cache_timestamps.pop(f"hist_{usuario_key}", None)
+        except Exception:
+            pass
+
+        # 3) injeta no cache local imediatamente (para aparecer nesta renderização)
         try:
             docs = _cache_history.get(usuario_key) or []
             docs = list(docs)
@@ -997,7 +1016,7 @@ class NerithService(BaseCharacter):
         except Exception:
             pass
 
-        # 3) marca sessão para evitar duplicar persistência
+        # 4) flag para não duplicar
         st.session_state["_nerith_boot_persistido"] = True
 
     # ===== Execução de tools =====
@@ -1108,14 +1127,13 @@ class NerithService(BaseCharacter):
         )
 
         # Memórias/eventos canônicos
-        from typing import Dict as _DictStrStr  # evitar conflito com Dict importado
         with container.expander("🧠 Memórias fixas de Nerith", expanded=True):
             try:
                 f_all = cached_get_facts(usuario_key) or {}
             except Exception:
                 f_all = {}
 
-            eventos: _DictStrStr[str, str] = {}
+            eventos: Dict[str, str] = {}
 
             # formato plano
             for k, v in f_all.items():
