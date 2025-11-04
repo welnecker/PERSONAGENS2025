@@ -600,31 +600,33 @@ def _reload_history(force: bool = False):
 try:
     user_id = str(st.session_state.get("user_id", "")).strip()
     char    = str(st.session_state.get("character", "")).strip()
-    char_key = f"{user_id}::{char.lower()}" if user_id and char else user_id
+    if user_id and char:  # <- só roda boot se ambos existem
+        char_key = f"{user_id}::{char.lower()}"
 
-    docs_exist = False
-    try:
-        existing = get_history_docs(char_key) or []
-        docs_exist = len(existing) > 0
-    except Exception:
-        existing = []
         docs_exist = False
-
-    if not docs_exist:
         try:
-            mod = __import__(f"characters.{char.lower()}.persona", fromlist=["get_persona"])
-            get_persona = getattr(mod, "get_persona", None)
+            existing = get_history_docs(char_key) or []
+            docs_exist = len(existing) > 0
         except Exception:
-            get_persona = None
+            existing = []
+            docs_exist = False
 
-        if callable(get_persona):
-            persona_text, history_boot = get_persona()
-            first_msg = next((m.get("content","") for m in history_boot if m.get("role")=="assistant"), "").strip()
-            if first_msg:
-                try:
-                    save_interaction(char_key, "", first_msg, "boot:first_message")
-                except Exception:
-                    pass
+        if not docs_exist:
+            try:
+                mod = __import__(f"characters.{char.lower()}.persona", fromlist=["get_persona"])
+                get_persona = getattr(mod, "get_persona", None)
+            except Exception:
+                get_persona = None
+
+            if callable(get_persona):
+                persona_text, history_boot = get_persona()
+                first_msg = next((m.get("content","") for m in (history_boot or [])
+                                  if (m.get("role") or "") == "assistant"), "").strip()
+                if first_msg:
+                    try:
+                        save_interaction(char_key, "", first_msg, "boot:first_message")
+                    except Exception:
+                        pass
 except Exception as e:
     _safe_error("Boot da primeira mensagem falhou.", e)
 
