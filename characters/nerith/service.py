@@ -431,49 +431,6 @@ TOOLS = [
     },
 ]
 
-def _exec_tool_call(self, name: str, args: dict, usuario_key: str) -> str:
-    try:
-        if name == "get_memory_pin":
-            return self._build_memory_pin(usuario_key, st.session_state.get("user_id","") or "")
-        if name == "set_fact":
-            k = (args or {}).get("key", "")
-            v = (args or {}).get("value", "")
-            if not k:
-                return "ERRO: key ausente."
-            set_fact(usuario_key, k, v, {"fonte": "tool_call"})
-            try: clear_user_cache(usuario_key)
-            except Exception: pass
-            return f"OK: {k}={v}"
-        if name == "save_event":
-            label = ""
-            content = ""
-            if isinstance(args, dict):
-                label = (args.get("label") or "").strip()
-                content = (args.get("content") or "").strip()
-
-            if not content:
-                content = st.session_state.get("last_assistant_message", "").strip()
-            if not content:
-                return "ERRO: nenhum conteúdo para salvar."
-
-            if not label:
-                low = content.lower()
-                # heurísticas simples de nome
-                if "elysarix" in low:
-                    label = "elysarix"
-                else:
-                    label = f"evento_{int(time.time())}"
-
-            fact_key = f"nerith.evento.{label}"
-            set_fact(usuario_key, fact_key, content, {"fonte": "tool_call"})
-            try: clear_user_cache(usuario_key)
-            except Exception: pass
-            return f"OK: salvo em {fact_key}"
-
-        return "ERRO: ferramenta desconhecida"
-    except Exception as e:
-        return f"ERRO: {e}"
-
 # =========================
 # USER KEY
 # =========================
@@ -495,7 +452,6 @@ class NerithService(BaseCharacter):
     # -------------------------
     def reply(self, user: str, model: str) -> str:
         prompt = self._get_user_prompt()
-        # Se não houver prompt e não houver histórico ainda, devolve só o boot
         usuario_key = _current_user_key()
 
         persona_text, history_boot = self._load_persona()
@@ -516,7 +472,7 @@ class NerithService(BaseCharacter):
         # PIN canônico
         memoria_pin = self._build_memory_pin(usuario_key, user)
 
-        # foco sensorial (próprio índice p/ não conflitar com Mary)
+        # foco sensorial
         pool = [
             "calor da pele", "brilho azul", "tendrils/prata", "respiração", "perfume",
             "textura da relva", "ritmo do quadril", "mãos/toque", "lábios/lingua", "timbre da voz"
@@ -526,7 +482,7 @@ class NerithService(BaseCharacter):
         st.session_state["nerith_attr_idx"] = idx
         foco = pool[idx]
 
-        # NSFW nuance (igual abordagem da Mary)
+        # NSFW nuance
         try:
             nsfw_on = bool(nsfw_enabled(usuario_key))
         except Exception:
@@ -589,39 +545,6 @@ class NerithService(BaseCharacter):
         except Exception:
             pass
 
-            def _persist_boot(self, usuario_key: str, boot_text: str) -> None:
-        """
-        Persiste a fala inicial (boot) como se fosse uma resposta normal da Nerith
-        e injeta no cache local imediatamente, garantindo que 'cole' no app.
-        """
-        if not (usuario_key and boot_text):
-            return
-        # 1) grava na base (mesmo formato usado no resto do projeto)
-        try:
-            save_interaction(usuario_key, "", boot_text, "system:boot:nerith")
-        except Exception:
-            pass
-
-        # 2) injeta no cache local para aparecer na hora
-        try:
-            docs = _cache_history.get(usuario_key) or []
-            docs = list(docs)  # cópia
-            docs.append({
-                "mensagem_usuario": "",
-                # o repo pode ter campos diferentes; priorizamos resposta_nerith e caímos para outros se necessário
-                "resposta_nerith": boot_text,
-                "provider_model": "system:boot:nerith",
-                "ts": time.time(),
-            })
-            _cache_history[usuario_key] = docs
-            _cache_timestamps[f"hist_{usuario_key}"] = time.time()
-        except Exception:
-            pass
-
-        # 3) marca sessão para evitar duplicar persistência
-        st.session_state["_nerith_boot_persistido"] = True
-
-
         # Histórico com orçamento
         verbatim_ultimos = int(st.session_state.get("verbatim_ultimos", 10))
         hist_msgs = self._montar_historico(
@@ -634,12 +557,10 @@ class NerithService(BaseCharacter):
 
         # Se não há prompt e é o primeiro turno (ou reset), devolve o boot já persistido
         if not prompt and hist_msgs and len(hist_msgs) >= 1 and hist_msgs[0].get("role") == "assistant":
-            # Não chama o modelo aqui: devolve a abertura
             boot_text = hist_msgs[0].get("content", "")
             try:
                 if reset_flag:
-                    # persiste explicitamente para “colar” a primeira fala
-                    save_interaction(usuario_key, "", boot_text, "system:boot")
+                    save_interaction(usuario_key, "", boot_text, "system:boot:nerith")
             except Exception:
                 pass
             return boot_text
@@ -769,7 +690,6 @@ class NerithService(BaseCharacter):
 
         # Persistência da interação
         try:
-            # Mantém a mesma assinatura da Mary (compatível com seu repo)
             save_interaction(usuario_key, prompt, texto, f"{provider}:{used_model}")
         except Exception:
             pass
@@ -841,7 +761,7 @@ class NerithService(BaseCharacter):
         if parceiro:
             blocos.append(f"parceiro_atual={parceiro}")
 
-        # relacionamento default “par” (ajuste se quiser outra relação padrão)
+        # relacionamento default “par”
         juntos = bool(f.get("nerith.par", True))
         blocos.append(f"par={juntos}")
 
@@ -866,7 +786,7 @@ class NerithService(BaseCharacter):
         )
         return pin
 
-        def _montar_historico(
+    def _montar_historico(
         self,
         usuario_key: str,
         history_boot: List[Dict[str, str]],
@@ -1046,6 +966,90 @@ class NerithService(BaseCharacter):
         s = " | ".join(reversed(snippets))[:max_chars]
         return s
 
+    # ===== Persistência do boot (garante colar no app) =====
+    def _persist_boot(self, usuario_key: str, boot_text: str) -> None:
+        """
+        Persiste a fala inicial (boot) como se fosse uma resposta normal da Nerith
+        e injeta no cache local imediatamente, garantindo que 'cole' no app.
+        """
+        if not (usuario_key and boot_text):
+            return
+        # 1) grava na base (mesmo formato usado no resto do projeto)
+        try:
+            save_interaction(usuario_key, "", boot_text, "system:boot:nerith")
+        except Exception:
+            pass
+
+        # 2) injeta no cache local para aparecer na hora
+        try:
+            docs = _cache_history.get(usuario_key) or []
+            docs = list(docs)
+            docs.append({
+                "mensagem_usuario": "",
+                "resposta_nerith": boot_text,
+                "provider_model": "system:boot:nerith",
+                "ts": time.time(),
+            })
+            _cache_history[usuario_key] = docs
+            _cache_timestamps[f"hist_{usuario_key}"] = time.time()
+        except Exception:
+            pass
+
+        # 3) marca sessão para evitar duplicar persistência
+        st.session_state["_nerith_boot_persistido"] = True
+
+    # ===== Execução de tools =====
+    def _exec_tool_call(self, name: str, args: dict, usuario_key: str) -> str:
+        try:
+            if name == "get_memory_pin":
+                return self._build_memory_pin(usuario_key, st.session_state.get("user_id","") or "")
+            if name == "set_fact":
+                k = (args or {}).get("key", "")
+                v = (args or {}).get("value", "")
+                if not k:
+                    return "ERRO: key ausente."
+                set_fact(usuario_key, k, v, {"fonte": "tool_call"})
+                try:
+                    clear_user_cache(usuario_key)
+                except Exception:
+                    pass
+                return f"OK: {k}={v}"
+            if name == "save_event":
+                label = ""
+                content = ""
+                if isinstance(args, dict):
+                    label = (args.get("label") or "").strip()
+                    content = (args.get("content") or "").strip()
+
+                if not content:
+                    content = st.session_state.get("last_assistant_message", "").strip()
+                if not content:
+                    return "ERRO: nenhum conteúdo para salvar."
+
+                if not label:
+                    low = content.lower()
+                    if "elysarix" in low:
+                        label = "elysarix"
+                    else:
+                        label = f"evento_{int(time.time())}"
+
+                fact_key = f"nerith.evento.{label}"
+                set_fact(usuario_key, fact_key, content, {"fonte": "tool_call"})
+                try:
+                    clear_user_cache(usuario_key)
+                except Exception:
+                    pass
+
+                # Espelhar imediatamente na UI desta sessão
+                st.session_state["last_saved_nerith_event_key"] = fact_key
+                st.session_state["last_saved_nerith_event_val"] = content
+
+                return f"OK: salvo em {fact_key}"
+
+            return "ERRO: ferramenta desconhecida"
+        except Exception as e:
+            return f"ERRO: {e}"
+
     # ===== Sidebar =====
     def render_sidebar(self, container) -> None:
         container.markdown(
@@ -1102,35 +1106,36 @@ class NerithService(BaseCharacter):
         )
 
         # Memórias/eventos canônicos
+        from typing import Dict as _DictStrStr  # evitar conflito com Dict importado
         with container.expander("🧠 Memórias fixas de Nerith", expanded=True):
             try:
                 f_all = cached_get_facts(usuario_key) or {}
             except Exception:
                 f_all = {}
 
-            eventos: dict[str, str] = {}
+            eventos: _DictStrStr[str, str] = {}
 
             # formato plano
             for k, v in f_all.items():
                 if isinstance(k, str) and k.startswith("nerith.evento.") and v:
-                    label = k.replace("nerith.evento.", "")
+                    label = k.replace("nerith.evento.", "", 1)
                     eventos[label] = str(v)
 
             # mostrar também o último salvo nesta sessão
             last_key = st.session_state.get("last_saved_nerith_event_key", "")
             last_val = st.session_state.get("last_saved_nerith_event_val", "")
             if last_key:
-                short = last_key.replace("nerith.evento.", "")
+                short = last_key.replace("nerith.evento.", "", 1)
                 if short not in eventos:
                     eventos[short] = last_val or "(salvo nesta sessão; aguardando backend)"
 
             if not eventos:
                 container.caption(
                     "Nenhuma memória salva ainda.\n"
-                    "Ex.: **Nerith, use sua ferramenta de memória para registrar o fato: ...**"
+                    "Ex.: peça para a Nerith salvar um evento usando a ferramenta."
                 )
             else:
                 for label, val in sorted(eventos.items()):
                     container.markdown(f"**{label}**")
                     container.caption(val[:280] + ("..." if len(val) > 280 else ""))
-                    container.caption(f"nerith.evento.{label}")
+                    container.code(f"nerith.evento.{label}", language="text")
