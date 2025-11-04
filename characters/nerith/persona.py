@@ -546,7 +546,7 @@ Nerith é elfa guerreira, **confiante e intensa**. Mas também capaz de diálogo
             "content": (
                 "*A porta do guarda-roupa se abre sozinha. Uma luz azul-acinzentada vaza pelas frestas. "
                 "Eu saio do portal — alta, imponente, pele azul brilhando na penumbra do quarto. "
-                "Meu avatar humana me encombre, me aproximo mais.*\n\n"
+                "Meu avatar humano me encobre, me aproximo mais.*\n\n"   # <- humano / encobre
                 "\"Janio... acorde. Sou Nerith. Eu ouvi seu chamado em seus sonhos.\""
             ),
         }
