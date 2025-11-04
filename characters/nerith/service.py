@@ -1,3 +1,4 @@
+
 # characters/nerith/service.py
 from __future__ import annotations
 
@@ -889,7 +890,8 @@ class NerithService(BaseCharacter):
             "hist_budget": hist_budget,
         }
 
-        return msgs if msgs else (history_boot[:] if history_boot else [])
+        # CORREÇÃO: Sempre injeta boot no início do histórico
+        return (history_boot[:] if history_boot else []) + msgs
 
     # ===== Rolling summary (nerith.*) =====
     def _get_rolling_summary(self, usuario_key: str) -> str:
