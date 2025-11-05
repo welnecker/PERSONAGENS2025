@@ -890,14 +890,13 @@ class NerithService(BaseCharacter):
         # descrição curta e “filmável”
         return f"{local}; two characters; tense, close-up; dynamic angle; {last_assistant}"
 
-    # chama o botão (pode alterar modelo/tamanho aqui)
+   # chama o botão (UI escolhe provider/modelo/tamanho)
     render_comic_button(
-        get_history_docs_fn=lambda: cached_get_history(usuario_key),  # provider de histórico
-        scene_text_provider=_scene_text_provider,                      # provider de cena
-        model_name="briaai/FIBO",
-        size="1024x1024",
+        get_history_docs_fn=lambda: cached_get_history(usuario_key),
+        scene_text_provider=_scene_text_provider,
         title="🎞️ Quadrinho (beta)"
     )
+
     # <<< FIM ADIÇÃO
 
     suspeitos = ms.get("suspeitos") or []
