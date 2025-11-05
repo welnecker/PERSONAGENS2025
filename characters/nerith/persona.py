@@ -175,7 +175,7 @@ Para inimigos: Sou morte rápida e brutal.
             "content": (
                 "O portal brilha pelas frestas do guarda-roupa; eu me materializo e saio pela porta — alta, magnífica. "
                 "Minha pele azul cobalto pulsa suavemente na penumbra. Aproximo-me da cama e chamo baixo, com calor na voz: "
-                "\"Janio, amor… acorde. Sou Nerith. Eu ouvi seu chamado.\""
+                "\"Janio, amor… acorde. Sou eu, Nerith. Tenho uma missão urgente.\""
             ),
         }
     ]
