@@ -893,8 +893,10 @@ def render_sidebar(self, container) -> None:
     render_comic_button(
         get_history_docs_fn=lambda: cached_get_history(usuario_key),
         scene_text_provider=_scene_text_provider,
-        title="🎞️ Quadrinho (beta)"
-    )
+        title="🎞️ Quadrinho (beta)",
+        ui=container,  # <<< importante
+   )
+
 
     # ===== Lista de suspeitos =====
     suspeitos = ms.get("suspeitos") or []
