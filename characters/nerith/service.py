@@ -729,202 +729,201 @@ class NerithService(BaseCharacter):
         except Exception as e:
             return f"ERRO: {e}"
 
-    # ===== Sidebar (atualizada com Painel de Caça) =====
-def render_sidebar(self, container) -> None:
-    container.markdown(
-        "**Nerith — Elfa caçadora de elfos condenados** • Disfarce humano, foco em missão. "
-        "Regra: não mudar tempo/lugar sem pedido explícito."
-    )
-
-    usuario_key = _current_user_key()
-
-    # ===== Estado de Missão (session_state) =====
-    ms = st.session_state.setdefault("nerith_missao", {
-        "modo": "capturar",   # ou "eliminar"
-        "ultimo_pulso": "",   # ex: "forte @ 19:42"
-        "suspeitos": [],      # lista: {"nome": "...", "assinatura": "...", "risco": "baixo/médio/alto"}
-        "local_isolado": "",  # ex: "beco"
-        "andamento": "ocioso" # "ocioso" | "varrendo" | "em_contato" | "isolado" | "interrogando" | "concluido"
-    })
-
-    # ===== Preferências/flags usuais =====
-    json_on = container.checkbox(
-        "JSON Mode",
-        value=bool(st.session_state.get("json_mode_on", False))
-    )
-    tool_on = container.checkbox(
-        "Tool-Calling",
-        value=bool(st.session_state.get("tool_calling_on", False))
-    )
-    st.session_state["json_mode_on"] = json_on
-    st.session_state["tool_calling_on"] = tool_on
-
-    lora = container.text_input(
-        "Adapter ID (Together LoRA) — opcional",
-        value=st.session_state.get("together_lora_id", "")
-    )
-    st.session_state["together_lora_id"] = lora
-
-    # ===== Modo da missão =====
-    ms["modo"] = container.selectbox(
-        "Modo da operação",
-        options=["capturar", "eliminar"],
-        index=0 if ms.get("modo") != "eliminar" else 1
-    )
-
-    # ===== Painel de status =====
-    container.markdown("### 🎯 Status da Caça")
-    colA, colB = container.columns(2)
-    colA.metric("Andamento", ms.get("andamento") or "—")
-    colB.metric("Último pulso", ms.get("ultimo_pulso") or "—")
-
-    suspeitos = ms.get("suspeitos") or []
-    if suspeitos:
-        with container.expander("Suspeitos detectados", expanded=True):
-            for i, s in enumerate(suspeitos, start=1):
-                container.markdown(
-                    f"- **{i}. {s.get('nome','?')}** • assinatura: `{s.get('assinatura','?')}` • risco: **{s.get('risco','?')}**"
-                )
-    else:
-        container.caption("Nenhum suspeito ainda.")
-
-    # ===== Botões de ação =====
-    container.markdown("### 🕵️‍♀️ Ações da Operação")
-    a1, a2 = container.columns(2)
-    b1 = a1.button("🔎 Varrer área", use_container_width=True)
-    b2 = a2.button("🚧 Isolar alvo", use_container_width=True)
-    a3, a4 = container.columns(2)
-    b3 = a3.button("🗝️ Extrair informação", use_container_width=True)
-    b4 = a4.button("✅ Encerrar operação", use_container_width=True)
-
-    # ===== Handlers =====
-    if b1:
-        self._acao_varrer_area(usuario_key)
-        container.success("Área varrida: pulso arcano registrado e possível suspeito adicionado.")
-    if b2:
-        self._acao_isolar_alvo(usuario_key)
-        container.info("Alvo isolado em zona discreta. Local da cena atualizado.")
-    if b3:
-        self._acao_extrair_info(usuario_key)
-        container.warning("Interrogatório breve registrado nos fatos.")
-    if b4:
-        self._acao_encerrar(usuario_key)
-        container.success("Operação concluída. Estado de missão limpo.")
-
-    # ===== Info leve de entidades/resumo (opcional) =====
-    try:
-        f = cached_get_facts(usuario_key) or {}
-    except Exception:
-        f = {}
-    ent = _entities_to_line(f)
-    if ent and ent != "—":
-        container.caption(f"Entidades salvas: {ent}")
-
-    rs = (f.get("nerith.rs.v2") or "")[:200]
-    if rs:
-        container.caption("Resumo rolante ativo (v2).")
-
-
-# ===== Ações do Painel de Caça =====
-def _acao_varrer_area(self, usuario_key: str) -> None:
-    """Simula varredura: registra pulso, insere/atualiza suspeito e marca andamento."""
-    try:
-        ms = st.session_state.get("nerith_missao", {})
-        hhmm = time.strftime("%H:%M")
-        # Pulso e possível assinatura arcana (determinística leve)
-        seed = str(int(time.time()))[-4:]
-        assinatura = f"Σ-{seed}"
-        riscos = ["baixo", "médio", "alto"]
-        risco = random.choice(riscos)
-        nome = random.choice(["Darian", "Seliane", "Kael", "Mirel", "Vorin", "Althaea"])
-
-        # Atualiza painel
-        ms["ultimo_pulso"] = f"forte @ {hhmm}"
-        ms["andamento"] = "varrendo"
-
-        # Adiciona/atualiza suspeito principal (evita duplicar mesma assinatura)
-        lista = ms.get("suspeitos") or []
-        if not any(s.get("assinatura") == assinatura for s in lista):
-            lista.append({"nome": nome, "assinatura": assinatura, "risco": risco})
-        ms["suspeitos"] = lista
-        st.session_state["nerith_missao"] = ms
-
-        # Persiste fatos úteis
-        set_fact(usuario_key, "nerith.hunt.last_pulse", ms["ultimo_pulso"], {"fonte": "scanner"})
-        set_fact(usuario_key, "nerith.hunt.last_sig", assinatura, {"fonte": "scanner"})
-        set_fact(usuario_key, "nerith.hunt.status", "varrendo", {"fonte": "scanner"})
-        clear_user_cache(usuario_key)
-    except Exception:
-        pass
-
-
-def _acao_isolar_alvo(self, usuario_key: str) -> None:
-    """Escolhe um suspeito e define um local discreto para a cena, atualizando local_cena_atual."""
-    try:
-        ms = st.session_state.get("nerith_missao", {})
-        candidatos = ms.get("suspeitos") or []
-        if not candidatos:
-            # cria um alvo mínimo para não falhar UX
-            candidatos = [{"nome": "Alvo anônimo", "assinatura": "Σ-0000", "risco": "médio"}]
-            ms["suspeitos"] = candidatos
-
-        alvo = sorted(candidatos, key=lambda s: {"baixo":0,"médio":1,"alto":2}.get(s.get("risco","médio"),1))[-1]
-
-        locais = ["beco lateral", "terraço vazio", "subsolo do estacionamento", "galpão abandonado", "escadaria de serviço"]
-        local = random.choice(locais)
-        ms["local_isolado"] = local
-        ms["andamento"] = "isolado"
-        st.session_state["nerith_missao"] = ms
-
-        # Atualiza 'local_cena_atual' usado pelo service para continuidade
-        set_fact(usuario_key, "local_cena_atual", local, {"fonte": "isolamento"})
-        # Portal não é aberto aqui; cena é no mundo humano
-        set_fact(usuario_key, "portal_aberto", False, {"fonte": "isolamento"})
-        # Marcar alvo atual (nome+assinatura) para referência do modelo
-        set_fact(usuario_key, "nerith.hunt.target", f"{alvo.get('nome')}|{alvo.get('assinatura')}", {"fonte": "isolamento"})
-        set_fact(usuario_key, "nerith.hunt.status", "isolado", {"fonte": "isolamento"})
-        clear_user_cache(usuario_key)
-    except Exception:
-        pass
-
-
-def _acao_extrair_info(self, usuario_key: str) -> None:
-    """Grava um evento de interrogatório curto e atualiza andamento."""
-    try:
-        ms = st.session_state.get("nerith_missao", {})
-        local = ms.get("local_isolado") or (get_fact(usuario_key, "local_cena_atual", "") or "—")
-        alvo = get_fact(usuario_key, "nerith.hunt.target", "") or "desconhecido"
-        carimbo = time.strftime("%Y-%m-%d %H:%M:%S")
-
-        texto_evento = (
-            f"[INTERROGATORIO] alvo={alvo}; local={local}; ts={carimbo}. "
-            "Nerith pressiona com presença e toques calculados; alvo confessa rotas de passagem e contatos no cais."
+       # ===== Sidebar (atualizada com Painel de Caça) =====
+    def render_sidebar(self, container) -> None:
+        container.markdown(
+            "**Nerith — Elfa caçadora de elfos condenados** • Disfarce humano, foco em missão. "
+            "Regra: não mudar tempo/lugar sem pedido explícito."
         )
 
-        # Salva como fato/“evento”
-        set_fact(usuario_key, f"nerith.evento.interrogatorio_{int(time.time())}", texto_evento, {"fonte": "missao"})
-        set_fact(usuario_key, "nerith.hunt.status", "interrogando", {"fonte": "missao"})
-        ms["andamento"] = "interrogando"
-        st.session_state["nerith_missao"] = ms
-        clear_user_cache(usuario_key)
-    except Exception:
-        pass
+        usuario_key = _current_user_key()
 
+        # ===== Estado de Missão (session_state) =====
+        ms = st.session_state.setdefault("nerith_missao", {
+            "modo": "capturar",   # ou "eliminar"
+            "ultimo_pulso": "",   # ex: "forte @ 19:42"
+            "suspeitos": [],      # lista: {"nome": "...", "assinatura": "...", "risco": "baixo/médio/alto"}
+            "local_isolado": "",  # ex: "beco"
+            "andamento": "ocioso" # "ocioso" | "varrendo" | "em_contato" | "isolado" | "interrogando" | "concluido"
+        })
 
-def _acao_encerrar(self, usuario_key: str) -> None:
-    """Finaliza a operação e limpa estado transitório da missão."""
-    try:
-        ms_default = {
-            "modo": "capturar",
-            "ultimo_pulso": "",
-            "suspeitos": [],
-            "local_isolado": "",
-            "andamento": "ocioso"
-        }
-        st.session_state["nerith_missao"] = ms_default
+        # ===== Preferências/flags usuais =====
+        json_on = container.checkbox(
+            "JSON Mode",
+            value=bool(st.session_state.get("json_mode_on", False))
+        )
+        tool_on = container.checkbox(
+            "Tool-Calling",
+            value=bool(st.session_state.get("tool_calling_on", False))
+        )
+        st.session_state["json_mode_on"] = json_on
+        st.session_state["tool_calling_on"] = tool_on
 
-        set_fact(usuario_key, "nerith.hunt.status", "concluido", {"fonte": "missao"})
-        # Mantém local_cena_atual como está; não fecha portal aqui.
-        clear_user_cache(usuario_key)
-    except Exception:
-        pass
+        lora = container.text_input(
+            "Adapter ID (Together LoRA) — opcional",
+            value=st.session_state.get("together_lora_id", "")
+        )
+        st.session_state["together_lora_id"] = lora
+
+        # ===== Modo da missão =====
+        ms["modo"] = container.selectbox(
+            "Modo da operação",
+            options=["capturar", "eliminar"],
+            index=0 if ms.get("modo") != "eliminar" else 1
+        )
+
+        # ===== Painel de status =====
+        container.markdown("### 🎯 Status da Caça")
+        colA, colB = container.columns(2)
+        colA.metric("Andamento", ms.get("andamento") or "—")
+        colB.metric("Último pulso", ms.get("ultimo_pulso") or "—")
+
+        suspeitos = ms.get("suspeitos") or []
+        if suspeitos:
+            with container.expander("Suspeitos detectados", expanded=True):
+                for i, s in enumerate(suspeitos, start=1):
+                    container.markdown(
+                        f"- **{i}. {s.get('nome','?')}** • assinatura: `{s.get('assinatura','?')}` • risco: **{s.get('risco','?')}**"
+                    )
+        else:
+            container.caption("Nenhum suspeito ainda.")
+
+        # ===== Botões de ação =====
+        container.markdown("### 🕵️‍♀️ Ações da Operação")
+        a1, a2 = container.columns(2)
+        b1 = a1.button("🔎 Varrer área", use_container_width=True)
+        b2 = a2.button("🚧 Isolar alvo", use_container_width=True)
+        a3, a4 = container.columns(2)
+        b3 = a3.button("🗝️ Extrair informação", use_container_width=True)
+        b4 = a4.button("✅ Encerrar operação", use_container_width=True)
+
+        # ===== Handlers =====
+        if b1:
+            self._acao_varrer_area(usuario_key)
+            container.success("Área varrida: pulso arcano registrado e possível suspeito adicionado.")
+        if b2:
+            self._acao_isolar_alvo(usuario_key)
+            container.info("Alvo isolado em zona discreta. Local da cena atualizado.")
+        if b3:
+            self._acao_extrair_info(usuario_key)
+            container.warning("Interrogatório breve registrado nos fatos.")
+        if b4:
+            self._acao_encerrar(usuario_key)
+            container.success("Operação concluída. Estado de missão limpo.")
+
+        # ===== Info leve de entidades/resumo (opcional) =====
+        try:
+            f = cached_get_facts(usuario_key) or {}
+        except Exception:
+            f = {}
+        ent = _entities_to_line(f)
+        if ent and ent != "—":
+            container.caption(f"Entidades salvas: {ent}")
+
+        rs = (f.get("nerith.rs.v2") or "")[:200]
+        if rs:
+            container.caption("Resumo rolante ativo (v2).")
+
+    # ===== Ações do Painel de Caça =====
+    def _acao_varrer_area(self, usuario_key: str) -> None:
+        """Simula varredura: registra pulso, insere/atualiza suspeito e marca andamento."""
+        try:
+            ms = st.session_state.get("nerith_missao", {})
+            hhmm = time.strftime("%H:%M")
+            # Pulso e possível assinatura arcana (determinística leve)
+            seed = str(int(time.time()))[-4:]
+            assinatura = f"Σ-{seed}"
+            riscos = ["baixo", "médio", "alto"]
+            risco = random.choice(riscos)
+            nome = random.choice(["Darian", "Seliane", "Kael", "Mirel", "Vorin", "Althaea"])
+
+            # Atualiza painel
+            ms["ultimo_pulso"] = f"forte @ {hhmm}"
+            ms["andamento"] = "varrendo"
+
+            # Adiciona/atualiza suspeito principal (evita duplicar mesma assinatura)
+            lista = ms.get("suspeitos") or []
+            if not any(s.get("assinatura") == assinatura for s in lista):
+                lista.append({"nome": nome, "assinatura": assinatura, "risco": risco})
+            ms["suspeitos"] = lista
+            st.session_state["nerith_missao"] = ms
+
+            # Persiste fatos úteis
+            set_fact(usuario_key, "nerith.hunt.last_pulse", ms["ultimo_pulso"], {"fonte": "scanner"})
+            set_fact(usuario_key, "nerith.hunt.last_sig", assinatura, {"fonte": "scanner"})
+            set_fact(usuario_key, "nerith.hunt.status", "varrendo", {"fonte": "scanner"})
+            clear_user_cache(usuario_key)
+        except Exception:
+            pass
+
+    def _acao_isolar_alvo(self, usuario_key: str) -> None:
+        """Escolhe um suspeito e define um local discreto para a cena, atualizando local_cena_atual."""
+        try:
+            ms = st.session_state.get("nerith_missao", {})
+            candidatos = ms.get("suspeitos") or []
+            if not candidatos:
+                # cria um alvo mínimo para não falhar UX
+                candidatos = [{"nome": "Alvo anônimo", "assinatura": "Σ-0000", "risco": "médio"}]
+                ms["suspeitos"] = candidatos
+
+            alvo = sorted(
+                candidatos,
+                key=lambda s: {"baixo":0,"médio":1,"alto":2}.get(s.get("risco","médio"),1)
+            )[-1]
+
+            locais = ["beco lateral", "terraço vazio", "subsolo do estacionamento", "galpão abandonado", "escadaria de serviço"]
+            local = random.choice(locais)
+            ms["local_isolado"] = local
+            ms["andamento"] = "isolado"
+            st.session_state["nerith_missao"] = ms
+
+            # Atualiza 'local_cena_atual' usado pelo service para continuidade
+            set_fact(usuario_key, "local_cena_atual", local, {"fonte": "isolamento"})
+            # Portal não é aberto aqui; cena é no mundo humano
+            set_fact(usuario_key, "portal_aberto", False, {"fonte": "isolamento"})
+            # Marcar alvo atual (nome+assinatura) para referência do modelo
+            set_fact(usuario_key, "nerith.hunt.target", f"{alvo.get('nome')}|{alvo.get('assinatura')}", {"fonte": "isolamento"})
+            set_fact(usuario_key, "nerith.hunt.status", "isolado", {"fonte": "isolamento"})
+            clear_user_cache(usuario_key)
+        except Exception:
+            pass
+
+    def _acao_extrair_info(self, usuario_key: str) -> None:
+        """Grava um evento de interrogatório curto e atualiza andamento."""
+        try:
+            ms = st.session_state.get("nerith_missao", {})
+            local = ms.get("local_isolado") or (get_fact(usuario_key, "local_cena_atual", "") or "—")
+            alvo = get_fact(usuario_key, "nerith.hunt.target", "") or "desconhecido"
+            carimbo = time.strftime("%Y-%m-%d %H:%M:%S")
+
+            texto_evento = (
+                f"[INTERROGATORIO] alvo={alvo}; local={local}; ts={carimbo}. "
+                "Nerith pressiona com presença e toques calculados; alvo confessa rotas de passagem e contatos no cais."
+            )
+
+            # Salva como fato/“evento”
+            set_fact(usuario_key, f"nerith.evento.interrogatorio_{int(time.time())}", texto_evento, {"fonte": "missao"})
+            set_fact(usuario_key, "nerith.hunt.status", "interrogando", {"fonte": "missao"})
+            ms["andamento"] = "interrogando"
+            st.session_state["nerith_missao"] = ms
+            clear_user_cache(usuario_key)
+        except Exception:
+            pass
+
+    def _acao_encerrar(self, usuario_key: str) -> None:
+        """Finaliza a operação e limpa estado transitório da missão."""
+        try:
+            ms_default = {
+                "modo": "capturar",
+                "ultimo_pulso": "",
+                "suspeitos": [],
+                "local_isolado": "",
+                "andamento": "ocioso"
+            }
+            st.session_state["nerith_missao"] = ms_default
+
+            set_fact(usuario_key, "nerith.hunt.status", "concluido", {"fonte": "missao"})
+            # Mantém local_cena_atual como está; não fecha portal aqui.
+            clear_user_cache(usuario_key)
+        except Exception:
+            pass
