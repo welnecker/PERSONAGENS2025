@@ -810,7 +810,7 @@ class NerithService(BaseCharacter):
             return f"ERRO: {e}"
 
     # ===== Sidebar (atualizada com Painel de Caça) =====
-    def render_sidebar(self, container) -> None:
+def render_sidebar(self, container) -> None:
     container.markdown(
         "**Nerith — Elfa caçadora de elfos condenados** • Disfarce humano, foco em missão. "
         "Regra: não mudar tempo/lugar sem pedido explícito."
@@ -860,17 +860,17 @@ class NerithService(BaseCharacter):
 
     # ===== Recall de memória (por palavra-chave) =====
     container.markdown("### 🧠 Memória")
-    rec_col1, rec_col2 = container.columns([3,1])
+    rec_col1, rec_col2 = container.columns([3, 1])
     recall_kw = rec_col1.text_input(
         "Palavra-chave (ex.: 'terraço', 'floresta', 'beco')",
-        value=st.session_state.get("nerith_recall_kw","")
+        value=st.session_state.get("nerith_recall_kw", "")
     )
     rec_col2.write("")  # espaçamento
     btn_recall = container.button("🔎 Buscar memória", use_container_width=True)
     if btn_recall:
         st.session_state["nerith_recall_kw"] = recall_kw
         kw = (recall_kw or "").strip() or "__LAST__"
-        txt = self._recall_lore_text(usuario_key, kw)   # <<< usa o helper de recall
+        txt = self._recall_lore_text(usuario_key, kw)  # helper de recall
         if txt:
             st.session_state["nerith_recall_inject"] = txt
             container.success("Memória recuperada. Será injetada na próxima resposta.")
@@ -878,7 +878,7 @@ class NerithService(BaseCharacter):
             container.warning("Nenhuma memória encontrada para essa palavra-chave.")
 
     # ===== Quadrinhos (providers + botão) =====
-    # >>> ADIÇÃO: providers mínimos para a função de quadrinhos
+    # Descrição curta 'filmável' para o painel
     def _scene_text_provider() -> str:
         ms_local = st.session_state.get("nerith_missao", {})
         local = (
@@ -887,24 +887,22 @@ class NerithService(BaseCharacter):
             or "noite, beco molhado de chuva"
         )
         last_assistant = (st.session_state.get("last_assistant_message") or "")[:120]
-        # descrição curta e “filmável”
         return f"{local}; two characters; tense, close-up; dynamic angle; {last_assistant}"
 
-   # chama o botão (UI escolhe provider/modelo/tamanho)
+    # chama o botão (UI escolhe provider/modelo/tamanho)
     render_comic_button(
         get_history_docs_fn=lambda: cached_get_history(usuario_key),
         scene_text_provider=_scene_text_provider,
         title="🎞️ Quadrinho (beta)"
     )
 
-    # <<< FIM ADIÇÃO
-
+    # ===== Lista de suspeitos =====
     suspeitos = ms.get("suspeitos") or []
     if suspeitos:
         with container.expander("Suspeitos detectados", expanded=True):
             for i, s in enumerate(suspeitos, start=1):
                 container.markdown(
-                    f"- **{i}. {s.get('nome','?')}** • assinatura: `{s.get('assinatura','?')}` • risco: **{s.get('risco','?')}`**"
+                    f"- **{i}. {s.get('nome','?')}** • assinatura: `{s.get('assinatura','?')}` • risco: **{s.get('risco','?')}**"
                 )
     else:
         container.caption("Nenhum suspeito ainda.")
