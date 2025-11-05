@@ -268,6 +268,13 @@ TOOLS = [
         "parameters": {"type":"object","properties":{
             "label":{"type":"string"},"content":{"type":"string"}}, "required":[]}
     }},
+    {"type": "function", "function": {
+        "name": "recall_memory",
+        "description": "Recupera memória longa por palavra-chave (ou a última memória) e injeta no próximo turno.",
+        "parameters": {"type":"object","properties":{
+            "keyword":{"type":"string","description":"Palavra-chave; use __LAST__ para última memória."}
+        }}
+    }},
 ]
 
 # ==== User key ====
@@ -279,6 +286,58 @@ def _current_user_key() -> str:
 class NerithService(BaseCharacter):
     id: str = "nerith"
     display_name: str = "Nerith"
+
+    # ===== Evidência concisa =====
+    def _compact_user_evidence(self, docs: List[Dict], max_chars: int = 320) -> str:
+        snippets: List[str] = []
+        for d in reversed(docs):
+            u = (d.get("mensagem_usuario") or "").strip()
+            if u:
+                u = re.sub(r"\s+", " ", u)
+                snippets.append(u)
+            if len(snippets) >= 4: break
+        return (" | ".join(reversed(snippets)))[:max_chars]
+
+    # ===== Recall de Memória por palavra-chave =====
+    _RECALL_PATTERNS = [
+        re.compile(r"\b(lembra|lembre|recorda|recorde)\s+(?:da|de|essa|dessa|aquela)?\s*(?:mem[óo]ria|cena|aventura)?\s*(?:da|de|do|sobre)?\s*\"?([^\"]+?)\"?\s*$", re.I),
+        re.compile(r"\b(puxa|recupera|resgata|traz)\s+(?:a|essa|dessa|aquela)?\s*(?:mem[óo]ria|cena|aventura)?\s*(?:da|de|do|sobre)?\s*\"?([^\"]+?)\"?\s*$", re.I),
+    ]
+
+    def _extract_recall_query(self, texto: str) -> Optional[str]:
+        t = (texto or "").strip()
+        if not t:
+            return None
+        for pat in self._RECALL_PATTERNS:
+            m = pat.search(t)
+            if m:
+                key = (m.group(2) if (m.lastindex and m.lastindex >= 2) else m.group(1)).strip()
+                key = re.sub(r"^(mem[óo]ria|cena|aventura)\s*(da|de|do|sobre)?\s*", "", key, flags=re.I)
+                return key[:120] if key else None
+        if re.search(r"\b(lembra|lembre).*(disso|[úu]ltima mem[óo]ria)\b", t, re.I):
+            return "__LAST__"
+        return None
+
+    def _recall_lore_text(self, usuario_key: str, keyword: str) -> str:
+        """
+        Busca memória longa por palavra-chave e retorna texto para injetar como [LORE:RECALL].
+        keyword="__LAST__" usa a última memória salva nesta sessão; senão, busca semântica (lore_topk).
+        """
+        if keyword == "__LAST__":
+            last_val = (st.session_state.get("last_saved_nerith_event_val", "") or "").strip()
+            if last_val:
+                return last_val[:1500]
+        try:
+            top = lore_topk(usuario_key, keyword, k=4, allow_tags=None)
+            blocos = []
+            for d in top or []:
+                txt = (d.get("texto", "") or "").strip()
+                if txt:
+                    blocos.append(txt)
+            lore_text = " | ".join(blocos)
+            return lore_text[:1500]
+        except Exception:
+            return ""
 
     def reply(self, user: str, model: str) -> str:
         prompt = self._get_user_prompt()
@@ -326,6 +385,11 @@ class NerithService(BaseCharacter):
         except Exception: docs = []
         evidence = self._compact_user_evidence(docs, max_chars=320)
 
+        # ===== Recall automático com base no prompt (opcional)
+        kw_auto = self._extract_recall_query(prompt)
+        if kw_auto:
+            st.session_state["nerith_recall_inject"] = self._recall_lore_text(usuario_key, kw_auto)
+
         # system único
         system_block = _build_system_block(
             persona_text=persona_text, rolling_summary=rolling, sensory_focus=foco,
@@ -334,8 +398,13 @@ class NerithService(BaseCharacter):
             scene_time=st.session_state.get("momento_atual","")
         )
 
+        # ===== Recall acionado via sidebar/tool (injeta antes do LORE automático)
+        recall_text = (st.session_state.pop("nerith_recall_inject", "") or "").strip()
+
         # LORE (memória longa)
         lore_msgs: List[Dict[str, str]] = []
+        if recall_text:
+            lore_msgs.append({"role": "system", "content": f"[LORE:RECALL]\n{recall_text}"})
         try:
             q = (prompt or "") + "\n" + (rolling or "")
             top = lore_topk(usuario_key, q, k=4, allow_tags=None)
@@ -462,6 +531,10 @@ class NerithService(BaseCharacter):
             if provider == "synthetic-fallback":
                 st.info("⚠️ Provedor instável. Resposta em fallback — pode continuar normalmente.")
         except Exception: pass
+
+        # sinaliza recall ao usuário
+        if recall_text and texto:
+            texto = "_(Trouxe a memória que você pediu — posso continuar daí.)_\n\n" + texto
 
         return texto
 
@@ -725,11 +798,18 @@ class NerithService(BaseCharacter):
                 st.session_state["last_saved_nerith_event_key"] = fact_key
                 st.session_state["last_saved_nerith_event_val"] = content
                 return f"OK: salvo em {fact_key}"
+            if name == "recall_memory":
+                kw = (args or {}).get("keyword","").strip() or "__LAST__"
+                txt = self._recall_lore_text(usuario_key, kw)
+                if not txt:
+                    return "ERRO: nenhuma memória encontrada para a palavra-chave."
+                st.session_state["nerith_recall_inject"] = txt
+                return f"OK: memória recuperada ({len(txt)} chars)"
             return "ERRO: ferramenta desconhecida"
         except Exception as e:
             return f"ERRO: {e}"
 
-       # ===== Sidebar (atualizada com Painel de Caça) =====
+    # ===== Sidebar (atualizada com Painel de Caça) =====
     def render_sidebar(self, container) -> None:
         container.markdown(
             "**Nerith — Elfa caçadora de elfos condenados** • Disfarce humano, foco em missão. "
@@ -778,12 +858,31 @@ class NerithService(BaseCharacter):
         colA.metric("Andamento", ms.get("andamento") or "—")
         colB.metric("Último pulso", ms.get("ultimo_pulso") or "—")
 
+        # ===== Recall de memória (por palavra-chave) =====
+        container.markdown("### 🧠 Memória")
+        rec_col1, rec_col2 = container.columns([3,1])
+        recall_kw = rec_col1.text_input(
+            "Palavra-chave (ex.: 'terraço', 'floresta', 'beco')",
+            value=st.session_state.get("nerith_recall_kw","")
+        )
+        rec_col2.write("")  # espaçamento
+        btn_recall = container.button("🔎 Buscar memória", use_container_width=True)
+        if btn_recall:
+            st.session_state["nerith_recall_kw"] = recall_kw
+            kw = (recall_kw or "").strip() or "__LAST__"
+            txt = self._recall_lore_text(usuario_key, kw)
+            if txt:
+                st.session_state["nerith_recall_inject"] = txt
+                container.success("Memória recuperada. Será injetada na próxima resposta.")
+            else:
+                container.warning("Nenhuma memória encontrada para essa palavra-chave.")
+
         suspeitos = ms.get("suspeitos") or []
         if suspeitos:
             with container.expander("Suspeitos detectados", expanded=True):
                 for i, s in enumerate(suspeitos, start=1):
                     container.markdown(
-                        f"- **{i}. {s.get('nome','?')}** • assinatura: `{s.get('assinatura','?')}` • risco: **{s.get('risco','?')}**"
+                        f"- **{i}. {s.get('nome','?')}** • assinatura: `{s.get('assinatura','?')}` • risco: **{s.get('risco','?')}`**"
                     )
         else:
             container.caption("Nenhum suspeito ainda.")
