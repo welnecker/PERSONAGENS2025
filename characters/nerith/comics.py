@@ -6,32 +6,36 @@ from PIL import Image
 from huggingface_hub import InferenceClient
 import streamlit as st
 
-# Tenta importar o wrapper do USO. Se falhar, o modelo não estará disponível.
+# A importação do wrapper será tentada dinamicamente dentro da função da UI
+USO_AVAILABLE = False
+uso_generate_image = None
 try:
-    from .uso_wrapper import generate_image as uso_generate_image
+    from .uso_wrapper import generate_image as uso_generate_image_func
+    uso_generate_image = uso_generate_image_func
     USO_AVAILABLE = True
 except ImportError:
-    USO_AVAILABLE = False
-    print("AVISO: Wrapper do USO não encontrado. O modelo 'USO (FLUX.1-dev)' não estará disponível.")
+    # O aviso será mostrado na UI se o usuário tentar usar o modelo
+    pass
 
 # ======================
 # Config / Providers
 # ======================
+# O provedor do USO será adicionado dinamicamente se estiver disponível
 PROVIDERS: Dict[str, Dict[str, str]] = {
-    "USO (FLUX.1-dev)": {
-        "provider": "uso_local", # Identificador customizado
-        "model": "bytedance-research/USO",
-        "size": "1024x1024",
-    },
     "HF • FLUX.1-dev": {
         "provider": "huggingface",
         "model": "black-forest-labs/FLUX.1-dev",
         "size": "1024x1024",
     },
 }
-# Remove o USO se o wrapper não estiver disponível
-if not USO_AVAILABLE:
-    PROVIDERS.pop("USO (FLUX.1-dev)", None)
+
+if USO_AVAILABLE:
+    PROVIDERS["USO (FLUX.1-dev)"] = {
+        "provider": "uso_local",
+        "model": "bytedance-research/USO",
+        "size": "1024x1024",
+    }
+
 
 # ... (o restante do código, como _get_hf_token, blocos de prompt, etc., permanece o mesmo) ...
 # ======================
@@ -138,7 +142,20 @@ def render_comic_button(
     try:
         ui.markdown(f"### {title}")
 
+        # --- Verificação de Disponibilidade do USO ---
+        if not USO_AVAILABLE:
+            ui.info(
+                "O modelo avançado 'USO' não foi encontrado. Para habilitá-lo, "
+                "certifique-se de que o código-fonte do USO e o arquivo `requirements.txt` "
+                "estejam no diretório do projeto e as dependências instaladas."
+            )
+
         c1, c2 = ui.columns(2)
+        # Garante que o selectbox não falhe se a lista de provedores estiver vazia
+        if not PROVIDERS:
+            ui.error("Nenhum modelo de imagem está configurado ou disponível. Verifique a instalação.")
+            return
+            
         prov_key = c1.selectbox("Modelo", options=list(PROVIDERS.keys()), index=0, key=f"{key_prefix}_model_sel")
         cfg = PROVIDERS.get(prov_key, {})
         provider_name = cfg.get("provider")
@@ -151,11 +168,9 @@ def render_comic_button(
         ui.markdown("---")
         ui.subheader("Direção da Cena")
 
-        # Adiciona campo para imagem de estilo se USO for selecionado
         style_image_path = ""
         if provider_name == "uso_local":
-            style_image_path = ui.text_input("Caminho da Imagem de Estilo (Opcional)", placeholder="Ex: assets/style.webp", key=f"{key_prefix}_style_img")
-            ui.info("O modelo USO pode usar uma imagem para guiar o estilo da arte. Deixe em branco para usar apenas o prompt.")
+            style_image_path = ui.text_input("Caminho da Imagem de Estilo (Obrigatório para USO)", placeholder="Ex: assets/style.webp", key=f"{key_prefix}_style_img")
 
         col_framing, col_angle = ui.columns(2)
         framing_map = {"Retrato (close-up)": "close-up shot, portrait", "Meio corpo (medium shot)": "medium shot, cowboy shot, waist up", "Corpo inteiro (full body)": "full body shot, full length"}
@@ -187,19 +202,11 @@ def render_comic_button(
         
         with st.spinner("Gerando painel com o modelo selecionado…"):
             if provider_name == "uso_local":
-                # --- Geração com USO ---
-                if not style_image_path:
-                    st.error("Para o modelo USO, por favor, forneça um caminho para a imagem de estilo.")
+                if not style_image_path or not os.path.exists(style_image_path):
+                    st.error(f"Para o modelo USO, forneça um caminho válido para a imagem de estilo. Caminho '{style_image_path}' não encontrado.")
                     return
-                img = uso_generate_image(
-                    prompt=prompt,
-                    negative_prompt=negative_prompt,
-                    style_image_path=style_image_path,
-                    width=width,
-                    height=height
-                )
+                img = uso_generate_image(prompt=prompt, negative_prompt=negative_prompt, style_image_path=style_image_path, width=width, height=height)
             else:
-                # --- Geração com Hugging Face InferenceClient ---
                 client = _hf_client()
                 img_data = client.text_to_image(model=model_name, prompt=prompt, negative_prompt=negative_prompt, width=width, height=height)
                 img = Image.open(io.BytesIO(img_data)) if isinstance(img_data, bytes) else img_data
