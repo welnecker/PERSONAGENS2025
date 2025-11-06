@@ -25,7 +25,25 @@ PROVIDERS: Dict[str, Dict[str, str]] = {
         "model": "stabilityai/stable-image-ultra",
         "size": "1024x1024",
     },
+
+    # ✅ NOVO MODELO — Flux.1-dev (HuggingFace)
+    "HF • FLUX.1-dev": {
+        "provider": "huggingface",
+        "model": "black-forest-labs/FLUX.1-dev",
+        "size": "1024x1024",
+    },
+
+    # ✅ OPCIONAL: versão Uncensored via HuggingFace LoRA (se quiser ativar depois)
+    # Isto não gera NSFW por si — apenas segue melhor prompts ousados.
+    # Pode comentar/descomentar a qualquer momento.
+    "HF • FLUX.1-dev (Uncensored LoRA)": {
+        "provider": "huggingface",
+        "model": "Heartsync/Flux-NSFW-uncensored",
+        "base":  "black-forest-labs/FLUX.1-dev",
+        "size": "1024x1024",
+    },
 }
+
 
 # ======================
 # Token / Client
@@ -41,7 +59,8 @@ def _get_hf_token() -> str:
     return tok
 
 def _hf_client(provider: str) -> InferenceClient:
-    return InferenceClient(provider=provider, token=_get_hf_token())
+    # provider é ignorado para HuggingFace
+    return InferenceClient(token=_get_hf_token())
 
 # ======================
 # Utilitários de Prompt
