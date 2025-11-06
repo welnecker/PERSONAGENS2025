@@ -194,7 +194,7 @@ def render_comic_button(
             docs = []
         scene_desc = scene_text_provider() or "night alley, rain, two figures confronting each other."
 
-        # 2) geração base (Hugging Face Inference)
+                # 2) geração base (Hugging Face Inference)
         client = _hf_client()
         prompt = _build_comic_prompt(scene_desc, nsfw_on)
 
@@ -215,6 +215,14 @@ def render_comic_button(
                 width=width,
                 height=height,
             )
+
+        # compat: se a lib retornar bytes em versões antigas
+        if not isinstance(img, Image.Image):
+            try:
+                img = Image.open(io.BytesIO(img))
+            except Exception:
+                raise RuntimeError("Falha ao decodificar imagem retornada pela API.")
+
 
         # 3) balões
         w, h = img.size
