@@ -200,19 +200,11 @@ _DEFAULT_PRESETS: Dict[str, Dict[str, str]] = {
         "positive": (
             "high-end comic panel, full-body, bold ink, cel shading, dramatic rimlight, rain and neon; "
             "female dark-elf from Elysarix; blue-slate luminous skin; metallic silver long hair; green predatory eyes; "
+            "elongated pointed elven ears; no horns; no antlers; no head protrusions; "
             "silver sensory tendrils active; single curved blade tail (not a person); "
             "three-quarter back view, eye-level to low-angle; natural contrapposto; "
             "solo, one subject; full-length legs to the feet; wet ground neon reflections (no human reflections)"
-            "elongated pointed elven ears, no horns, no antlers, no head protrusions, long silver elven ears with pointed tips; "
-
-                HORN_NEG = (
-            "horns, horn, antlers, antler, head spikes, forehead spikes, "
-            "bony protrusions on head, skull horns, demon horns, curved horns"
-        )
-    
-
         ),
-
         "negative": (
             "romance, couple, kiss, soft framing, " + ANTI_DUP_NEG + ", " + ANATOMY_NEG + ", " + SHAPE_NEG
         ),
@@ -221,21 +213,24 @@ _DEFAULT_PRESETS: Dict[str, Dict[str, str]] = {
     "Nerith • Dominante": {
         "positive": (
             "three-quarter to full body, bold ink, cel shading, dramatic back rimlight; "
-            "dark-elf; silver hair; neon green eyes; dominant posture; tendrils alive; tail-blade raised; "
-            "solo; legs complete; no human reflections"
+            "dark-elf; metallic silver long hair; neon green eyes; dominant posture; "
+            "elongated pointed elven ears; no horns; no antlers; no head protrusions; "
+            "tendrils alive; tail-blade raised; solo; legs complete; no human reflections"
         ),
         "negative": "romance, couple, kiss, " + ANTI_DUP_NEG + ", " + ANATOMY_NEG + ", " + SHAPE_NEG,
         "style": "cinematic backlight, smoky atmosphere",
     },
     "Nerith • Batalha": {
         "positive": (
-            "full-body combat stance, explosive motion lines, sparks, debris; tendrils reacting; tail-blade extended; "
-            "solo; legs complete; no human reflections"
+            "full-body combat stance, explosive motion lines, sparks, debris; "
+            "elongated pointed elven ears; no horns; no antlers; no head protrusions; "
+            "tendrils reacting; tail-blade extended; solo; legs complete; no human reflections"
         ),
         "negative": "romance, kiss, couple, " + ANTI_DUP_NEG + ", " + ANATOMY_NEG + ", " + SHAPE_NEG,
         "style": "dynamic action, low-angle shot",
     },
 }
+
 
 def _preset_store() -> Dict[str, Dict[str, str]]:
     return st.session_state.setdefault("nerith_comic_user_presets", {})
