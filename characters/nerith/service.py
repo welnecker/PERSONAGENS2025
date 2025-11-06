@@ -879,6 +879,7 @@ def render_sidebar(self, container) -> None:
 
     # ===== Quadrinhos (providers + botão) =====
     # Descrição curta 'filmável' para o painel
+    # ... dentro de render_sidebar(...)
     def _scene_text_provider() -> str:
         ms_local = st.session_state.get("nerith_missao", {})
         local = (
@@ -888,14 +889,15 @@ def render_sidebar(self, container) -> None:
         )
         last_assistant = (st.session_state.get("last_assistant_message") or "")[:120]
         return f"{local}; two characters; tense, close-up; dynamic angle; {last_assistant}"
-
-    # chama o botão (UI escolhe provider/modelo/tamanho)
+    
     render_comic_button(
         get_history_docs_fn=lambda: cached_get_history(usuario_key),
         scene_text_provider=_scene_text_provider,
         title="🎞️ Quadrinho (beta)",
-        ui=container,  # <<< importante
-   )
+        ui=container,                      # <<< renderiza na sidebar
+        key_prefix=f"{usuario_key}_comics" # <<< evita DuplicateWidgetID
+    )
+
 
 
     # ===== Lista de suspeitos =====
