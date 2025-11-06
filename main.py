@@ -17,7 +17,6 @@ from datetime import datetime
 import html
 
 # ========== BOOT (indexes/paths) ==========
-# Em qualquer ponto de boot do app (ex.: main.py):
 try:
     from core.memoria_longa import ensure_indexes
     ensure_indexes()
@@ -31,7 +30,7 @@ if str(ROOT) not in sys.path:
 # ========== CONFIG PÁGINA ==========
 st.set_page_config(page_title="PERSONAGENS 2025", page_icon="🎭", layout="centered")
 
-# ===== CSS global (container central + chat + sem vazamento lateral) =====
+# ===== CSS global =====
 st.markdown("""
 <style>
   html, body, .stApp { overflow-x: hidden; max-width: 100vw; }
@@ -74,13 +73,10 @@ def _encode_file_b64(p: Path) -> str:
 
 def set_background(image_path: Path, *, darken: float = 0.25, blur_px: int = 0,
                    attach_fixed: bool = True, size_mode: str = "cover") -> None:
-    if not image_path.exists():
+    if not image_path or not image_path.exists():
         return
     ext = image_path.suffix.lower()
-    mime = {
-        ".jpg": "jpeg", ".jpeg": "jpeg",
-        ".png": "png", ".webp": "webp", ".gif": "gif"
-    }.get(ext, "jpeg")
+    mime = {".jpg": "jpeg", ".jpeg": "jpeg", ".png": "png", ".webp": "webp", ".gif": "gif"}.get(ext, "jpeg")
     b64 = _encode_file_b64(image_path)
     att = "fixed" if attach_fixed else "scroll"
     darken = max(0.0, min(0.9, float(darken)))
@@ -172,13 +168,14 @@ def _load_env_from_secrets():
         "APP_NAME":           sec.get("APP_NAME", "personagens2025"),
         "APP_PUBLIC_URL":     sec.get("APP_PUBLIC_URL", ""),
         "DB_BACKEND":         sec.get("DB_BACKEND", "mongo"),
-        "APP_ENV":            sec.get("APP_ENV", "dev"),  # dev|prod
+        "APP_ENV":            sec.get("APP_ENV", "dev"),   # dev|prod
+        "HF_TOKEN":           sec.get("HF_TOKEN", ""),     # ← para comics/FAL
     }
     for k, v in mapping.items():
         if v and not os.environ.get(k):
             os.environ[k] = str(v)
-_load_env_from_secrets()
 
+_load_env_from_secrets()
 APP_ENV = os.environ.get("APP_ENV", "dev").lower().strip()
 
 # ========== REGISTRY / ROUTER FALLBACKS ==========
@@ -209,7 +206,7 @@ except Exception:
         provs.append(("Together",   bool(os.environ.get("TOGETHER_API_KEY")), "OK" if os.environ.get("TOGETHER_API_KEY") else "sem chave"))
         return provs
     def list_models(_p: str | None = None):
-        return []  # deixa vazio; vamos injetar forçados com guard-flag
+        return []
     def provider_chat(model: str, messages: List[dict], **kw):
         raise RuntimeError("service_router indisponível.")
     def route_chat_strict(model: str, payload: dict):
@@ -304,9 +301,8 @@ st.sidebar.markdown("---")
 st.session_state.setdefault("user_id", "Janio Donisete")
 st.session_state.setdefault("character", "Mary")
 
-# ----- LISTA DE MODELOS (router + forçados com guard) -----
+# ----- LISTA DE MODELOS -----
 FORCED_MODELS = [
-    # já existentes
     "deepseek/deepseek-chat-v3-0324",
     "anthropic/claude-3.5-haiku",
     "qwen/qwen3-max",
@@ -315,92 +311,54 @@ FORCED_MODELS = [
     "together/Qwen/Qwen2.5-72B-Instruct",
     "together/Qwen/QwQ-32B",
     "inclusionai/ling-1t",
-
-    # === novos pedidos (OpenRouter / Together misto) ===
     "z-ai/glm-4.6",
     "thedrummer/cydonia-24b-v4.1",
     "x-ai/grok-4-fast",
-
-    # 👉 aqui o correto:
     "moonshotai/Kimi-K2-Instruct-0905",
     "deepseek-ai/DeepSeek-R1-0528-tput",
-
     "x-ai/grok-code-fast-1",
     "google/gemma-3-27b-it",
     "google/gemini-2.5-flash",
     "openai/gpt-4o-mini",
 ]
 
-
 def _merge_models() -> List[str]:
     try:
         models_router = list_models(None) or []
     except Exception:
         models_router = []
-    # De-dup preservando ordem (router primeiro, depois forçados)
     models = list(dict.fromkeys(models_router + FORCED_MODELS))
     return models
 
 def _provider_for(model_id: str) -> str:
     m = (model_id or "").lower()
-
-    # 1) modelos específicos do Together
-    if any(
-        m.startswith(x)
-        for x in (
-            "together/",
-            "moonshotai/kimi-k2-instruct-0905",  # ✅ Kimi
-            "google/gemma-3-27b-it",
-            "google/gemini-2.5-flash",
-        )
-    ):
+    if any(m.startswith(x) for x in ("together/", "moonshotai/kimi-k2-instruct-0905",
+                                     "google/gemma-3-27b-it", "google/gemini-2.5-flash")):
         return "Together"
-
-    # 2) modelos que vêm do catálogo OpenRouter
-    if any(
-        m.startswith(x)
-        for x in (
-            "anthropic/",
-            "qwen/",
-            "nousresearch/",
-            "deepseek/",
-            "inclusionai/",
-            "z-ai/",
-            "thedrummer/",
-            "x-ai/",
-            "openai/",
-        )
-    ):
+    if any(m.startswith(x) for x in ("anthropic/","qwen/","nousresearch/","deepseek/","inclusionai/",
+                                     "z-ai/","thedrummer/","x-ai/","openai/")):
         return "OpenRouter"
-
     return "OpenRouter"
-
-
 
 def _has_creds_for(model_id: str) -> bool:
     prov = _provider_for(model_id)
     if prov == "Together":
         return bool(os.environ.get("TOGETHER_API_KEY"))
-    # Todos os demais listados aqui são via OpenRouter
     return bool(os.environ.get("OPENROUTER_API_KEY"))
 
 def _light_ping_model(model_id: str) -> bool:
-    """Verifica disponibilidade de rota de forma leve (best-effort)."""
     if "service_router" in sys.modules:
         try:
             route_chat_strict(model_id, {
                 "model": model_id,
-                "messages": [
-                    {"role": "system", "content": "ping"},
-                    {"role": "user", "content": "pong?"}
-                ],
-                "max_tokens": 4,
-                "temperature": 0.0
+                "messages": [{"role": "system", "content": "ping"},
+                             {"role": "user", "content": "pong?"}],
+                "max_tokens": 4, "temperature": 0.0
             })
             return True
         except Exception:
             return False
-    return True  # sem router: não bloquear UI
+    return True
 
 try:
     all_models = _merge_models()
@@ -410,7 +368,7 @@ except Exception:
 st.session_state.setdefault("model", (all_models[0] if all_models else "deepseek/deepseek-chat-v3-0324"))
 st.session_state.setdefault("history", [])  # List[Tuple[str, str]]
 st.session_state.setdefault("history_loaded_for", "")
-st.session_state.setdefault("_active_key", "")  # <- para detectar troca de thread
+st.session_state.setdefault("_active_key", "")
 
 # ========== CONTROLES TOPO ==========
 c1, c2 = st.columns([2, 2])
@@ -423,9 +381,7 @@ with c2:
 
 def _label_model(mid: str) -> str:
     prov = _provider_for(mid)
-    tag = ""
-    if mid not in (list_models(None) or []):
-        tag = " • forçado"
+    tag = "" if mid in (list_models(None) or []) else " • forçado"
     return f"{prov} • {mid}{tag}"
 
 _prev_model = st.session_state.get("_last_model_id", st.session_state.get("model"))
@@ -448,36 +404,24 @@ if sel != _prev_model:
         else:
             st.session_state["_last_model_id"] = sel
 
-
-
-
 @st.cache_resource
 def _mongo():
-    """
-    Retorna coleção MongoDB com cache de conexão.
-    Cache persiste durante toda a sessão do Streamlit.
-    """
+    """Retorna coleção MongoDB com cache de conexão."""
     try:
         mongo_user = st.secrets.get("MONGO_USER", "")
         mongo_pass = st.secrets.get("MONGO_PASS", "")
         mongo_cluster = st.secrets.get("MONGO_CLUSTER", "")
-        
         if not (mongo_user and mongo_pass and mongo_cluster):
             return None
-        
         uri = f"mongodb+srv://{mongo_user}:{mongo_pass}@{mongo_cluster}/?retryWrites=true&w=majority"
         client = MongoClient(uri, serverSelectionTimeoutMS=5000)
         db = client["roleplay_mary"]
         coll = db["interacoes"]
-        
-        # Teste de conexão
-        coll.find_one()
-        
+        coll.find_one()  # ping
         return coll
     except Exception as e:
         st.error(f"❌ Erro ao conectar MongoDB: {e}")
         return None
-
 
 def _save_json_response_to_mongo(data: dict, *, user: str, personagem: str, modelo: str) -> None:
     """Salva resposta JSON estruturada no MongoDB com cache de conexão."""
@@ -501,70 +445,59 @@ def _save_json_response_to_mongo(data: dict, *, user: str, personagem: str, mode
     except Exception as e:
         st.error(f"❌ Erro ao salvar no MongoDB: {e}")
 
-
-
 def render_assistant_bubbles(markdown_text: str) -> None:
     """
     Renderiza respostas da assistente. Se vier JSON válido (schema: fala/pensamento/acao/meta),
-    formata cada parte com estilos próprios; caso contrário, mantém o renderer Markdown existente.
+    formata; caso contrário, renderiza Markdown normal.
     """
     if not markdown_text:
         return
 
     # 1) Tenta JSON estruturado
     try:
-        import json, html
-        data = json.loads(markdown_text)
+        import json as _json
+        data = _json.loads(markdown_text)
         if isinstance(data, dict) and ("fala" in data or "pensamento" in data or "acao" in data or "meta" in data):
             fala = str(data.get("fala", "") or "").strip()
             pensamento = str(data.get("pensamento", "") or "").strip()
             acao = str(data.get("acao", "") or "").strip()
             meta = str(data.get("meta", "") or "").strip()
 
-            # Fala (principal)
             if fala:
                 safe_fala = html.escape(fala).replace("\n", "<br>")
                 st.markdown(f"<div class='assistant-paragraph'><b>{safe_fala}</b></div>", unsafe_allow_html=True)
-
-            # Pensamento (itálico e discreto)
             if pensamento:
                 safe_pense = html.escape(pensamento).replace("\n", "<br>")
                 st.markdown(f"<div class='assistant-paragraph'><em>{safe_pense}</em></div>", unsafe_allow_html=True)
-
-            # Ação (legenda discreta)
             if acao:
                 safe_acao = html.escape(acao).replace("\n", "<br>")
                 st.caption(safe_acao)
-
-            # Meta/comentários (muito discreto)
             if meta:
                 safe_meta = html.escape(meta).replace("\n", "<br>")
                 st.caption(safe_meta)
 
-            # Salvar no MongoDB (se credenciais existirem)
+            # Log Mongo (personagem atual)
             try:
                 _user = st.session_state.get("user_name") or st.session_state.get("usuario") or "desconhecido"
-                _person = "Mary"
+                _person = (st.session_state.get("character") or "desconhecida").strip()
                 _model = st.session_state.get("model") or st.session_state.get("current_model") or "desconhecido"
                 _save_json_response_to_mongo(data, user=_user, personagem=_person, modelo=_model)
-            except Exception as _e:
-                # Não bloquear a UI por erro de log
+            except Exception:
                 pass
 
             return
     except Exception:
         pass
 
-    # 2) Fallback para o renderer original (Markdown por parágrafo e blocos de código)
-    parts = re.split(r"(```[\s\S]*?```)", markdown_text)
+    # 2) Fallback: Markdown por parágrafo e blocos de código
+    parts = re.split(r"(```[\\s\\S]*?```)", markdown_text)
     for part in parts:
         if part.startswith("```") and part.endswith("```"):
             st.markdown(part)
         else:
             paras = [p.strip() for p in re.split(r"\n\s*\n", part) if p.strip()]
             for p in paras:
-                import html as _html
-                safe = _html.escape(p).replace("\n", "<br>")
+                safe = html.escape(p).replace("\n", "<br>")
                 st.markdown(f"<div class='assistant-paragraph'>{safe}</div>", unsafe_allow_html=True)
 
 def _user_keys_for_history(user_id: str, character_name: str) -> List[str]:
@@ -584,9 +517,11 @@ def _reload_history(force: bool = False):
         keys = _user_keys_for_history(user_id, char)
         docs = get_history_docs_multi(keys, limit=400) or []
         hist: List[Tuple[str, str]] = []
+
+        resposta_key = f"resposta_{char.strip().lower()}"
         for d in docs:
             u = (d.get("mensagem_usuario") or "").strip()
-            a = (d.get("resposta_mary") or "").strip()
+            a = (d.get(resposta_key) or d.get("resposta_mary") or "").strip()
             if u:
                 hist.append(("user", u))
             if a:
@@ -600,9 +535,8 @@ def _reload_history(force: bool = False):
 try:
     user_id = str(st.session_state.get("user_id", "")).strip()
     char    = str(st.session_state.get("character", "")).strip()
-    if user_id and char:  # <- só roda boot se ambos existem
+    if user_id and char:
         char_key = f"{user_id}::{char.lower()}"
-
         docs_exist = False
         try:
             existing = get_history_docs(char_key) or []
@@ -630,7 +564,7 @@ try:
 except Exception as e:
     _safe_error("Boot da primeira mensagem falhou.", e)
 
-# ========== Troca de thread (usuário/personagem) ==========
+# ========== Troca de thread ==========
 _current_active = f"{st.session_state['user_id']}::{str(st.session_state['character']).lower()}"
 if st.session_state["_active_key"] != _current_active:
     st.session_state["_active_key"] = _current_active
@@ -638,7 +572,7 @@ if st.session_state["_active_key"] != _current_active:
     st.session_state["history_loaded_for"] = ""
     _reload_history(force=True)
 
-# ========== Auto-seed: Mary (Esposa Cúmplice) ==========
+# ========== Auto-seed: Mary ==========
 try:
     _user = str(st.session_state.get("user_id", "")).strip()
     _char = str(st.session_state.get("character", "")).strip().lower()
@@ -650,14 +584,11 @@ try:
             f = {}
         changed = False
         if not str(f.get("parceiro_atual", "")).strip():
-            set_fact(_mary_key, "parceiro_atual", _user, {"fonte": "auto_seed"})
-            changed = True
+            set_fact(_mary_key, "parceiro_atual", _user, {"fonte": "auto_seed"}); changed = True
         if "casados" not in f:
-            set_fact(_mary_key, "casados", True, {"fonte": "auto_seed"})
-            changed = True
+            set_fact(_mary_key, "casados", True, {"fonte": "auto_seed"}); changed = True
         if not str(f.get("local_cena_atual", "")).strip():
-            set_fact(_mary_key, "local_cena_atual", "quarto", {"fonte": "auto_seed"})
-            changed = True
+            set_fact(_mary_key, "local_cena_atual", "quarto", {"fonte": "auto_seed"}); changed = True
         if changed:
             st.session_state["history_loaded_for"] = ""
             _reload_history(force=True)
@@ -672,14 +603,18 @@ except Exception as e:
     st.stop()
 
 # ========== Sidebar específico da personagem ==========
-render_sidebar = getattr(service, "render_sidebar", None)
-if callable(render_sidebar):
-    try:
-        render_sidebar(st.sidebar)
-    except Exception as e:
-        _safe_error(f"Erro no sidebar de {getattr(service, 'display_name', 'personagem')}.", e)
-else:
-    st.sidebar.caption("Sem preferências para esta personagem.")
+with st.sidebar:
+    st.caption("◻️ Sidebar base do app ativo")
+    render_sidebar = getattr(service, "render_sidebar", None)
+    if callable(render_sidebar):
+        try:
+            st.caption("◻️ Hook de sidebar da personagem carregado")
+            # Passe 'st.sidebar' se seu service espera explicitamente um container de sidebar
+            render_sidebar(st.sidebar)
+        except Exception as e:
+            _safe_error(f"Erro no sidebar de {getattr(service, 'display_name', 'personagem')}.", e)
+    else:
+        st.caption("Sem preferências para esta personagem.")
 
 # ========== Sidebar: Manutenção ==========
 st.sidebar.markdown("---")
@@ -766,15 +701,12 @@ if st.sidebar.button("🧨 Apagar TUDO (chat + memórias)"):
 # ===== BOTÃO: FORÇAR RELOAD PERSONA =====
 if st.sidebar.button("🔄 Forçar Reload Persona"):
     try:
-        import sys
         import importlib
-        
         _user_id = str(st.session_state.get("user_id", ""))
         _char    = str(st.session_state.get("character", "")).strip().lower()
         _key_primary = f"{_user_id}::{_char}" if _user_id and _char else _user_id
         _key_legacy  = _user_id if _char == "nerith" else None
-        
-        # 1. Deletar histórico (ambas as chaves)
+
         total = 0
         try:
             total += int(delete_user_history(_key_primary) or 0)
@@ -785,60 +717,48 @@ if st.sidebar.button("🔄 Forçar Reload Persona"):
                 total += int(delete_user_history(_key_legacy) or 0)
             except Exception:
                 pass
-        
-        # 2. FORÇAR REIMPORTAÇÃO DO MÓDULO PERSONA (remove cache Python)
+
         mod_name = f"characters.{_char}.persona"
         if mod_name in sys.modules:
             del sys.modules[mod_name]
             st.sidebar.info(f"✅ Módulo {mod_name} removido do cache Python")
-        
-        # 3. Limpar cache Streamlit
+
         st.cache_data.clear()
         st.cache_resource.clear()
-        
-        # 4. Limpar sessão
+
         st.session_state.history = []
         st.session_state.history_loaded_for = ""
-        
-        # 5. Limpar __pycache__ (opcional, mas recomendado)
-        import subprocess
+
+        # limpar __pycache__ (best-effort)
         try:
-            subprocess.run(
-                ['find', '.', '-type', 'd', '-name', '__pycache__', '-exec', 'rm', '-rf', '{}', '+'],
-                capture_output=True,
-                timeout=5
-            )
+            import subprocess
+            subprocess.run(['find', '.', '-type', 'd', '-name', '__pycache__', '-exec', 'rm', '-rf', '{}', '+'],
+                           capture_output=True, timeout=5)
         except Exception:
             pass
-        
+
         st.sidebar.success(f"✅ Persona recarregada! ({total} docs deletados)")
         time.sleep(1)
         st.rerun()
-        
     except Exception as e:
         st.sidebar.error(f"❌ Erro: {e}")
 
-# Botão de limpar cache (dados/recursos)
+# Botão limpar cache
 if st.sidebar.button("🧹 Limpar cache (dados/recursos)"):
-    try:
-        st.cache_data.clear()
-    except Exception:
-        pass
-    try:
-        st.cache_resource.clear()
-    except Exception:
-        pass
+    try: st.cache_data.clear()
+    except Exception: pass
+    try: st.cache_resource.clear()
+    except Exception: pass
     st.sidebar.success("Caches limpos. (Se algo estranho persistir, atualize a página.)")
 
-# Botão de forçar atualização da mensagem inicial
+# Botão atualizar mensagem inicial
 if st.sidebar.button("🔄 Atualizar Mensagem Inicial"):
     try:
         _user_id = str(st.session_state.get("user_id", ""))
         _char    = str(st.session_state.get("character", "")).strip().lower()
         _key_primary = f"{_user_id}::{_char}" if _user_id and _char else _user_id
         _key_legacy  = _user_id if _char == "mary" else None
-        
-        # Deletar histórico (ambas as chaves)
+
         total = 0
         try:
             total += int(delete_user_history(_key_primary) or 0)
@@ -849,26 +769,19 @@ if st.sidebar.button("🔄 Atualizar Mensagem Inicial"):
                 total += int(delete_user_history(_key_legacy) or 0)
             except Exception:
                 pass
-        
-        # Limpar cache
-        try:
-            st.cache_data.clear()
-        except Exception:
-            pass
-        try:
-            st.cache_resource.clear()
-        except Exception:
-            pass
-        
-        # Forçar reload
+
+        try: st.cache_data.clear()
+        except Exception: pass
+        try: st.cache_resource.clear()
+        except Exception: pass
+
         st.session_state["history"] = []
         st.session_state["history_loaded_for"] = ""
-        
+
         st.sidebar.success(f"✅ Mensagem inicial atualizada! ({total} itens deletados)")
         st.rerun()
     except Exception as e:
         _safe_error("Falha ao atualizar mensagem inicial.", e)
-
 
 # ========== Sidebar: Memória Canônica ==========
 st.sidebar.subheader("🧠 Memória Canônica")
@@ -1010,11 +923,7 @@ except Exception:
     NSFW_ON = False
 
 virgem_val = get_fact(user_key, "virgem", None)
-virg_caption = "—"
-if virgem_val is True:
-    virg_caption = "Sim"
-elif virgem_val is False:
-    virg_caption = "Não"
+virg_caption = "—" if virgem_val is None else ("Sim" if virgem_val else "Não")
 
 st.sidebar.caption(f"Status NSFW: **{'✅ ON' if NSFW_ON else '🔒 OFF'}**")
 st.sidebar.caption(f"Virgindade: **{virg_caption}**")
@@ -1061,7 +970,6 @@ st.session_state.setdefault("bg_size", "cover")
 bg_sel = st.sidebar.selectbox("Imagem", choices, index=choices.index(st.session_state["bg_file"]))
 bg_path = (IMG_DIR / bg_sel) if bg_sel != "(nenhuma)" else None
 
-# Preview + aviso p/ arquivos muito grandes
 if bg_path and bg_path.exists():
     try:
         size_mb = bg_path.stat().st_size / (1024*1024)
@@ -1083,13 +991,7 @@ st.session_state["bg_fixed"] = bg_fixed
 st.session_state["bg_size"] = bg_size
 
 if bg_path and bg_path.exists():
-    set_background(
-        bg_path,
-        darken=bg_darken/100.0,
-        blur_px=bg_blur,
-        attach_fixed=bg_fixed,
-        size_mode=bg_size,
-    )
+    set_background(bg_path, darken=bg_darken/100.0, blur_px=bg_blur, attach_fixed=bg_fixed, size_mode=bg_size)
 
 # ========== Preferências rápidas (Mary) ==========
 st.sidebar.markdown("---")
@@ -1142,6 +1044,8 @@ for role, content in st.session_state["history"]:
                          avatar=("💬" if role == "user" else "💚")):
         if role == "assistant":
             render_assistant_bubbles(content)
+            # disponibiliza para o provider de cena (quadrinhos)
+            st.session_state["last_assistant_message"] = content
         else:
             st.markdown(content)
 
@@ -1176,7 +1080,6 @@ with st.expander("🔧 Diagnóstico LLM"):
                     ],
                     max_tokens=16, temperature=0.0, top_p=1.0,
                 )
-
                 txt = (data.get("choices", [{}])[0].get("message", {}) or {}).get("content", "")
                 st.success(f"{prov} • {used} → {txt!r}")
         except Exception as e:
@@ -1214,7 +1117,7 @@ _ph = st.session_state.get("suggestion_placeholder", "")
 _default_ph = f"Fale com {st.session_state['character']}"
 _dyn_ph = f"💡 Sugestão: {_ph}" if _ph else _default_ph
 
-# Chat input com chave fixa
+# Chat input
 try:
     user_prompt = st.chat_input(_default_ph, placeholder=_dyn_ph, key="chat_msg")
 except TypeError:
@@ -1286,7 +1189,7 @@ if _has_job and not st.session_state.get("_is_generating"):
             render_assistant_bubbles(text)
 
     finally:
-        # Limpeza SEMPRE, mesmo em erro
+        # Limpeza SEMPRE
         st.session_state["_pending_prompt"] = None
         st.session_state["_pending_auto"] = False
         st.session_state["_job_uid"] = None
