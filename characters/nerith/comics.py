@@ -63,46 +63,79 @@ SOLO_POS = "solo, single female character, one subject, centered composition"
 LEGS_FULL_POS = "full-length legs visible down to the feet, natural proportions"
 
 
+# ======================
+# Forma corporal (positivos e negativos)
+# ======================
+BREAST_SHAPE_POS = (
+    "full and firm breasts with natural teardrop shape, proportional to athletic frame, "
+    "cohesive attachment to chest, natural gravity, smooth upper pole, defined but subtle lower curve"
+)
+TORSO_GLU_POS = (
+    "flat to slightly defined abdomen, visible oblique lines, narrow waist, "
+    "wide pelvis, round high-set glutes with clear underglute line"
+)
+THIGHS_POS = "strong thighs, smooth quad curves, natural knee structure, calves balanced"
+
+# Negativos específicos de seio/barriga/glúteo/coxa
+SHAPE_NEG = (
+    "balloon breasts, sphere boobs, torpedo breasts, implant sphere, uneven breasts, misaligned nipples, "
+    "collapsed chest, unnatural cleavage, underboob artifact, extra nipples, dislocated breast, "
+    "distorted abdomen, misshapen waist, broken spine, broken hips, "
+    "collapsed butt, square butt, saggy butt, fused thighs"
+)
+
+# Perfis prontos (padrão = Atlética)
+SHAPE_PROFILES = {
+    "Atlética (padrão)": (
+        "athletic hourglass, toned yet feminine, " + BREAST_SHAPE_POS + ", "
+        + TORSO_GLU_POS + ", " + THIGHS_POS
+    ),
+    "Hourglass suave": (
+        "soft hourglass, slightly fuller breasts and hips, gentle abdomen definition, "
+        + BREAST_SHAPE_POS + ", " + THIGHS_POS
+    ),
+    "Slim power": (
+        "slim athletic, smaller but firm teardrop breasts, tighter waist, compact round glutes, "
+        + THIGHS_POS
+    ),
+}
+
 # ===================================================
 # ✅ PRESETS (originais + do usuário)
 # ===================================================
 
-_DEFAULT_PRESETS: Dict[str, Dict[str, str]] = {
+_DEFAULT_PRESETS = {
     "Nerith • Caçadora": {
         "positive": (
-            "high-end comic panel, full-body shot, bold ink outlines, cel shading, "
-            "dramatic rimlight, gritty detail, dynamic angle, halftone texture, rain and neon; "
-            "female dark-elf warrior from Elysarix; blue-slate luminous skin; metallic silver long hair; "
-            "predatory green eyes; athletic hourglass body; strong thighs; wide hips; firm shaped glutes; "
-            "silver sensory tendrils moving; " + TAIL_DISAMBIG_POS + "; " + SOLO_POS + "; "
-            + LEGS_FULL_POS + "; " + NO_HUMAN_REFLECTIONS_POS
+            "high-end comic panel, full-body, bold ink, cel shading, dramatic rimlight, rain and neon; "
+            "female dark-elf from Elysarix; blue-slate luminous skin; metallic silver long hair; green predatory eyes; "
+            "silver sensory tendrils active; single curved blade tail (not a person); solo, one subject; "
+            "full-length legs to the feet; wet ground neon reflections (no human reflections)"
         ),
         "negative": (
-            "kiss, couple, romance, soft framing, gentle embrace, coy look, fisheye, warped anatomy, distorted proportions, "
-            + ANTI_DUP_NEG + ", " + ANATOMY_NEG
+            "romance, couple, kiss, soft framing, " + ANTI_DUP_NEG + ", " + ANATOMY_NEG + ", " + SHAPE_NEG
         ),
-        "style": "gritty noir sci-fi, rain, neon reflections",
+        "style": "gritty noir sci-fi, halftone accents, dynamic angle",
     },
     "Nerith • Dominante": {
         "positive": (
-            "three-quarter to full body, bold ink, cel shading, dramatic rimlight; "
-            "Elysarix dark elf; glowing blue-slate skin; silver hair; green neon eyes; "
-            "hips emphasized; dominant posture; teasing gaze; tendrils active; tail-blade raised; "
-            + SOLO_POS + "; " + LEGS_FULL_POS + "; " + NO_HUMAN_REFLECTIONS_POS + "; " + TAIL_DISAMBIG_POS
+            "three-quarter to full body, bold ink, cel shading, dramatic back rimlight; "
+            "dark-elf; silver hair; neon green eyes; dominant posture; tendrils alive; tail-blade raised; "
+            "solo; legs complete; no human reflections"
         ),
-        "negative": "romance, couple, kiss, soft cinematography, " + ANTI_DUP_NEG + ", " + ANATOMY_NEG,
-        "style": "cinematic backlight, halftone accents",
+        "negative": "romance, couple, kiss, " + ANTI_DUP_NEG + ", " + ANATOMY_NEG + ", " + SHAPE_NEG,
+        "style": "cinematic backlight, smoky atmosphere",
     },
     "Nerith • Batalha": {
         "positive": (
-            "full-body combat stance, explosive motion, debris, sparks; tail-blade extended; tendrils reacting; "
-            "muscles defined; bold inks, cel shading, halftone texture; " + SOLO_POS + "; "
-            + LEGS_FULL_POS + "; " + NO_HUMAN_REFLECTIONS_POS + "; " + TAIL_DISAMBIG_POS
+            "full-body combat stance, explosive motion lines, sparks, debris; tendrils reacting; tail-blade extended; "
+            "solo; legs complete; no human reflections"
         ),
-        "negative": "romance, kiss, couple, " + ANTI_DUP_NEG + ", " + ANATOMY_NEG,
-        "style": "dynamic action shot, low-angle",
+        "negative": "romance, kiss, couple, " + ANTI_DUP_NEG + ", " + ANATOMY_NEG + ", " + SHAPE_NEG,
+        "style": "dynamic action, low-angle shot",
     },
 }
+
 
 def _preset_store() -> Dict[str, Dict[str, str]]:
     return st.session_state.setdefault("nerith_comic_user_presets", {})
@@ -128,27 +161,30 @@ def build_prompt_from_preset(
     scene_desc: str,
     nsfw_on: bool,
     *,
+    anatomy_profile: str = "Atlética (padrão)",
     force_solo: bool = True,
     legs_visible: bool = True,
     anti_mirror: bool = True,
 ) -> str:
-    """Constrói o prompt final com reforços anti-duplicação/anatomia."""
+    """Constrói o prompt final com guarda NSFW, perfil anatômico e reforços de continuidade."""
     guard = "" if nsfw_on else "sfw, no explicit nudity, no genitals, implied tension only,"
-    pos = preset.get("positive", "").strip()
-    neg = preset.get("negative", "").strip()
-    sty = preset.get("style", "").strip()
+    pos = (preset.get("positive", "") or "").strip()
+    neg = (preset.get("negative", "") or "").strip()
+    sty = (preset.get("style", "") or "").strip()
 
-    extras_pos = []
+    # Perfil anatômico
+    shape_txt = SHAPE_PROFILES.get(anatomy_profile, SHAPE_PROFILES["Atlética (padrão)"])
+
+    extras_pos = [shape_txt]
     if force_solo:
-        extras_pos.append(SOLO_POS)
-        extras_pos.append(TAIL_DISAMBIG_POS)
+        extras_pos.append("solo, one female subject, centered composition")
+        extras_pos.append("single curved blade tail clearly distinct from legs")
     if legs_visible:
-        extras_pos.append(LEGS_FULL_POS)
+        extras_pos.append("full-length legs visible down to the feet, natural proportions")
     if anti_mirror:
-        extras_pos.append(NO_HUMAN_REFLECTIONS_POS)
+        extras_pos.append("wet ground reflects neon lights only, no human reflections")
 
-    # Negativos globais
-    neg_all = ", ".join([s for s in [neg, ANTI_DUP_NEG, ANATOMY_NEG] if s])
+    neg_all = ", ".join([n for n in [neg, SHAPE_NEG, ANTI_DUP_NEG, ANATOMY_NEG] if n])
 
     parts = [
         guard,
@@ -264,6 +300,21 @@ def render_comic_button(
         if not gen:
             return
 
+        # Seleção do perfil anatômico
+        col_shape, _, _ = ui.columns([2, 1, 1])
+        anatomy_profile = col_shape.selectbox(
+            "Perfil anatômico",
+            options=list(SHAPE_PROFILES.keys()),
+            index=0,
+            key=f"{key_prefix}_shape_profile",
+        )
+        
+        # (se já existem estes)
+        # force_solo, legs_visible, anti_mirror definidos em checkboxes? Se não, fixe como True:
+        force_solo = True
+        legs_visible = True
+        anti_mirror = True
+
         # ------------------------------
         # Cena textual
         # ------------------------------
@@ -279,6 +330,7 @@ def render_comic_button(
         # ------------------------------
         prompt = build_prompt_from_preset(
         cur, scene_desc, nsfw_on,
+        anatomy_profile=anatomy_profile,
         force_solo=force_solo,
         legs_visible=legs_visible,
         anti_mirror=anti_mirror,
