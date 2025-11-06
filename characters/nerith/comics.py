@@ -6,21 +6,19 @@ from PIL import Image
 from huggingface_hub import InferenceClient
 import streamlit as st
 
-# A importação do wrapper será tentada dinamicamente dentro da função da UI
-USO_AVAILABLE = False
-uso_generate_image = None
+# Tenta importar o wrapper do USO e define uma flag de disponibilidade.
+# Esta abordagem é mais robusta para diferentes estruturas de projeto.
 try:
-    from .uso_wrapper import generate_image as uso_generate_image_func
-    uso_generate_image = uso_generate_image_func
+    import uso_wrapper
     USO_AVAILABLE = True
 except ImportError:
-    # O aviso será mostrado na UI se o usuário tentar usar o modelo
-    pass
+    USO_AVAILABLE = False
+    # O aviso será mostrado na UI se o wrapper não for encontrado.
 
 # ======================
 # Config / Providers
 # ======================
-# O provedor do USO será adicionado dinamicamente se estiver disponível
+# Define a base de provedores. O USO será adicionado dinamicamente se disponível.
 PROVIDERS: Dict[str, Dict[str, str]] = {
     "HF • FLUX.1-dev": {
         "provider": "huggingface",
@@ -29,6 +27,7 @@ PROVIDERS: Dict[str, Dict[str, str]] = {
     },
 }
 
+# Lógica corrigida: Adiciona o provedor USO à lista SE ele estiver disponível.
 if USO_AVAILABLE:
     PROVIDERS["USO (FLUX.1-dev)"] = {
         "provider": "uso_local",
@@ -36,8 +35,6 @@ if USO_AVAILABLE:
         "size": "1024x1024",
     }
 
-
-# ... (o restante do código, como _get_hf_token, blocos de prompt, etc., permanece o mesmo) ...
 # ======================
 # Token / Client
 # ======================
@@ -49,6 +46,7 @@ def _get_hf_token() -> str:
         raise RuntimeError("Defina HUGGINGFACE_API_KEY (ou HF_TOKEN) em st.secrets ou variável de ambiente.")
     return tok.strip()
 
+@st.cache_resource
 def _hf_client() -> InferenceClient:
     return InferenceClient(token=_get_hf_token())
 
@@ -145,15 +143,13 @@ def render_comic_button(
         # --- Verificação de Disponibilidade do USO ---
         if not USO_AVAILABLE:
             ui.info(
-                "O modelo avançado 'USO' não foi encontrado. Para habilitá-lo, "
-                "certifique-se de que o código-fonte do USO e o arquivo `requirements.txt` "
-                "estejam no diretório do projeto e as dependências instaladas."
+                "O modelo 'USO' não está disponível. Para habilitá-lo, certifique-se de que o arquivo `uso_wrapper.py` "
+                "e as dependências do modelo (como `inference.py`) estão no diretório do projeto e as bibliotecas instaladas."
             )
 
         c1, c2 = ui.columns(2)
-        # Garante que o selectbox não falhe se a lista de provedores estiver vazia
         if not PROVIDERS:
-            ui.error("Nenhum modelo de imagem está configurado ou disponível. Verifique a instalação.")
+            ui.error("Nenhum modelo de imagem está configurado. Verifique a instalação.")
             return
             
         prov_key = c1.selectbox("Modelo", options=list(PROVIDERS.keys()), index=0, key=f"{key_prefix}_model_sel")
@@ -170,7 +166,7 @@ def render_comic_button(
 
         style_image_path = ""
         if provider_name == "uso_local":
-            style_image_path = ui.text_input("Caminho da Imagem de Estilo (Obrigatório para USO)", placeholder="Ex: assets/style.webp", key=f"{key_prefix}_style_img")
+            style_image_path = ui.text_input("Imagem de Estilo (em `assets/`)", placeholder="Ex: style.webp", key=f"{key_prefix}_style_img")
 
         col_framing, col_angle = ui.columns(2)
         framing_map = {"Retrato (close-up)": "close-up shot, portrait", "Meio corpo (medium shot)": "medium shot, cowboy shot, waist up", "Corpo inteiro (full body)": "full body shot, full length"}
@@ -202,10 +198,20 @@ def render_comic_button(
         
         with st.spinner("Gerando painel com o modelo selecionado…"):
             if provider_name == "uso_local":
-                if not style_image_path or not os.path.exists(style_image_path):
-                    st.error(f"Para o modelo USO, forneça um caminho válido para a imagem de estilo. Caminho '{style_image_path}' não encontrado.")
+                # Validação de segurança para o caminho da imagem
+                if not style_image_path:
+                    st.error("Para o modelo USO, forneça o nome do arquivo da imagem de estilo.")
                     return
-                img = uso_generate_image(prompt=prompt, negative_prompt=negative_prompt, style_image_path=style_image_path, width=width, height=height)
+                
+                # Garante que o caminho é seguro e aponta para o diretório 'assets'
+                safe_base_dir = os.path.abspath("assets")
+                full_path = os.path.abspath(os.path.join(safe_base_dir, style_image_path))
+                
+                if not full_path.startswith(safe_base_dir) or not os.path.exists(full_path):
+                    st.error(f"Imagem de estilo não encontrada ou caminho inválido. Verifique se '{style_image_path}' existe dentro da pasta 'assets/'.")
+                    return
+                
+                img = uso_wrapper.generate_image(prompt=prompt, negative_prompt=negative_prompt, style_image_path=full_path, width=width, height=height)
             else:
                 client = _hf_client()
                 img_data = client.text_to_image(model=model_name, prompt=prompt, negative_prompt=negative_prompt, width=width, height=height)
