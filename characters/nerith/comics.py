@@ -1,6 +1,7 @@
+# characters/nerith/comics.py
 from __future__ import annotations
 import os, io
-from typing import Callable, List, Dict
+from typing import Callable, List, Dict, Tuple
 from PIL import Image
 from huggingface_hub import InferenceClient
 import streamlit as st
@@ -78,7 +79,7 @@ def _fit_to_limit(prompt: str, max_len: int = MAX_PROMPT_LEN) -> tuple[str, bool
     if len(p) > max_len and " style:" in p:
         head, sep, tail = p.partition(" style:")
         if sep:
-            style_block, sep2, rest = tail.partition(" Scene:")
+            _style_block, sep2, rest = tail.partition(" Scene:")
             p = _squash_spaces(head + (" Scene:" + rest if sep2 else ""))
 
     # 3) encurta a cena
@@ -93,7 +94,7 @@ def _fit_to_limit(prompt: str, max_len: int = MAX_PROMPT_LEN) -> tuple[str, bool
     return p, reduced
 
 # ======================
-# Regras auxiliares (anti-duplicação / anatomia)
+# Regras auxiliares (anti-duplicação / anatomia / orelhas)
 # ======================
 ANTI_DUP_NEG = (
     "two people, two girls, duplicate, twin, second person, extra person, extra body, "
@@ -104,12 +105,10 @@ ANATOMY_NEG = (
     "extra limbs, extra legs, missing legs, cut off legs, cropped feet, deformed legs, "
     "bad anatomy, malformed hands, fused fingers, extra fingers"
 )
-TAIL_DISAMBIG_POS = (
-    "single curved blade tail emerging from the lower back, clearly one tail, not a person, not a leg"
+HORN_NEG = (
+    "horns, horn, antlers, antler, head spikes, forehead spikes, "
+    "bony protrusions on head, skull horns, demon horns, curved horns"
 )
-NO_HUMAN_REFLECTIONS_POS = "wet ground reflects neon lights only, no human reflections"
-SOLO_POS = "solo, single female character, one subject, centered composition"
-LEGS_FULL_POS = "full-length legs visible down to the feet, natural proportions"
 
 # ===== Pose / Anatomia segura =====
 POSE_POS = (
@@ -124,6 +123,22 @@ POSE_NEG = (
     "misaligned shoulders, hips misalignment, dislocated joints, "
     "tail intersecting legs, tail clipping body"
 )
+
+# --- Cauda: base e desambiguação ---
+TAIL_BASE_POS = (
+    "a single curved blade tail with a visible anatomical base attached at the sacrum/lower-back; "
+    "it emerges above the gluteal crease, between the upper glutes; "
+    "clearly non-genital, non-phallus, non-limb, never exiting the anus"
+)
+TAIL_NEG = (
+    "phallic tail, penis-like tail, tail shaped like a limb, tail fused to leg, "
+    "detached tail, floating tail, tail exiting the anus, tail from crotch"
+)
+
+# --- Reflexos / composição ---
+NO_HUMAN_REFLECTIONS_POS = "wet ground reflects neon lights only, no human reflections"
+SOLO_POS = "solo, single female character, one subject, centered composition"
+LEGS_FULL_POS = "full-length legs visible down to the feet, natural proportions"
 
 # ======================
 # Forma corporal (positivos e negativos)
@@ -160,15 +175,6 @@ SHAPE_PROFILES = {
     ),
 }
 
-# --- Cauda: base e desambiguação ---
-TAIL_BASE_POS = (
-    "tail-blade with visible base attached at the sacrum/lower-back, "
-    "emerging between the glutes (above the gluteal crease), clearly not a limb or phallic shape"
-)
-TAIL_NEG = (
-    "phallic tail, penis-like tail, tail shaped like a limb, tail fused to leg, detached tail, floating tail"
-)
-
 # --- Proporções corporais coesas (perfis) ---
 PROPORTION_PROFILES = {
     "Balanceado": (
@@ -191,13 +197,6 @@ DISPROPORTION_NEG = (
     "overinflated thighs, disproportionate thighs, unnatural pelvis tilt"
 )
 
-# --- Remover chifres / protrusões da cabeça (Nerith não tem) ---
-HORN_NEG = (
-    "horns, horn, antlers, antler, head spikes, forehead spikes, "
-    "bony protrusions on head, skull horns, demon horns, curved horns"
-)
-
-
 # ===================================================
 # PRESETS (originais + do usuário)
 # ===================================================
@@ -205,14 +204,15 @@ _DEFAULT_PRESETS: Dict[str, Dict[str, str]] = {
     "Nerith • Caçadora": {
         "positive": (
             "high-end comic panel, full-body, bold ink, cel shading, dramatic rimlight, rain and neon; "
-            "female dark-elf from Elysarix; blue-slate luminous skin; metallic silver long hair; green predatory eyes; "
+            "female dark-elf from Elysarix; blue-slate luminous skin with faint inner glow; "
+            "metallic silver long hair; green predatory eyes; "
             "elongated pointed elven ears; no horns; no antlers; no head protrusions; "
-            "silver sensory tendrils active; single curved blade tail (not a person); "
+            "silver sensory tendrils active; "
             "three-quarter back view, eye-level to low-angle; natural contrapposto; "
-            "solo, one subject; full-length legs to the feet; wet ground neon reflections (no human reflections)"
+            f"{SOLO_POS}; {LEGS_FULL_POS}; {NO_HUMAN_REFLECTIONS_POS}"
         ),
         "negative": (
-            "romance, couple, kiss, soft framing, " + ANTI_DUP_NEG + ", " + ANATOMY_NEG + ", " + SHAPE_NEG
+            "romance, couple, kiss, soft framing, " + ANTI_DUP_NEG + ", " + ANATOMY_NEG + ", " + SHAPE_NEG + ", " + HORN_NEG
         ),
         "style": "gritty noir sci-fi, halftone accents, dynamic angle",
     },
@@ -223,7 +223,7 @@ _DEFAULT_PRESETS: Dict[str, Dict[str, str]] = {
             "elongated pointed elven ears; no horns; no antlers; no head protrusions; "
             "tendrils alive; tail-blade raised; solo; legs complete; no human reflections"
         ),
-        "negative": "romance, couple, kiss, " + ANTI_DUP_NEG + ", " + ANATOMY_NEG + ", " + SHAPE_NEG,
+        "negative": "romance, couple, kiss, " + ANTI_DUP_NEG + ", " + ANATOMY_NEG + ", " + SHAPE_NEG + ", " + HORN_NEG,
         "style": "cinematic backlight, smoky atmosphere",
     },
     "Nerith • Batalha": {
@@ -232,11 +232,10 @@ _DEFAULT_PRESETS: Dict[str, Dict[str, str]] = {
             "elongated pointed elven ears; no horns; no antlers; no head protrusions; "
             "tendrils reacting; tail-blade extended; solo; legs complete; no human reflections"
         ),
-        "negative": "romance, kiss, couple, " + ANTI_DUP_NEG + ", " + ANATOMY_NEG + ", " + SHAPE_NEG,
+        "negative": "romance, kiss, couple, " + ANTI_DUP_NEG + ", " + ANATOMY_NEG + ", " + SHAPE_NEG + ", " + HORN_NEG,
         "style": "dynamic action, low-angle shot",
     },
 }
-
 
 def _preset_store() -> Dict[str, Dict[str, str]]:
     return st.session_state.setdefault("nerith_comic_user_presets", {})
@@ -266,8 +265,9 @@ def build_prompt_from_preset(
     force_solo: bool = True,
     legs_visible: bool = True,
     anti_mirror: bool = True,
-    tail_base_visible: bool = True,              # <<< novo
-    proportions_profile: str = "Balanceado",     # <<< novo
+    tail_base_visible: bool = True,
+    proportions_profile: str = "Balanceado",
+    pose_safe: bool = True,
 ) -> str:
     """Constrói prompt final com guarda NSFW, anatomia, cauda correta e proporções coesas."""
     guard = "" if nsfw_on else "sfw, no explicit nudity, no genitals, implied tension only,"
@@ -276,30 +276,32 @@ def build_prompt_from_preset(
     neg = (preset.get("negative", "") or "").strip()
     sty = (preset.get("style", "") or "").strip()
 
-    # Perfil anatômico anterior (seu)
+    # Perfis
     shape_txt = SHAPE_PROFILES.get(anatomy_profile, SHAPE_PROFILES["Atlética (padrão)"])
-    # Perfil de proporções novo (harmonia geral)
-    prop_txt = PROPORTION_PROFILES.get(proportions_profile, PROPORTION_PROFILES["Balanceado"])
+    prop_txt  = PROPORTION_PROFILES.get(proportions_profile, PROPORTION_PROFILES["Balanceado"])
 
-    extras_pos = [shape_txt, prop_txt]
+    extras_pos: List[str] = [shape_txt, prop_txt]
+    if pose_safe:
+        extras_pos.append(POSE_POS)
     if force_solo:
-        extras_pos.append("solo, one female subject, centered composition")
-        extras_pos.append("single curved blade tail clearly distinct from legs")
+        extras_pos.append(SOLO_POS)
+    if legs_visible:
+        extras_pos.append(LEGS_FULL_POS)
+    if anti_mirror:
+        extras_pos.append(NO_HUMAN_REFLECTIONS_POS)
     if tail_base_visible:
         extras_pos.append(TAIL_BASE_POS)
-    if legs_visible:
-        extras_pos.append("full-length legs visible down to the feet, natural proportions")
-    if anti_mirror:
-        extras_pos.append("wet ground reflects neon lights only, no human reflections")
+    # Reforço único da cauda como cauda (não membro)
+    extras_pos.append("exactly one tail-blade; clearly a tail; not a limb; not genital")
 
-    # Negativos consolidados (inclui cauda e desproporções)
-    neg_all = ", ".join([n for n in [neg, SHAPE_NEG, ANTI_DUP_NEG, ANATOMY_NEG, TAIL_NEG, HORN_NEG, DISPROPORTION_NEG] if n])
+    # Negativos consolidados
+    neg_all = ", ".join([n for n in [neg, SHAPE_NEG, ANTI_DUP_NEG, ANATOMY_NEG, TAIL_NEG, HORN_NEG, DISPROPORTION_NEG, POSE_NEG] if n])
 
     parts = [
         guard,
         pos,
         " ".join(extras_pos),
-        f"style: {sty}" if sty else "",
+        (f"style: {sty}" if sty else ""),
         f"Scene: {scene_desc}",
         f"NEGATIVE: ({neg_all})",
     ]
@@ -318,14 +320,18 @@ def render_comic_button(
     ui=None,
     key_prefix: str = "",
 ) -> None:
+
     ui = ui or st
     key_prefix = (key_prefix or "nerith_comics").replace(" ", "_")
 
     try:
+        # --------------------------------------------------
         ui.markdown(f"### {title}")
         ui.caption("• bloco de quadrinhos carregado")
 
-        # Modelo
+        # --------------------------------------------------
+        # Seleção de modelo
+        # --------------------------------------------------
         prov_key = ui.selectbox(
             "Modelo",
             options=list(PROVIDERS.keys()),
@@ -336,7 +342,9 @@ def render_comic_button(
         model_name = cfg.get("model", model_name)
         size = cfg.get("size", size)
 
-        # Preset
+        # --------------------------------------------------
+        # Seleção / edição de preset
+        # --------------------------------------------------
         all_presets = get_all_presets()
         preset_names = list(all_presets.keys())
         sel_preset = ui.selectbox(
@@ -349,58 +357,85 @@ def render_comic_button(
 
         with ui.expander("✏️ Ajustar preset (opcional)", expanded=False):
             cur["positive"] = ui.text_area(
-                "Positive Prompt", value=cur.get("positive", ""),
-                height=140, key=f"{key_prefix}_preset_pos",
+                "Positive Prompt",
+                value=cur.get("positive", ""),
+                height=140,
+                key=f"{key_prefix}_preset_pos",
             )
             cur["negative"] = ui.text_area(
-                "Negative Prompt", value=cur.get("negative", ""),
-                height=90, key=f"{key_prefix}_preset_neg",
+                "Negative Prompt",
+                value=cur.get("negative", ""),
+                height=90,
+                key=f"{key_prefix}_preset_neg",
             )
             cur["style"] = ui.text_input(
-                "Estilo Extra", value=cur.get("style", ""),
+                "Estilo Extra",
+                value=cur.get("style", ""),
                 key=f"{key_prefix}_preset_style",
             )
-            c1, c2 = ui.columns([3,1])
-            new_name = c1.text_input("Salvar como", value=f"{sel_preset} (meu)",
-                                     key=f"{key_prefix}_preset_newname")
-            if c2.button("💾 Salvar preset", key=f"{key_prefix}_savepreset"):
+
+            col1, col2 = ui.columns([3, 1])
+            new_name = col1.text_input(
+                "Salvar como",
+                value=f"{sel_preset} (meu)",
+                key=f"{key_prefix}_preset_newname",
+            )
+            if col2.button("💾 Salvar preset", key=f"{key_prefix}_savepreset"):
                 save_user_preset(new_name, cur)
                 ui.success(f"Preset salvo: {new_name}")
 
-        # Controles
+        # --------------------------------------------------
+        # Controles de cena
+        # --------------------------------------------------
         A, B = ui.columns([3, 1])
-        nsfw_on = A.toggle("NSFW liberado", value=False, key=f"{key_prefix}_nsfw_toggle")
-        gen = B.button("Gerar quadrinho", use_container_width=True, key=f"{key_prefix}_gen_btn")
-
+        nsfw_on = A.toggle(
+            "NSFW liberado",
+            value=False,
+            key=f"{key_prefix}_nsfw_toggle"
+        )
+        gen = B.button(
+            "Gerar quadrinho",
+            use_container_width=True,
+            key=f"{key_prefix}_gen_btn"
+        )
         col_solo, col_legs, col_mirror = ui.columns(3)
-        force_solo  = col_solo.checkbox("Forçar solo", value=True,  key=f"{key_prefix}_solo")
+        force_solo = col_solo.checkbox("Forçar solo", value=True,  key=f"{key_prefix}_solo")
         legs_visible = col_legs.checkbox("Pernas completas", value=True, key=f"{key_prefix}_legs")
         anti_mirror = col_mirror.checkbox("Sem reflexo humano", value=True, key=f"{key_prefix}_mirror")
 
-        col_tail, col_prop = ui.columns([1,2])
+        col_tail, col_prop = ui.columns([1, 2])
         tail_base_visible = col_tail.checkbox("Base da cauda visível", value=True, key=f"{key_prefix}_tailbase")
         proportions_profile = col_prop.selectbox(
             "Equilíbrio corporal", options=list(PROPORTION_PROFILES.keys()),
             index=0, key=f"{key_prefix}_prop_profile",
         )
 
+        pose_safe = ui.checkbox("Pose segura (anti-torção)", value=True, key=f"{key_prefix}_pose_safe")
+
         anatomy_profile = ui.selectbox(
-            "Perfil anatômico", options=list(SHAPE_PROFILES.keys()),
-            index=0, key=f"{key_prefix}_shape_profile",
+            "Perfil anatômico",
+            options=list(SHAPE_PROFILES.keys()),
+            index=0,
+            key=f"{key_prefix}_shape_profile",
         )
 
         if not gen:
             return
 
-        # Cena textual (sanitizada)
+        # --------------------------------------------------
+        # Cena textual
+        # --------------------------------------------------
         try:
             _ = get_history_docs_fn()
         except Exception:
             pass
+
         raw_scene = scene_text_provider() or "Nerith em posição de combate, noite, chuva, neon."
         scene_desc = _sanitize_scene(raw_scene, limit=220)
 
-        # Prompt base
+        # --------------------------------------------------
+        # Prompt final
+        # --------------------------------------------------
         prompt = build_prompt_from_preset(
             cur, scene_desc, nsfw_on,
             anatomy_profile=anatomy_profile,
@@ -409,15 +444,18 @@ def render_comic_button(
             anti_mirror=anti_mirror,
             tail_base_visible=tail_base_visible,
             proportions_profile=proportions_profile,
+            pose_safe=pose_safe,
         )
 
-        # 🔒 Compactação obrigatória ANTES da chamada
+        # 🔒 Compactação obrigatória
         prompt, reduced = _fit_to_limit(prompt, MAX_PROMPT_LEN)
         if reduced:
             ui.warning("⚠️ Prompt acima do limite — compactado automaticamente.")
         ui.caption(f"Tamanho FINAL do prompt: {len(prompt)}/{MAX_PROMPT_LEN} chars")
 
-        # size -> width/height
+        # --------------------------------------------------
+        # Converter size
+        # --------------------------------------------------
         if isinstance(size, str) and "x" in size.lower():
             parts = size.lower().split("x", 1)
             width, height = int(parts[0].strip()), int(parts[1].strip())
@@ -426,7 +464,9 @@ def render_comic_button(
         else:
             width = height = 1024
 
-        # Geração
+        # --------------------------------------------------
+        # Gerar imagem
+        # --------------------------------------------------
         client = _hf_client()
         with st.spinner("Gerando painel…"):
             img = client.text_to_image(
@@ -436,19 +476,26 @@ def render_comic_button(
                 height=height,
             )
 
+        # compat: pode vir bytes em algumas versões
         if not isinstance(img, Image.Image):
             try:
                 img = Image.open(io.BytesIO(img))
             except Exception:
                 raise RuntimeError("Falha ao decodificar imagem retornada pela API.")
 
+        # --------------------------------------------------
+        # Exibir & baixar
+        # --------------------------------------------------
         ui.image(img, caption="Painel em estilo HQ", use_column_width=True)
-        buf = io.BytesIO(); img.save(buf, "PNG")
-        ui.download_button("⬇️ Baixar PNG", data=buf.getvalue(),
-                           file_name="nerith_quadrinho.png", mime="image/png",
-                           key=f"{key_prefix}_dl_btn")
+        buf = io.BytesIO()
+        img.save(buf, "PNG")
+        ui.download_button(
+            "⬇️ Baixar PNG",
+            data=buf.getvalue(),
+            file_name="nerith_quadrinho.png",
+            mime="image/png",
+            key=f"{key_prefix}_dl_btn",
+        )
 
     except Exception as e:
         ui.error(f"Quadrinhos: {e}")
-
-
