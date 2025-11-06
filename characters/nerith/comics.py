@@ -1,6 +1,6 @@
 # characters/nerith/comics.py
 from __future__ import annotations
-import os, io, re
+import os, io
 from typing import Callable, List, Dict, Tuple
 from PIL import Image
 from huggingface_hub import InferenceClient
@@ -25,121 +25,160 @@ PROVIDERS: Dict[str, Dict[str, str]] = {
         "model": "stabilityai/stable-image-ultra",
         "size": "1024x1024",
     },
-
-    # ✅ NOVO MODELO — Flux.1-dev (HuggingFace)
+    # ✅ Hugging Face direto (recomendado p/ qualidade + controle de prompt)
     "HF • FLUX.1-dev": {
         "provider": "huggingface",
         "model": "black-forest-labs/FLUX.1-dev",
         "size": "1024x1024",
     },
-
-    # ✅ OPCIONAL: versão Uncensored via HuggingFace LoRA (se quiser ativar depois)
-    # Isto não gera NSFW por si — apenas segue melhor prompts ousados.
-    # Pode comentar/descomentar a qualquer momento.
+    # ⚠️ Opcional/experimental: alguns endpoints HF podem não suportar LoRA via Inference API.
+    # Se falhar, use local/diffusers. Mantemos aqui para quando o provedor habilitar.
     "HF • FLUX.1-dev (Uncensored LoRA)": {
         "provider": "huggingface",
-        "model": "Heartsync/Flux-NSFW-uncensored",
-        "base":  "black-forest-labs/FLUX.1-dev",
+        "model": "Heartsync/Flux-NSFW-uncensored",   # LoRA repo
+        "base":  "black-forest-labs/FLUX.1-dev",     # informativo
         "size": "1024x1024",
     },
 }
-
 
 # ======================
 # Token / Client
 # ======================
 def _get_hf_token() -> str:
-    tok = (str(st.secrets.get("HUGGINGFACE_API_KEY", "")) or
-           str(st.secrets.get("HF_TOKEN", "")) or
-           os.environ.get("HUGGINGFACE_API_KEY", "") or
-           os.environ.get("HF_TOKEN", ""))
+    tok = (
+        str(st.secrets.get("HUGGINGFACE_API_KEY", "")) or
+        str(st.secrets.get("HF_TOKEN", "")) or
+        os.environ.get("HUGGINGFACE_API_KEY", "") or
+        os.environ.get("HF_TOKEN", "")
+    )
     tok = (tok or "").strip()
     if not tok:
         raise RuntimeError("Defina HUGGINGFACE_API_KEY (ou HF_TOKEN) em st.secrets ou variável de ambiente.")
     return tok
 
-def _hf_client(provider: str) -> InferenceClient:
-    # provider é ignorado para HuggingFace
+def _hf_client(_provider_name: str = "") -> InferenceClient:
+    # O InferenceClient não usa 'provider' explicitamente — o endpoint é inferido pelo modelo.
     return InferenceClient(token=_get_hf_token())
 
 # ======================
-# Utilitários de Prompt
+# Limites / utilitários de prompt
 # ======================
-MAX_PROMPT_LEN = 1900
+MAX_PROMPT_LEN = 1900  # margem segura (endpoint costuma limitar a 2000)
 
 def _squash_spaces(s: str) -> str:
     return " ".join((s or "").split())
 
-def _sanitize_scene(s: str, limit: int = 260) -> str:
-    s = (s or "").replace("*", "").replace("`", " ").replace("\n", " ").replace("\r", " ")
+def _sanitize_scene(s: str, limit: int = 240) -> str:
+    s = (s or "").replace("*", " ").replace("`", " ").replace("\n", " ").replace("\r", " ")
     return _squash_spaces(s)[:limit]
 
-def _fit_to_limit(prompt: str, max_len: int = MAX_PROMPT_LEN) -> tuple[str, bool]:
-    p = _squash_spaces(prompt)
-    if len(p) <= max_len:
-        return p, False
-    # Estratégia de corte simples para manter a função
-    return p[:max_len], True
+def _fit_to_limit(text: str, max_len: int = MAX_PROMPT_LEN) -> Tuple[str, bool]:
+    """Corta de forma segura mantendo intenção."""
+    t = _squash_spaces(text or "")
+    if len(t) <= max_len:
+        return t, False
+    # Estratégia: cortar do fim — mantemos início (descritores principais) e a cena
+    return t[:max_len], True
 
 # ======================
 # Blocos de Prompt (Positivos e Negativos)
 # ======================
-# --- Foco em evitar anomalias e chifres ---
+# — Evitar anomalias e duplicações —
 ANATOMY_NEG = (
-    "bad anatomy, extra limbs, extra legs, missing legs, cropped feet, deformed, malformed, mutated, "
-    "fused fingers, extra fingers, twisted torso, broken spine, dislocated"
+    "bad anatomy, deformed, mutated, malformed, dislocated, broken spine, twisted torso, "
+    "extra limbs, extra fingers, fused fingers, missing fingers, missing legs, cropped feet"
 )
-HORN_NEG = "horns, horn, antlers, antler, head spikes, forehead protrusions, demon horns"
-DUPLICATE_NEG = "two people, two girls, duplicate, twin, second person, extra person, clone, copy"
-
-# --- Descritores para sensualidade implícita (NSFW Sutil) ---
-SENSUAL_POS = (
-    "alluring pose, captivating gaze, soft shadows accentuating curves, luminous skin, "
-    "figure partly obscured by silk sheets, form-fitting clothing, wet look, glistening skin, "
-    "intimate atmosphere, moody lighting, boudoir photography style"
-)
-SENSUAL_NEG = (
-    "fully clothed, non-sensual, clothed, sfw, chaste, modest"
+DUPLICATE_NEG = (
+    "two people, two girls, duplicate, twin, second person, extra person, clone, copy, siamese, overlapping bodies"
 )
 
-# --- Descritores para SFW (Safe for Work) ---
-SFW_POS = "action pose, dynamic stance, heroic, powerful, determined expression"
-SFW_NEG = (
-    "nsfw, alluring, seductive, intimate, boudoir, suggestive, explicit, sensual"
+# — Orelhas SÓ pontudas; sem chifres —
+HORN_NEG = "horns, horn, antlers, head spikes, forehead protrusions, demon horns"
+
+# — Cauda-lâmina (evitar confusão com membro/perna) —
+TAIL_POS = (
+    "a single curved blade-tail with visible base attached at the lower back (sacrum), "
+    "emerging above the gluteal crease, clearly not a limb, not phallic"
 )
+TAIL_NEG = (
+    "phallic tail, penis-like tail, tail shaped like a limb, tail fused to leg, detached tail, floating tail, "
+    "tail intersecting legs, tail clipping body"
+)
+
+# — Pose segura / câmera —
+POSE_POS = (
+    "natural contrapposto, spine neutral, torso twist <= 30 degrees, head turn <= 30 degrees, "
+    "shoulders and hips aligned, relaxed scapula, weight on rear leg, "
+    "three-quarter back view, eye-level to low-angle"
+)
+POSE_NEG = "extreme twist, broken neck, hyperrotation, contortionist pose, scoliosis pose, misaligned hips"
+
+# — Corpo (formas coerentes — seios/quadril/coxa/glúteo) —
+BREAST_POS = (
+    "full firm natural teardrop breasts proportional to athletic frame, smooth upper pole, subtle lower curve"
+)
+TORSO_GLU_POS = (
+    "flat to slightly defined abdomen, narrow waist, wide pelvis, round high-set glutes with clear underglute line"
+)
+THIGHS_POS = "strong thighs with smooth quad curves and natural knee structure"
+SHAPE_NEG = (
+    "balloon breasts, sphere boobs, torpedo breasts, implants sphere, uneven breasts, misaligned nipples, "
+    "collapsed chest, unnatural cleavage, dislocated breast, distorted abdomen, misshapen waist, "
+    "collapsed butt, square butt, exaggerated butt, overinflated thighs, disproportionate thighs, wasp waist"
+)
+
+# — SFW / Sensual —
+SFW_POS  = "dynamic action pose, confident stance, cinematic lighting"
+SFW_NEG  = "explicit, pornographic"
+SENS_POS = "alluring posture, moody soft shadows, wet glossy skin highlights, implicit sensuality"
+SENS_NEG = "text, watermark, signature"
 
 # ===================================================
-# PRESETS
+# PRESETS (originais + do usuário)
 # ===================================================
 _DEFAULT_PRESETS: Dict[str, Dict[str, str]] = {
     "Nerith • Caçadora": {
         "positive": (
-            "high-end comic panel, full-body, bold ink, cel shading, dramatic rimlight, rain and neon; "
-            "female dark-elf from Elysarix; blue-slate skin; metallic silver long hair; green predatory eyes; "
-            "elongated pointed elven ears; silver sensory tendrils active; solo; "
-            "natural contrapposto pose, three-quarter back view"
+            "high-end comic panel, full body, bold ink, cel shading, dramatic rimlight, rain and neon; "
+            "female dark-elf from Elysarix; blue-slate luminous skin; metallic silver long hair; "
+            "predatory green eyes; elongated pointed elven ears (no horns); "
+            "silver sensory tendrils active; solo subject; "
+            f"{TAIL_POS}; {POSE_POS}; {BREAST_POS}; {TORSO_GLU_POS}; {THIGHS_POS}"
         ),
-        "negative": "romance, couple, kiss, soft framing",
+        "negative": ", ".join([DUPLICATE_NEG, TAIL_NEG, POSE_NEG, SHAPE_NEG, HORN_NEG]),
         "style": "gritty noir sci-fi, halftone accents, dynamic angle",
-    },
-    "Nerith • Boudoir (Sensual)": {
-        "positive": (
-            "boudoir photography, intimate setting, soft moody lighting, silk sheets; "
-            "female dark-elf, blue-slate luminous skin, metallic silver long hair, captivating green eyes; "
-            "elongated pointed elven ears; alluring pose on a bed, solo; "
-            "body partly covered, accentuating curves, tasteful, artistic"
-        ),
-        "negative": "cluttered background, harsh lighting, fully clothed",
-        "style": "photorealistic, soft focus, high detail, cinematic grain",
     },
     "Nerith • Dominante": {
         "positive": (
             "three-quarter to full body, bold ink, cel shading, dramatic back rimlight; "
-            "dark-elf; metallic silver long hair; neon green eyes; dominant posture; "
-            "elongated pointed elven ears; tendrils alive; tail-blade raised; solo"
+            "dark-elf; metallic silver long hair; neon green eyes; elongated pointed elven ears (no horns); "
+            "dominant confident posture; silver tendrils alive; tail-blade half raised; solo; "
+            f"{POSE_POS}; {BREAST_POS}; {TORSO_GLU_POS}; {THIGHS_POS}"
         ),
-        "negative": "romance, couple, kiss",
+        "negative": ", ".join([DUPLICATE_NEG, TAIL_NEG, POSE_NEG, SHAPE_NEG, HORN_NEG]),
         "style": "cinematic backlight, smoky atmosphere",
+    },
+    "Nerith • Batalha": {
+        "positive": (
+            "full-body combat stance, explosive motion lines, sparks, debris; "
+            "silver tendrils reacting; tail-blade extended; solo; "
+            "elongated pointed elven ears (no horns); "
+            f"{POSE_POS}; {BREAST_POS}; {TORSO_GLU_POS}; {THIGHS_POS}"
+        ),
+        "negative": ", ".join([DUPLICATE_NEG, TAIL_NEG, POSE_NEG, SHAPE_NEG, HORN_NEG]),
+        "style": "dynamic action, low-angle shot",
+    },
+
+    # ✅ Novo preset oficial otimizado para FLUX.1-dev (mais curto e assertivo)
+    "Nerith • FLUX Dev (HQ curto)": {
+        "positive": (
+            "comic panel, full body, bold ink, cel shading, dramatic rimlight; rainy neon alley; "
+            "female dark-elf, blue-slate skin, metallic silver long hair, green eyes; "
+            "long pointed elven ears (no horns); solo; "
+            f"{TAIL_POS}; {POSE_POS}; {BREAST_POS}; {TORSO_GLU_POS}; {THIGHS_POS}"
+        ),
+        "negative": ", ".join([DUPLICATE_NEG, TAIL_NEG, POSE_NEG, SHAPE_NEG, HORN_NEG]),
+        "style": "noir sci-fi, halftone, dynamic angle",
     },
 }
 
@@ -153,7 +192,8 @@ def get_all_presets() -> Dict[str, Dict[str, str]]:
 
 def save_user_preset(name: str, data: Dict[str, str]) -> None:
     name = (name or "").strip()
-    if not name: return
+    if not name:
+        return
     store = _preset_store()
     store[name] = {
         "positive": data.get("positive", ""),
@@ -161,42 +201,44 @@ def save_user_preset(name: str, data: Dict[str, str]) -> None:
         "style": data.get("style", ""),
     }
 
-def build_prompt_from_preset(
+# ======================
+# Construtor de Prompt
+# ======================
+def build_prompts_from_preset(
     preset: Dict[str, str],
     scene_desc: str,
     nsfw_on: bool,
-) -> str:
-    """Constrói o prompt final, ajustando para SFW/NSFW com termos sutis."""
-    
-    # Base do preset
-    pos = (preset.get("positive", "") or "").strip()
-    neg = (preset.get("negative", "") or "").strip()
-    sty = (preset.get("style", "") or "").strip()
+) -> Tuple[str, str]:
+    """
+    Retorna (prompt, negative_prompt), já combinando SFW/NSFW e a cena.
+    Mantém os negativos fora do prompt principal para melhor controle.
+    """
+    base_pos = _squash_spaces((preset.get("positive", "") or "").strip())
+    base_neg = _squash_spaces((preset.get("negative", "") or "").strip())
+    sty     = _squash_spaces((preset.get("style", "") or "").strip())
 
-    # Adiciona blocos com base no toggle NSFW
+    # SFW vs Sensual implícito
     if nsfw_on:
-        pos += " " + SENSUAL_POS
-        neg += " " + SENSUAL_NEG
+        style_block = f"{sty} {SENS_POS}".strip()
+        neg_block   = f"{base_neg}, {SENS_NEG}".strip(", ")
     else:
-        pos += " " + SFW_POS
-        neg += " " + SFW_NEG
+        style_block = f"{sty} {SFW_POS}".strip()
+        neg_block   = f"{base_neg}, {SFW_NEG}".strip(", ")
 
-    # Consolida todos os negativos
-    final_neg = ", ".join(filter(None, [
-        neg,
-        ANATOMY_NEG,
-        HORN_NEG,
-        DUPLICATE_NEG,
-    ]))
+    # Monta os prompts concisos
+    prompt = " ".join([
+        base_pos,
+        f"style: {style_block}" if style_block else "",
+        f"Scene: {scene_desc}" if scene_desc else "",
+    ]).strip()
 
-    # Monta o prompt final
-    parts = [
-        _squash_spaces(pos),
-        (f"style: {sty}" if sty else ""),
-        f"Scene: {scene_desc}",
-        f"NEGATIVE: ({_squash_spaces(final_neg)})",
-    ]
-    return " ".join(filter(None, parts))
+    negative_prompt = neg_block
+
+    # Compactação sob limite
+    prompt, _ = _fit_to_limit(prompt, MAX_PROMPT_LEN)
+    negative_prompt, _ = _fit_to_limit(negative_prompt, MAX_PROMPT_LEN)
+
+    return prompt, negative_prompt
 
 # ===================================================
 # UI – Botão Principal
@@ -205,7 +247,7 @@ def render_comic_button(
     get_history_docs_fn: Callable[[], List[Dict]],
     scene_text_provider: Callable[[], str],
     *,
-    model_name: str = "briaai/FIBO",
+    model_name: str = "black-forest-labs/FLUX.1-dev",  # default p/ melhor qualidade
     size: str = "1024x1024",
     title: str = "🎞️ Quadrinho (beta)",
     ui=None,
@@ -217,24 +259,24 @@ def render_comic_button(
 
     try:
         ui.markdown(f"### {title}")
+        ui.caption("• Gerador de painéis em estilo HQ para Nerith")
 
-        # --- Seleção de Modelo ---
+        # Seleção de modelo
         prov_key = ui.selectbox(
             "Modelo",
             options=list(PROVIDERS.keys()),
-            index=0,
-            key=f"{key_prefix}_model_sel"
+            index=list(PROVIDERS.keys()).index("HF • FLUX.1-dev") if "HF • FLUX.1-dev" in PROVIDERS else 0,
+            key=f"{key_prefix}_model_sel",
         )
         cfg = PROVIDERS.get(prov_key, {})
+        provider_name = cfg.get("provider", "huggingface")
         model_name = cfg.get("model", model_name)
-        provider_name = cfg.get("provider", "fal-ai")
         size = cfg.get("size", size)
 
-        # --- Seleção e Edição de Preset ---
+        # Seleção de preset
         all_presets = get_all_presets()
         preset_names = list(all_presets.keys())
-        # Tenta selecionar o preset "Boudoir" por padrão se existir
-        default_idx = preset_names.index("Nerith • Boudoir (Sensual)") if "Nerith • Boudoir (Sensual)" in preset_names else 0
+        default_idx = preset_names.index("Nerith • FLUX Dev (HQ curto)") if "Nerith • FLUX Dev (HQ curto)" in preset_names else 0
         sel_preset = ui.selectbox(
             "Preset de Cena",
             options=preset_names,
@@ -244,59 +286,81 @@ def render_comic_button(
         cur = dict(all_presets.get(sel_preset, {}))
 
         with ui.expander("✏️ Ajustar preset (opcional)", expanded=False):
-            cur["positive"] = ui.text_area("Positive Prompt", value=cur.get("positive", ""), height=140, key=f"{key_prefix}_preset_pos")
+            cur["positive"] = ui.text_area("Positive Prompt", value=cur.get("positive", ""), height=120, key=f"{key_prefix}_preset_pos")
             cur["negative"] = ui.text_area("Negative Prompt", value=cur.get("negative", ""), height=90, key=f"{key_prefix}_preset_neg")
-            cur["style"] = ui.text_input("Estilo Extra", value=cur.get("style", ""), key=f"{key_prefix}_preset_style")
+            cur["style"]    = ui.text_input("Estilo Extra", value=cur.get("style", ""), key=f"{key_prefix}_preset_style")
 
-            col1, col2 = ui.columns([3, 1])
-            new_name = col1.text_input("Salvar como", value=f"{sel_preset} (cópia)", key=f"{key_prefix}_preset_newname")
-            if col2.button("💾 Salvar preset", key=f"{key_prefix}_savepreset"):
+            c1, c2 = ui.columns([3, 1])
+            new_name = c1.text_input("Salvar como", value=f"{sel_preset} (cópia)", key=f"{key_prefix}_preset_newname")
+            if c2.button("💾 Salvar preset", key=f"{key_prefix}_savepreset"):
                 save_user_preset(new_name, cur)
                 ui.success(f"Preset salvo: {new_name}")
                 st.rerun()
 
-        # --- Controles de Geração ---
-        A, B = ui.columns([3, 1])
-        nsfw_on = A.toggle("Liberar Sensualidade (Implícito)", value=False, key=f"{key_prefix}_nsfw_toggle")
-        gen = B.button("Gerar", use_container_width=True, key=f"{key_prefix}_gen_btn")
+        # Controles
+        colA, colB = ui.columns([3, 1])
+        nsfw_on = colA.toggle("Liberar sensualidade implícita", value=False, key=f"{key_prefix}_nsfw_toggle")
+        gen = colB.button("Gerar painel", use_container_width=True, key=f"{key_prefix}_gen_btn")
 
         if not gen:
             return
 
-        # --- Construção do Prompt ---
-        raw_scene = scene_text_provider() or "Nerith em um quarto com iluminação suave."
+        # Cena
+        try:
+            _ = get_history_docs_fn()  # reservado p/ contexto futuro
+        except Exception:
+            pass
+        raw_scene = scene_text_provider() or "Rainy neon alley at night; Nerith pauses, listening; camera at low-angle."
         scene_desc = _sanitize_scene(raw_scene, limit=220)
 
-        prompt = build_prompt_from_preset(cur, scene_desc, nsfw_on)
-        prompt, reduced = _fit_to_limit(prompt, MAX_PROMPT_LEN)
-        if reduced:
-            ui.warning("⚠️ Prompt longo demais, foi compactado.")
-        
-        with ui.expander("Ver prompt final", expanded=False):
-            st.code(prompt, language=None)
+        # Prompts finais
+        prompt, negative_prompt = build_prompts_from_preset(cur, scene_desc, nsfw_on)
 
-        # --- Conversão de Tamanho ---
+        with ui.expander("Ver prompts finais", expanded=False):
+            st.code(prompt)
+            st.code(negative_prompt)
+
+        # Tamanho
+        ui.caption(f"Len(prompt)={len(prompt)} / Len(negative)={len(negative_prompt)} / limite={MAX_PROMPT_LEN}")
+
+        # size -> width/height
         try:
-            width, height = map(int, size.lower().split('x'))
+            width, height = map(int, str(size).lower().split("x"))
         except Exception:
             width, height = 1024, 1024
 
-        # --- Geração da Imagem ---
+        # Geração
         client = _hf_client(provider_name)
         with st.spinner("Gerando painel…"):
-            img_data = client.text_to_image(model=model_name, prompt=prompt, width=width, height=height)
+            img_data = client.text_to_image(
+                model=model_name,
+                prompt=prompt,
+                negative_prompt=negative_prompt,
+                width=width,
+                height=height,
+            )
 
+        # Compat: bytes -> Image
         if isinstance(img_data, Image.Image):
             img = img_data
         else:
             img = Image.open(io.BytesIO(img_data))
 
-        # --- Exibição e Download ---
-        ui.image(img, caption="Painel gerado", use_column_width=True)
-        buf = io.BytesIO()
-        img.save(buf, "PNG")
-        ui.download_button("⬇️ Baixar PNG", data=buf.getvalue(), file_name="nerith_quadrinho.png", mime="image/png", key=f"{key_prefix}_dl_btn")
+        # Exibir / Download
+        ui.image(img, caption="Painel em estilo HQ (Nerith)", use_column_width=True)
+        buf = io.BytesIO(); img.save(buf, "PNG")
+        ui.download_button(
+            "⬇️ Baixar PNG",
+            data=buf.getvalue(),
+            file_name="nerith_quadrinho.png",
+            mime="image/png",
+            key=f"{key_prefix}_dl_btn",
+        )
 
     except Exception as e:
         ui.error(f"Falha na geração de quadrinhos: {e}")
-        st.exception(e)
+        # opcional: log detalhado
+        try:
+            st.exception(e)
+        except Exception:
+            pass
