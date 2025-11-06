@@ -46,18 +46,91 @@ def _hf_client() -> InferenceClient:
     return InferenceClient(token=_get_hf_token())
 
 # ======================
-# Prompt HQ
+# PRESETS de prompt (padrões + do usuário)
 # ======================
-def _build_comic_prompt(scene_desc: str, nsfw_on: bool) -> str:
-    style = (
-        "comic panel, dynamic composition, bold ink outlines, cel shading, halftone texture, "
-        "dramatic lighting, high detail, 1x1 aspect, clean background separation"
-    )
-    guard = "" if nsfw_on else "sfw, tasteful, no explicit nudity, implied intimacy only,"
-    return f"{guard} {style}. Scene: {scene_desc}"
+
+# Presets padrão (imutáveis)
+_DEFAULT_PRESETS: Dict[str, Dict[str, str]] = {
+    "Nerith • Caçadora": {
+        "positive": (
+            "high-end comic panel, full-body shot, bold ink outlines, cel shading, "
+            "dramatic rimlight, wet reflections, gritty detail, dynamic angle, halftone texture, 1x1 aspect; "
+            "female dark-elf warrior from Elysarix; blue-slate luminous skin with faint inner glow; "
+            "metallic silver long hair; predatory green eyes; athletic hourglass body; "
+            "firm medium breasts; wide hips; large round muscular butt; strong thighs; feline posture; "
+            "silver sensory tendrils on arms and neck; retractable curved blade-tail; "
+            "predatory stalking, low lighting, wet ground, neon reflections; tendrils scanning the air"
+        ),
+        "negative": (
+            "no kissing, no near-kiss, no couple pose, no romantic framing, "
+            "no gentle intimacy, avoid romance cinematography"
+        ),
+        "style": "gritty sci-fi noir, rain, reflections, power composition",
+    },
+    "Nerith • Dominante": {
+        "positive": (
+            "high-end comic panel, three-quarter full body, bold ink, cel shading, "
+            "dramatic rimlight; Elysarix dark-elf; blue-slate glowing skin; metallic silver hair; "
+            "green neon eyes; hourglass, hips emphasized; tail-blade half raised; tendrils active; "
+            "dominant sensual posture; intense teasing gaze without romance"
+        ),
+        "negative": (
+            "no kissing, no couple, no soft romance, no coy cheek touching, "
+            "no romantic cinematography"
+        ),
+        "style": "cinematic backlight, smoky atmosphere, halftone accents",
+    },
+    "Nerith • Batalha": {
+        "positive": (
+            "full-body combat stance, explosive motion lines, debris, sparks; "
+            "tail-blade extended; tendrils reacting; muscles flexing; high detail; "
+            "bold inks, cel shading, halftone texture"
+        ),
+        "negative": "no couple, no kiss, no romance",
+        "style": "dynamic action composition, low-angle shot",
+    },
+}
+
+def _preset_store() -> Dict[str, Dict[str, str]]:
+    """Armazena os presets do usuário na sessão."""
+    return st.session_state.setdefault("nerith_comic_user_presets", {})
+
+def get_all_presets() -> Dict[str, Dict[str, str]]:
+    """Mescla padrão + do usuário (preferência para os do usuário se houver nomes iguais)."""
+    merged = dict(_DEFAULT_PRESETS)
+    merged.update(_preset_store())
+    return merged
+
+def save_user_preset(name: str, data: Dict[str, str]) -> None:
+    name = (name or "").strip()
+    if not name:
+        return
+    store = _preset_store()
+    # Mantém apenas campos usados
+    store[name] = {
+        "positive": data.get("positive", ""),
+        "negative": data.get("negative", ""),
+        "style": data.get("style", ""),
+    }
+
+def build_prompt_from_preset(preset: Dict[str, str], scene_desc: str, nsfw_on: bool) -> str:
+    """Constrói o prompt final a partir do preset + cena + guarda NSFW."""
+    guard = "" if nsfw_on else "sfw, no explicit nudity, no genitals visible, implied tension only,"
+    pos = preset.get("positive", "").strip()
+    neg = preset.get("negative", "").strip()
+    sty = preset.get("style", "").strip()
+    parts = [
+        guard,
+        pos,
+        f"style: {sty}" if sty else "",
+        f"Scene: {scene_desc}".strip(),
+        f"NEGATIVE: {neg}" if neg else "",
+    ]
+    return " ".join(p for p in parts if p)
+
 
 # ======================
-# UI principal / chamada
+# UI principal / chamada (com presets + edição + NSFW + sem balões)
 # ======================
 def render_comic_button(
     get_history_docs_fn: Callable[[], List[Dict]],
@@ -67,8 +140,8 @@ def render_comic_button(
     model_name: str = "briaai/FIBO",
     size: str = "1024x1024",
     title: str = "🎞️ Quadrinho (beta)",
-    ui=None,                  # container (ex.: a sidebar)
-    key_prefix: str = "",     # prefixo para keys únicas
+    ui=None,
+    key_prefix: str = "",
 ) -> None:
     ui = ui or st
     key_prefix = (key_prefix or "nerith_comics").replace(" ", "_")
@@ -77,55 +150,107 @@ def render_comic_button(
         ui.markdown(f"### {title}")
         ui.caption("• bloco de quadrinhos carregado")
 
-        # Seleção de modelo/provedor (mantido para extensibilidade futura)
+        # ------------------------------
+        # ✅ Seleção de MODELO
+        # ------------------------------
         prov_key = ui.selectbox(
-            "Modelo para quadrinho",
+            "Modelo",
             options=list(PROVIDERS.keys()),
             index=0,
             key=f"{key_prefix}_model_sel"
         )
         cfg = PROVIDERS.get(prov_key, {})
-        # 'provider' fica reservado; InferenceClient padrão usa apenas token
-        # Mantemos 'model_name' e 'size' conforme preset escolhido
         model_name = cfg.get("model", model_name)
         size = cfg.get("size", size)
 
-        colA, colB = ui.columns([3, 1])
-        nsfw_on = colA.toggle(
+        # ------------------------------
+        # ✅ Seleção de PRESET + Editor
+        # ------------------------------
+        all_presets = get_all_presets()
+        preset_names = list(all_presets.keys())
+
+        sel_preset = ui.selectbox(
+            "Preset de Cena",
+            options=preset_names,
+            index=0,
+            key=f"{key_prefix}_preset_sel",
+        )
+        cur = dict(all_presets.get(sel_preset, {}))  # cópia editável
+
+        with ui.expander("✏️ Ajustar preset (opcional)", expanded=False):
+            cur["positive"] = ui.text_area(
+                "Positive Prompt",
+                value=cur.get("positive", ""),
+                height=140,
+                key=f"{key_prefix}_preset_pos",
+            )
+            cur["negative"] = ui.text_area(
+                "Negative Prompt",
+                value=cur.get("negative", ""),
+                height=90,
+                key=f"{key_prefix}_preset_neg",
+            )
+            cur["style"] = ui.text_input(
+                "Estilo Extra",
+                value=cur.get("style", ""),
+                key=f"{key_prefix}_preset_style",
+            )
+
+            cols_ps = ui.columns([3, 1])
+            new_name = cols_ps[0].text_input(
+                "Salvar como",
+                value=f"{sel_preset} (meu)",
+                key=f"{key_prefix}_preset_newname",
+            )
+            if cols_ps[1].button("💾 Salvar preset", key=f"{key_prefix}_savepreset"):
+                save_user_preset(new_name, cur)
+                ui.success(f"Preset salvo: {new_name}")
+
+        # ------------------------------
+        # ✅ NSFW + Botão Gerar
+        # ------------------------------
+        cA, cB = ui.columns([3, 1])
+        nsfw_on = cA.toggle(
             "NSFW liberado",
             value=False,
             key=f"{key_prefix}_nsfw_toggle"
         )
-        gen = colB.button(
+        gen = cB.button(
             "Gerar quadrinho",
             key=f"{key_prefix}_gen_btn",
             use_container_width=True
         )
-
         if not gen:
             return
 
-        # 1) contexto
+        # ------------------------------
+        # ✅ Cena textual
+        # ------------------------------
         try:
-            _ = get_history_docs_fn() or []  # mantido caso queira usar no futuro
+            _ = get_history_docs_fn()
         except Exception:
             pass
-        scene_desc = scene_text_provider() or "night alley, rain, two figures confronting each other."
+        scene_desc = scene_text_provider() or "Nerith em posição de combate, noite, chuva, neon."
 
-        # 2) geração base (Hugging Face Inference) — sem balões
-        client = _hf_client()
-        prompt = _build_comic_prompt(scene_desc, nsfw_on)
+        # ------------------------------
+        # ✅ Construção de prompt via PRESET
+        # ------------------------------
+        prompt = build_prompt_from_preset(cur, scene_desc, nsfw_on)
 
-        # parse de size -> width/height
+        # ------------------------------
+        # ✅ Conversão de 'size'
+        # ------------------------------
         if isinstance(size, str) and "x" in size.lower():
-            w_str, h_str = size.lower().split("x", 1)
-            width, height = int(w_str), int(h_str)
-        elif isinstance(size, (tuple, list)) and len(size) == 2:
-            width, height = int(size[0]), int(size[1])
+            parts = size.lower().split("x")
+            width, height = int(parts[0]), int(parts[1])
         else:
             width = height = 1024
 
-        # spinner deve ser sempre st.spinner (sidebar não tem .spinner)
+        # ------------------------------
+        # ✅ Geração (sem balões)
+        # ------------------------------
+        client = _hf_client()
+
         with st.spinner("Gerando painel…"):
             img = client.text_to_image(
                 model=model_name,
@@ -134,15 +259,18 @@ def render_comic_button(
                 height=height,
             )
 
-        # compat: se a lib retornar bytes em versões antigas
+        # compat: se vier bytes
         if not isinstance(img, Image.Image):
             try:
                 img = Image.open(io.BytesIO(img))
             except Exception:
                 raise RuntimeError("Falha ao decodificar imagem retornada pela API.")
 
-        # 3) exibir & baixar (imagem limpa, sem balões)
+        # ------------------------------
+        # ✅ Exibir e Download
+        # ------------------------------
         ui.image(img, caption="Painel em estilo HQ", use_column_width=True)
+
         buf = io.BytesIO()
         img.save(buf, format="PNG")
         ui.download_button(
@@ -150,7 +278,7 @@ def render_comic_button(
             data=buf.getvalue(),
             file_name="nerith_quadrinho.png",
             mime="image/png",
-            key=f"{key_prefix}_dl_btn"
+            key=f"{key_prefix}_dl_btn",
         )
 
     except Exception as e:
