@@ -1,8 +1,8 @@
 # characters/nerith/comics.py
 from __future__ import annotations
-import os, io
+import os, io, re
 from typing import Callable, List, Dict, Tuple
-from PIL import Image
+from PIL import Image, ImageDraw, ImageFont
 from huggingface_hub import InferenceClient
 import streamlit as st
 
@@ -40,9 +40,9 @@ def _get_hf_token() -> str:
         raise RuntimeError("Defina HUGGINGFACE_API_KEY (ou HF_TOKEN) em st.secrets ou variável de ambiente.")
     return tok
 
-def _hf_client() -> InferenceClient:
-    # huggingface_hub.InferenceClient usa 'token'
-    return InferenceClient(token=_get_hf_token())
+def _hf_client(provider: str) -> InferenceClient:
+    # huggingface_hub.InferenceClient usa 'token' e pode receber 'provider'
+    return InferenceClient(provider=provider, token=_get_hf_token())
 
 # ======================
 # Limites / utilitários de prompt
@@ -340,6 +340,7 @@ def render_comic_button(
         )
         cfg = PROVIDERS.get(prov_key, {})
         model_name = cfg.get("model", model_name)
+        provider_name = cfg.get("provider", "fal-ai")
         size = cfg.get("size", size)
 
         # --------------------------------------------------
@@ -383,6 +384,7 @@ def render_comic_button(
             if col2.button("💾 Salvar preset", key=f"{key_prefix}_savepreset"):
                 save_user_preset(new_name, cur)
                 ui.success(f"Preset salvo: {new_name}")
+                st.rerun()
 
         # --------------------------------------------------
         # Controles de cena
@@ -467,9 +469,9 @@ def render_comic_button(
         # --------------------------------------------------
         # Gerar imagem
         # --------------------------------------------------
-        client = _hf_client()
+        client = _hf_client(provider_name)
         with st.spinner("Gerando painel…"):
-            img = client.text_to_image(
+            img_data = client.text_to_image(
                 model=model_name,
                 prompt=prompt,
                 width=width,
@@ -477,9 +479,11 @@ def render_comic_button(
             )
 
         # compat: pode vir bytes em algumas versões
-        if not isinstance(img, Image.Image):
+        if isinstance(img_data, Image.Image):
+            img = img_data
+        else:
             try:
-                img = Image.open(io.BytesIO(img))
+                img = Image.open(io.BytesIO(img_data))
             except Exception:
                 raise RuntimeError("Falha ao decodificar imagem retornada pela API.")
 
@@ -499,3 +503,5 @@ def render_comic_button(
 
     except Exception as e:
         ui.error(f"Quadrinhos: {e}")
+        st.exception(e)
+
