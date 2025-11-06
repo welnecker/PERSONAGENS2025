@@ -309,18 +309,14 @@ def render_comic_button(
     ui=None,
     key_prefix: str = "",
 ) -> None:
-
     ui = ui or st
     key_prefix = (key_prefix or "nerith_comics").replace(" ", "_")
 
     try:
-        # --------------------------------------------------
         ui.markdown(f"### {title}")
         ui.caption("• bloco de quadrinhos carregado")
 
-        # --------------------------------------------------
-        # Seleção de modelo
-        # --------------------------------------------------
+        # Modelo
         prov_key = ui.selectbox(
             "Modelo",
             options=list(PROVIDERS.keys()),
@@ -331,9 +327,7 @@ def render_comic_button(
         model_name = cfg.get("model", model_name)
         size = cfg.get("size", size)
 
-        # --------------------------------------------------
-        # Seleção / edição de preset
-        # --------------------------------------------------
+        # Preset
         all_presets = get_all_presets()
         preset_names = list(all_presets.keys())
         sel_preset = ui.selectbox(
@@ -346,118 +340,58 @@ def render_comic_button(
 
         with ui.expander("✏️ Ajustar preset (opcional)", expanded=False):
             cur["positive"] = ui.text_area(
-                "Positive Prompt",
-                value=cur.get("positive", ""),
-                height=140,
-                key=f"{key_prefix}_preset_pos",
+                "Positive Prompt", value=cur.get("positive", ""),
+                height=140, key=f"{key_prefix}_preset_pos",
             )
             cur["negative"] = ui.text_area(
-                "Negative Prompt",
-                value=cur.get("negative", ""),
-                height=90,
-                key=f"{key_prefix}_preset_neg",
+                "Negative Prompt", value=cur.get("negative", ""),
+                height=90, key=f"{key_prefix}_preset_neg",
             )
             cur["style"] = ui.text_input(
-                "Estilo Extra",
-                value=cur.get("style", ""),
+                "Estilo Extra", value=cur.get("style", ""),
                 key=f"{key_prefix}_preset_style",
             )
-
-            col1, col2 = ui.columns([3, 1])
-            new_name = col1.text_input(
-                "Salvar como",
-                value=f"{sel_preset} (meu)",
-                key=f"{key_prefix}_preset_newname",
-            )
-            if col2.button("💾 Salvar preset", key=f"{key_prefix}_savepreset"):
+            c1, c2 = ui.columns([3,1])
+            new_name = c1.text_input("Salvar como", value=f"{sel_preset} (meu)",
+                                     key=f"{key_prefix}_preset_newname")
+            if c2.button("💾 Salvar preset", key=f"{key_prefix}_savepreset"):
                 save_user_preset(new_name, cur)
                 ui.success(f"Preset salvo: {new_name}")
 
-        
-
-        # --------------------------------------------------
-        # Controles de cena
-        # --------------------------------------------------
+        # Controles
         A, B = ui.columns([3, 1])
-        nsfw_on = A.toggle(
-            "NSFW liberado",
-            value=False,
-            key=f"{key_prefix}_nsfw_toggle"
-        )
-        gen = B.button(
-            "Gerar quadrinho",
-            use_container_width=True,
-            key=f"{key_prefix}_gen_btn"
-        )
+        nsfw_on = A.toggle("NSFW liberado", value=False, key=f"{key_prefix}_nsfw_toggle")
+        gen = B.button("Gerar quadrinho", use_container_width=True, key=f"{key_prefix}_gen_btn")
 
         col_solo, col_legs, col_mirror = ui.columns(3)
-        force_solo = col_solo.checkbox(
-            "Forçar solo",
-            value=True,
-            key=f"{key_prefix}_solo"
-        )
-        legs_visible = col_legs.checkbox(
-            "Pernas completas",
-            value=True,
-            key=f"{key_prefix}_legs"
-        )
-        anti_mirror = col_mirror.checkbox(
-            "Sem reflexo humano",
-            value=True,
-            key=f"{key_prefix}_mirror"
-        )
+        force_solo  = col_solo.checkbox("Forçar solo", value=True,  key=f"{key_prefix}_solo")
+        legs_visible = col_legs.checkbox("Pernas completas", value=True, key=f"{key_prefix}_legs")
+        anti_mirror = col_mirror.checkbox("Sem reflexo humano", value=True, key=f"{key_prefix}_mirror")
 
-        # ✅ Checkbox adicional (ITEM 4)
-        pose_safe = ui.checkbox(
-            "Pose segura (anti-torção)",
-            value=True,
-            key=f"{key_prefix}_pose_safe"
-        )
-
-                # Controles adicionais
-        col_tail, col_prop = ui.columns([1, 2])
-        
-        tail_base_visible = col_tail.checkbox(
-            "Base da cauda visível",
-            value=True,
-            key=f"{key_prefix}_tailbase",
-        )
-        
+        col_tail, col_prop = ui.columns([1,2])
+        tail_base_visible = col_tail.checkbox("Base da cauda visível", value=True, key=f"{key_prefix}_tailbase")
         proportions_profile = col_prop.selectbox(
-            "Equilíbrio corporal",
-            options=list(PROPORTION_PROFILES.keys()),
-            index=0,
-            key=f"{key_prefix}_prop_profile",
+            "Equilíbrio corporal", options=list(PROPORTION_PROFILES.keys()),
+            index=0, key=f"{key_prefix}_prop_profile",
         )
 
-
-        # --------------------------------------------------
-        # Perfil anatômico
-        # --------------------------------------------------
         anatomy_profile = ui.selectbox(
-            "Perfil anatômico",
-            options=list(SHAPE_PROFILES.keys()),
-            index=0,
-            key=f"{key_prefix}_shape_profile",
+            "Perfil anatômico", options=list(SHAPE_PROFILES.keys()),
+            index=0, key=f"{key_prefix}_shape_profile",
         )
 
         if not gen:
             return
 
-        # --------------------------------------------------
-        # Cena textual
-        # --------------------------------------------------
+        # Cena textual (sanitizada)
         try:
             _ = get_history_docs_fn()
         except Exception:
             pass
+        raw_scene = scene_text_provider() or "Nerith em posição de combate, noite, chuva, neon."
+        scene_desc = _sanitize_scene(raw_scene, limit=220)
 
-        scene_desc = scene_text_provider() or \
-            "Nerith em posição de combate, noite, chuva, neon."
-
-        # --------------------------------------------------
-        # Prompt final (AGORA COM pose_safe)
-        # --------------------------------------------------
+        # Prompt base
         prompt = build_prompt_from_preset(
             cur, scene_desc, nsfw_on,
             anatomy_profile=anatomy_profile,
@@ -467,18 +401,14 @@ def render_comic_button(
             tail_base_visible=tail_base_visible,
             proportions_profile=proportions_profile,
         )
-        
-        # ✅ Ajustar ao limite de 1900 chars
+
+        # 🔒 Compactação obrigatória ANTES da chamada
         prompt, reduced = _fit_to_limit(prompt, MAX_PROMPT_LEN)
         if reduced:
-            ui.warning("⚠️ O prompt estava acima do limite e foi compactado automaticamente.")
-        
-        ui.caption(f"Tamanho final do prompt: {len(prompt)}/{MAX_PROMPT_LEN} chars")
+            ui.warning("⚠️ Prompt acima do limite — compactado automaticamente.")
+        ui.caption(f"Tamanho FINAL do prompt: {len(prompt)}/{MAX_PROMPT_LEN} chars")
 
-
-        # --------------------------------------------------
-        # Converter size
-        # --------------------------------------------------
+        # size -> width/height
         if isinstance(size, str) and "x" in size.lower():
             parts = size.lower().split("x", 1)
             width, height = int(parts[0].strip()), int(parts[1].strip())
@@ -487,11 +417,8 @@ def render_comic_button(
         else:
             width = height = 1024
 
-        # --------------------------------------------------
-        # Gerar imagem
-        # --------------------------------------------------
+        # Geração
         client = _hf_client()
-
         with st.spinner("Gerando painel…"):
             img = client.text_to_image(
                 model=model_name,
@@ -506,21 +433,13 @@ def render_comic_button(
             except Exception:
                 raise RuntimeError("Falha ao decodificar imagem retornada pela API.")
 
-        # --------------------------------------------------
-        # Exibir & baixar
-        # --------------------------------------------------
         ui.image(img, caption="Painel em estilo HQ", use_column_width=True)
-
-        buf = io.BytesIO()
-        img.save(buf, "PNG")
-        ui.download_button(
-            "⬇️ Baixar PNG",
-            data=buf.getvalue(),
-            file_name="nerith_quadrinho.png",
-            mime="image/png",
-            key=f"{key_prefix}_dl_btn",
-        )
+        buf = io.BytesIO(); img.save(buf, "PNG")
+        ui.download_button("⬇️ Baixar PNG", data=buf.getvalue(),
+                           file_name="nerith_quadrinho.png", mime="image/png",
+                           key=f"{key_prefix}_dl_btn")
 
     except Exception as e:
         ui.error(f"Quadrinhos: {e}")
+
 
