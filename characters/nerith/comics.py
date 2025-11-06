@@ -160,6 +160,38 @@ SHAPE_PROFILES = {
     ),
 }
 
+# --- Cauda: base e desambiguação ---
+TAIL_BASE_POS = (
+    "tail-blade with visible base attached at the sacrum/lower-back, "
+    "emerging between the glutes (above the gluteal crease), clearly not a limb or phallic shape"
+)
+TAIL_NEG = (
+    "phallic tail, penis-like tail, tail shaped like a limb, tail fused to leg, detached tail, floating tail"
+)
+
+# --- Proporções corporais coesas (perfis) ---
+PROPORTION_PROFILES = {
+    "Balanceado": (
+        "balanced hourglass, harmonious hip-to-waist ratio, natural taper at the waist, "
+        "glutes round and lifted but proportional to pelvis, thighs strong but proportional to glutes"
+    ),
+    "Curvas firmes": (
+        "pronounced hourglass with firm high-set glutes, slightly fuller thighs, "
+        "tight waist with natural abdomen definition, overall cohesive silhouette"
+    ),
+    "Atleta seca": (
+        "lean athletic hourglass, moderate glute volume, defined thighs and obliques, "
+        "natural waist without extreme taper"
+    ),
+}
+
+# --- Evitar exageros dissonantes ---
+DISPROPORTION_NEG = (
+    "extreme hourglass, wasp waist, overly wide hips, exaggerated butt, cartoonish glutes, "
+    "overinflated thighs, disproportionate thighs, unnatural pelvis tilt"
+)
+
+
 # ===================================================
 # PRESETS (originais + do usuário)
 # ===================================================
@@ -225,28 +257,34 @@ def build_prompt_from_preset(
     force_solo: bool = True,
     legs_visible: bool = True,
     anti_mirror: bool = True,
-    pose_safe: bool = True,          # <<< NOVO
-) -> str:    """Constrói o prompt final com guarda NSFW, perfil anatômico e auto-fit ≤ 1900 chars."""
+    tail_base_visible: bool = True,              # <<< novo
+    proportions_profile: str = "Balanceado",     # <<< novo
+) -> str:
+    """Constrói prompt final com guarda NSFW, anatomia, cauda correta e proporções coesas."""
     guard = "" if nsfw_on else "sfw, no explicit nudity, no genitals, implied tension only,"
+
     pos = (preset.get("positive", "") or "").strip()
     neg = (preset.get("negative", "") or "").strip()
     sty = (preset.get("style", "") or "").strip()
-    scene_desc = _sanitize_scene(scene_desc)
 
+    # Perfil anatômico anterior (seu)
     shape_txt = SHAPE_PROFILES.get(anatomy_profile, SHAPE_PROFILES["Atlética (padrão)"])
+    # Perfil de proporções novo (harmonia geral)
+    prop_txt = PROPORTION_PROFILES.get(proportions_profile, PROPORTION_PROFILES["Balanceado"])
 
-        extras_pos = [shape_txt, TAIL_DISAMBIG_POS]
-    if pose_safe:
-        extras_pos.append(POSE_POS)   # <<< injeta pose segura
+    extras_pos = [shape_txt, prop_txt]
     if force_solo:
-        extras_pos.append(SOLO_POS)
+        extras_pos.append("solo, one female subject, centered composition")
+        extras_pos.append("single curved blade tail clearly distinct from legs")
+    if tail_base_visible:
+        extras_pos.append(TAIL_BASE_POS)
     if legs_visible:
-        extras_pos.append(LEGS_FULL_POS)
+        extras_pos.append("full-length legs visible down to the feet, natural proportions")
     if anti_mirror:
-        extras_pos.append(NO_HUMAN_REFLECTIONS_POS)
+        extras_pos.append("wet ground reflects neon lights only, no human reflections")
 
-    neg_all = ", ".join([n for n in [neg, SHAPE_NEG, ANTI_DUP_NEG, ANATOMY_NEG, (POSE_NEG if pose_safe else "")] if n])
-
+    # Negativos consolidados (inclui cauda e desproporções)
+    neg_all = ", ".join([n for n in [neg, SHAPE_NEG, ANTI_DUP_NEG, ANATOMY_NEG, TAIL_NEG, DISPROPORTION_NEG] if n])
 
     parts = [
         guard,
@@ -254,12 +292,9 @@ def build_prompt_from_preset(
         " ".join(extras_pos),
         f"style: {sty}" if sty else "",
         f"Scene: {scene_desc}",
-        f"NEGATIVE: ({_squash_spaces(neg_all)})" if neg_all else f"NEGATIVE: ({_SHORT_NEG})",
+        f"NEGATIVE: ({neg_all})",
     ]
-    prompt = " ".join(p for p in parts if p)
-
-    prompt, _ = _fit_to_limit(prompt, MAX_PROMPT_LEN)
-    return prompt
+    return " ".join(p for p in parts if p)
 
 # ===================================================
 # UI – botão principal (sem balões)
@@ -338,6 +373,8 @@ def render_comic_button(
                 save_user_preset(new_name, cur)
                 ui.success(f"Preset salvo: {new_name}")
 
+        
+
         # --------------------------------------------------
         # Controles de cena
         # --------------------------------------------------
@@ -377,6 +414,23 @@ def render_comic_button(
             key=f"{key_prefix}_pose_safe"
         )
 
+                # Controles adicionais
+        col_tail, col_prop = ui.columns([1, 2])
+        
+        tail_base_visible = col_tail.checkbox(
+            "Base da cauda visível",
+            value=True,
+            key=f"{key_prefix}_tailbase",
+        )
+        
+        proportions_profile = col_prop.selectbox(
+            "Equilíbrio corporal",
+            options=list(PROPORTION_PROFILES.keys()),
+            index=0,
+            key=f"{key_prefix}_prop_profile",
+        )
+
+
         # --------------------------------------------------
         # Perfil anatômico
         # --------------------------------------------------
@@ -405,14 +459,13 @@ def render_comic_button(
         # Prompt final (AGORA COM pose_safe)
         # --------------------------------------------------
         prompt = build_prompt_from_preset(
-            cur,
-            scene_desc,
-            nsfw_on,
+            cur, scene_desc, nsfw_on,
             anatomy_profile=anatomy_profile,
             force_solo=force_solo,
             legs_visible=legs_visible,
             anti_mirror=anti_mirror,
-            pose_safe=pose_safe,      # ✅ ITEM 4 AQUI
+            tail_base_visible=tail_base_visible,           # <<< novo
+            proportions_profile=proportions_profile,       # <<< novo
         )
 
         ui.caption(f"Tamanho do prompt: {len(prompt)}/{MAX_PROMPT_LEN} chars")
