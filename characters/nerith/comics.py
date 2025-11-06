@@ -203,6 +203,14 @@ _DEFAULT_PRESETS: Dict[str, Dict[str, str]] = {
             "silver sensory tendrils active; single curved blade tail (not a person); "
             "three-quarter back view, eye-level to low-angle; natural contrapposto; "
             "solo, one subject; full-length legs to the feet; wet ground neon reflections (no human reflections)"
+            "elongated pointed elven ears, no horns, no antlers, no head protrusions, long silver elven ears with pointed tips; "
+
+                HORN_NEG = (
+            "horns, horn, antlers, antler, head spikes, forehead spikes, "
+            "bony protrusions on head, skull horns, demon horns, curved horns"
+        )
+    
+
         ),
 
         "negative": (
@@ -284,7 +292,7 @@ def build_prompt_from_preset(
         extras_pos.append("wet ground reflects neon lights only, no human reflections")
 
     # Negativos consolidados (inclui cauda e desproporções)
-    neg_all = ", ".join([n for n in [neg, SHAPE_NEG, ANTI_DUP_NEG, ANATOMY_NEG, TAIL_NEG, DISPROPORTION_NEG] if n])
+    neg_all = ", ".join([n for n in [neg, SHAPE_NEG, ANTI_DUP_NEG, ANATOMY_NEG, TAIL_NEG, HORN_NEG, DISPROPORTION_NEG] if n])
 
     parts = [
         guard,
