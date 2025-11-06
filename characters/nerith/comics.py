@@ -191,6 +191,12 @@ DISPROPORTION_NEG = (
     "overinflated thighs, disproportionate thighs, unnatural pelvis tilt"
 )
 
+# --- Remover chifres / protrusões da cabeça (Nerith não tem) ---
+HORN_NEG = (
+    "horns, horn, antlers, antler, head spikes, forehead spikes, "
+    "bony protrusions on head, skull horns, demon horns, curved horns"
+)
+
 
 # ===================================================
 # PRESETS (originais + do usuário)
