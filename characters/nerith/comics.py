@@ -200,8 +200,12 @@ def render_comic_button(
         # 2) geração base (usa provider + modelo selecionados)
         client = _hf_client(provider)
         prompt = _build_comic_prompt(scene_desc, nsfw_on)
-        with ui.spinner("Gerando painel…"):
-            # sua camada de cliente aceita (prompt, model=..., size=...)
+
+        # ❌ antes (quebra quando ui = st.sidebar):
+        # with ui.spinner("Gerando painel…"):
+
+        # ✅ depois (sempre funciona):
+        with st.spinner("Gerando painel…"):
             img = client.text_to_image(prompt, model=model_name, size=size)
 
         # 3) balões
