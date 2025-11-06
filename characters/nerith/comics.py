@@ -43,6 +43,26 @@ def _hf_client() -> InferenceClient:
     return InferenceClient(token=_get_hf_token())
 
 
+# ======================
+# Regras auxiliares (anti-duplicação / anatomia)
+# ======================
+ANTI_DUP_NEG = (
+    "two people, two girls, duplicate, twin, second person, extra person, extra body, "
+    "second figure, clone, copy, siamese, conjoined, overlapping bodies, mirrored person, "
+    "reflected person, multiple women"
+)
+ANATOMY_NEG = (
+    "extra limbs, extra legs, missing legs, cut off legs, cropped feet, deformed legs, "
+    "bad anatomy, malformed hands, fused fingers, extra fingers"
+)
+TAIL_DISAMBIG_POS = (
+    "single curved blade tail emerging from the lower back, clearly one tail, not a person, not a leg"
+)
+NO_HUMAN_REFLECTIONS_POS = "wet ground reflects neon lights only, no human reflections"
+SOLO_POS = "solo, single female character, one subject, centered composition"
+LEGS_FULL_POS = "full-length legs visible down to the feet, natural proportions"
+
+
 # ===================================================
 # ✅ PRESETS (originais + do usuário)
 # ===================================================
@@ -51,35 +71,35 @@ _DEFAULT_PRESETS: Dict[str, Dict[str, str]] = {
     "Nerith • Caçadora": {
         "positive": (
             "high-end comic panel, full-body shot, bold ink outlines, cel shading, "
-            "dramatic rimlight, wet reflections, gritty detail, dynamic angle, halftone texture, "
+            "dramatic rimlight, gritty detail, dynamic angle, halftone texture, rain and neon; "
             "female dark-elf warrior from Elysarix; blue-slate luminous skin; metallic silver long hair; "
             "predatory green eyes; athletic hourglass body; strong thighs; wide hips; firm shaped glutes; "
-            "silver sensory tendrils moving; retractable curved blade-tail; stalking posture; neon rain"
+            "silver sensory tendrils moving; " + TAIL_DISAMBIG_POS + "; " + SOLO_POS + "; "
+            + LEGS_FULL_POS + "; " + NO_HUMAN_REFLECTIONS_POS
         ),
         "negative": (
-            "kiss, couple, romance, soft framing, gentle embrace, coy look, "
-            "fisheye, warped anatomy, distorted proportions"
+            "kiss, couple, romance, soft framing, gentle embrace, coy look, fisheye, warped anatomy, distorted proportions, "
+            + ANTI_DUP_NEG + ", " + ANATOMY_NEG
         ),
         "style": "gritty noir sci-fi, rain, neon reflections",
     },
-
     "Nerith • Dominante": {
         "positive": (
-            "three-quarter full body, bold ink, cel shading, dramatic rimlight; "
+            "three-quarter to full body, bold ink, cel shading, dramatic rimlight; "
             "Elysarix dark elf; glowing blue-slate skin; silver hair; green neon eyes; "
-            "hips emphasized, dominant posture, teasing gaze; tendrils active; tail-blade raised"
+            "hips emphasized; dominant posture; teasing gaze; tendrils active; tail-blade raised; "
+            + SOLO_POS + "; " + LEGS_FULL_POS + "; " + NO_HUMAN_REFLECTIONS_POS + "; " + TAIL_DISAMBIG_POS
         ),
-        "negative": "romance, couple, kiss, soft cinematography",
+        "negative": "romance, couple, kiss, soft cinematography, " + ANTI_DUP_NEG + ", " + ANATOMY_NEG,
         "style": "cinematic backlight, halftone accents",
     },
-
     "Nerith • Batalha": {
         "positive": (
-            "full-body combat stance, explosive motion, debris, sparks; "
-            "tail-blade extended; tendrils reacting; muscles defined; "
-            "bold inks, cel shading, halftone texture"
+            "full-body combat stance, explosive motion, debris, sparks; tail-blade extended; tendrils reacting; "
+            "muscles defined; bold inks, cel shading, halftone texture; " + SOLO_POS + "; "
+            + LEGS_FULL_POS + "; " + NO_HUMAN_REFLECTIONS_POS + "; " + TAIL_DISAMBIG_POS
         ),
-        "negative": "romance, kiss, couple",
+        "negative": "romance, kiss, couple, " + ANTI_DUP_NEG + ", " + ANATOMY_NEG,
         "style": "dynamic action shot, low-angle",
     },
 }
@@ -103,18 +123,40 @@ def save_user_preset(name: str, data: Dict[str, str]) -> None:
         "style": data.get("style", ""),
     }
 
-def build_prompt_from_preset(preset: Dict[str, str], scene_desc: str, nsfw_on: bool) -> str:
+def build_prompt_from_preset(
+    preset: Dict[str, str],
+    scene_desc: str,
+    nsfw_on: bool,
+    *,
+    force_solo: bool = True,
+    legs_visible: bool = True,
+    anti_mirror: bool = True,
+) -> str:
+    """Constrói o prompt final com reforços anti-duplicação/anatomia."""
     guard = "" if nsfw_on else "sfw, no explicit nudity, no genitals, implied tension only,"
     pos = preset.get("positive", "").strip()
     neg = preset.get("negative", "").strip()
     sty = preset.get("style", "").strip()
 
+    extras_pos = []
+    if force_solo:
+        extras_pos.append(SOLO_POS)
+        extras_pos.append(TAIL_DISAMBIG_POS)
+    if legs_visible:
+        extras_pos.append(LEGS_FULL_POS)
+    if anti_mirror:
+        extras_pos.append(NO_HUMAN_REFLECTIONS_POS)
+
+    # Negativos globais
+    neg_all = ", ".join([s for s in [neg, ANTI_DUP_NEG, ANATOMY_NEG] if s])
+
     parts = [
         guard,
         pos,
+        " ".join(extras_pos),
         f"style: {sty}" if sty else "",
         f"Scene: {scene_desc}",
-        f"NEGATIVE: ({neg})" if neg else "",
+        f"NEGATIVE: ({neg_all})",
     ]
     return " ".join(p for p in parts if p)
 
@@ -213,6 +255,12 @@ def render_comic_button(
             key=f"{key_prefix}_gen_btn"
         )
 
+        col_solo, col_legs, col_mirror = ui.columns(3)
+        force_solo = col_solo.checkbox("Forçar solo", value=True, key=f"{key_prefix}_solo")
+        legs_visible = col_legs.checkbox("Pernas completas", value=True, key=f"{key_prefix}_legs")
+        anti_mirror = col_mirror.checkbox("Sem reflexo humano", value=True, key=f"{key_prefix}_mirror")
+
+
         if not gen:
             return
 
@@ -229,7 +277,13 @@ def render_comic_button(
         # ------------------------------
         # Prompt final pelo PRESET
         # ------------------------------
-        prompt = build_prompt_from_preset(cur, scene_desc, nsfw_on)
+        prompt = build_prompt_from_preset(
+        cur, scene_desc, nsfw_on,
+        force_solo=force_solo,
+        legs_visible=legs_visible,
+        anti_mirror=anti_mirror,
+    )
+
 
         # ------------------------------
         # Converter SIZE
