@@ -1,4 +1,3 @@
-# characters/nerith/comics.py
 from __future__ import annotations
 import os, io
 from typing import Callable, List, Dict
@@ -10,7 +9,6 @@ import streamlit as st
 # Config / Providers
 # ======================
 PROVIDERS: Dict[str, Dict[str, str]] = {
-    # chave -> {provider, model, size}
     "FAL • BRIA FIBO": {
         "provider": "fal-ai",
         "model": "briaai/FIBO",
@@ -29,7 +27,7 @@ PROVIDERS: Dict[str, Dict[str, str]] = {
 }
 
 # ======================
-# Tokens / Client
+# Token / Client
 # ======================
 def _get_hf_token() -> str:
     tok = (str(st.secrets.get("HUGGINGFACE_API_KEY", "")) or
@@ -38,65 +36,58 @@ def _get_hf_token() -> str:
            os.environ.get("HF_TOKEN", ""))
     tok = (tok or "").strip()
     if not tok:
-        raise RuntimeError("Defina HUGGINGFACE_API_KEY (ou HF_TOKEN) em st.secrets ou variável de ambiente.")
+        raise RuntimeError("Defina HUGGINGFACE_API_KEY em st.secrets.")
     return tok
 
 def _hf_client() -> InferenceClient:
-    # huggingface_hub.InferenceClient usa 'token'
     return InferenceClient(token=_get_hf_token())
 
-# ======================
-# PRESETS de prompt (padrões + do usuário)
-# ======================
 
-# Presets padrão (imutáveis)
+# ===================================================
+# ✅ PRESETS (originais + do usuário)
+# ===================================================
+
 _DEFAULT_PRESETS: Dict[str, Dict[str, str]] = {
     "Nerith • Caçadora": {
         "positive": (
             "high-end comic panel, full-body shot, bold ink outlines, cel shading, "
-            "dramatic rimlight, wet reflections, gritty detail, dynamic angle, halftone texture, 1x1 aspect; "
-            "female dark-elf warrior from Elysarix; blue-slate luminous skin with faint inner glow; "
-            "metallic silver long hair; predatory green eyes; athletic hourglass body; "
-            "firm medium breasts; wide hips; large round muscular butt; strong thighs; feline posture; "
-            "silver sensory tendrils on arms and neck; retractable curved blade-tail; "
-            "predatory stalking, low lighting, wet ground, neon reflections; tendrils scanning the air"
+            "dramatic rimlight, wet reflections, gritty detail, dynamic angle, halftone texture, "
+            "female dark-elf warrior from Elysarix; blue-slate luminous skin; metallic silver long hair; "
+            "predatory green eyes; athletic hourglass body; strong thighs; wide hips; firm shaped glutes; "
+            "silver sensory tendrils moving; retractable curved blade-tail; stalking posture; neon rain"
         ),
         "negative": (
-            "no kissing, no near-kiss, no couple pose, no romantic framing, "
-            "no gentle intimacy, avoid romance cinematography"
+            "kiss, couple, romance, soft framing, gentle embrace, coy look, "
+            "fisheye, warped anatomy, distorted proportions"
         ),
-        "style": "gritty sci-fi noir, rain, reflections, power composition",
+        "style": "gritty noir sci-fi, rain, neon reflections",
     },
+
     "Nerith • Dominante": {
         "positive": (
-            "high-end comic panel, three-quarter full body, bold ink, cel shading, "
-            "dramatic rimlight; Elysarix dark-elf; blue-slate glowing skin; metallic silver hair; "
-            "green neon eyes; hourglass, hips emphasized; tail-blade half raised; tendrils active; "
-            "dominant sensual posture; intense teasing gaze without romance"
+            "three-quarter full body, bold ink, cel shading, dramatic rimlight; "
+            "Elysarix dark elf; glowing blue-slate skin; silver hair; green neon eyes; "
+            "hips emphasized, dominant posture, teasing gaze; tendrils active; tail-blade raised"
         ),
-        "negative": (
-            "no kissing, no couple, no soft romance, no coy cheek touching, "
-            "no romantic cinematography"
-        ),
-        "style": "cinematic backlight, smoky atmosphere, halftone accents",
+        "negative": "romance, couple, kiss, soft cinematography",
+        "style": "cinematic backlight, halftone accents",
     },
+
     "Nerith • Batalha": {
         "positive": (
-            "full-body combat stance, explosive motion lines, debris, sparks; "
-            "tail-blade extended; tendrils reacting; muscles flexing; high detail; "
+            "full-body combat stance, explosive motion, debris, sparks; "
+            "tail-blade extended; tendrils reacting; muscles defined; "
             "bold inks, cel shading, halftone texture"
         ),
-        "negative": "no couple, no kiss, no romance",
-        "style": "dynamic action composition, low-angle shot",
+        "negative": "romance, kiss, couple",
+        "style": "dynamic action shot, low-angle",
     },
 }
 
 def _preset_store() -> Dict[str, Dict[str, str]]:
-    """Armazena os presets do usuário na sessão."""
     return st.session_state.setdefault("nerith_comic_user_presets", {})
 
 def get_all_presets() -> Dict[str, Dict[str, str]]:
-    """Mescla padrão + do usuário (preferência para os do usuário se houver nomes iguais)."""
     merged = dict(_DEFAULT_PRESETS)
     merged.update(_preset_store())
     return merged
@@ -106,7 +97,6 @@ def save_user_preset(name: str, data: Dict[str, str]) -> None:
     if not name:
         return
     store = _preset_store()
-    # Mantém apenas campos usados
     store[name] = {
         "positive": data.get("positive", ""),
         "negative": data.get("negative", ""),
@@ -114,29 +104,28 @@ def save_user_preset(name: str, data: Dict[str, str]) -> None:
     }
 
 def build_prompt_from_preset(preset: Dict[str, str], scene_desc: str, nsfw_on: bool) -> str:
-    """Constrói o prompt final a partir do preset + cena + guarda NSFW."""
-    guard = "" if nsfw_on else "sfw, no explicit nudity, no genitals visible, implied tension only,"
+    guard = "" if nsfw_on else "sfw, no explicit nudity, no genitals, implied tension only,"
     pos = preset.get("positive", "").strip()
     neg = preset.get("negative", "").strip()
     sty = preset.get("style", "").strip()
+
     parts = [
         guard,
         pos,
         f"style: {sty}" if sty else "",
-        f"Scene: {scene_desc}".strip(),
-        f"NEGATIVE: {neg}" if neg else "",
+        f"Scene: {scene_desc}",
+        f"NEGATIVE: ({neg})" if neg else "",
     ]
     return " ".join(p for p in parts if p)
 
 
-# ======================
-# UI principal / chamada (com presets + edição + NSFW + sem balões)
-# ======================
+# ===================================================
+# ✅ UI – botão principal (sem balões)
+# ===================================================
 def render_comic_button(
     get_history_docs_fn: Callable[[], List[Dict]],
     scene_text_provider: Callable[[], str],
     *,
-    # defaults serão substituídos pela seleção do usuário
     model_name: str = "briaai/FIBO",
     size: str = "1024x1024",
     title: str = "🎞️ Quadrinho (beta)",
@@ -147,11 +136,12 @@ def render_comic_button(
     key_prefix = (key_prefix or "nerith_comics").replace(" ", "_")
 
     try:
+        # ------------------------------
         ui.markdown(f"### {title}")
         ui.caption("• bloco de quadrinhos carregado")
 
         # ------------------------------
-        # ✅ Seleção de MODELO
+        # SELEÇÃO DE MODELO
         # ------------------------------
         prov_key = ui.selectbox(
             "Modelo",
@@ -164,19 +154,21 @@ def render_comic_button(
         size = cfg.get("size", size)
 
         # ------------------------------
-        # ✅ Seleção de PRESET + Editor
+        # SELEÇÃO DE PRESET
         # ------------------------------
         all_presets = get_all_presets()
         preset_names = list(all_presets.keys())
-
         sel_preset = ui.selectbox(
             "Preset de Cena",
             options=preset_names,
             index=0,
             key=f"{key_prefix}_preset_sel",
         )
-        cur = dict(all_presets.get(sel_preset, {}))  # cópia editável
+        cur = dict(all_presets.get(sel_preset, {}))
 
+        # ====================================================
+        # Editor do preset
+        # ====================================================
         with ui.expander("✏️ Ajustar preset (opcional)", expanded=False):
             cur["positive"] = ui.text_area(
                 "Positive Prompt",
@@ -196,58 +188,60 @@ def render_comic_button(
                 key=f"{key_prefix}_preset_style",
             )
 
-            cols_ps = ui.columns([3, 1])
-            new_name = cols_ps[0].text_input(
+            col1, col2 = ui.columns([3, 1])
+            new_name = col1.text_input(
                 "Salvar como",
                 value=f"{sel_preset} (meu)",
                 key=f"{key_prefix}_preset_newname",
             )
-            if cols_ps[1].button("💾 Salvar preset", key=f"{key_prefix}_savepreset"):
+            if col2.button("💾 Salvar preset", key=f"{key_prefix}_savepreset"):
                 save_user_preset(new_name, cur)
                 ui.success(f"Preset salvo: {new_name}")
 
         # ------------------------------
-        # ✅ NSFW + Botão Gerar
+        # NSFW + Botão
         # ------------------------------
-        cA, cB = ui.columns([3, 1])
-        nsfw_on = cA.toggle(
+        A, B = ui.columns([3, 1])
+        nsfw_on = A.toggle(
             "NSFW liberado",
             value=False,
             key=f"{key_prefix}_nsfw_toggle"
         )
-        gen = cB.button(
+        gen = B.button(
             "Gerar quadrinho",
-            key=f"{key_prefix}_gen_btn",
-            use_container_width=True
+            use_container_width=True,
+            key=f"{key_prefix}_gen_btn"
         )
+
         if not gen:
             return
 
         # ------------------------------
-        # ✅ Cena textual
+        # Cena textual
         # ------------------------------
         try:
             _ = get_history_docs_fn()
-        except Exception:
+        except:
             pass
+
         scene_desc = scene_text_provider() or "Nerith em posição de combate, noite, chuva, neon."
 
         # ------------------------------
-        # ✅ Construção de prompt via PRESET
+        # Prompt final pelo PRESET
         # ------------------------------
         prompt = build_prompt_from_preset(cur, scene_desc, nsfw_on)
 
         # ------------------------------
-        # ✅ Conversão de 'size'
+        # Converter SIZE
         # ------------------------------
-        if isinstance(size, str) and "x" in size.lower():
-            parts = size.lower().split("x")
-            width, height = int(parts[0]), int(parts[1])
+        if isinstance(size, str) and "x" in size:
+            w, h = size.lower().split("x")
+            width, height = int(w), int(h)
         else:
             width = height = 1024
 
         # ------------------------------
-        # ✅ Geração (sem balões)
+        # Gerar imagem
         # ------------------------------
         client = _hf_client()
 
@@ -259,20 +253,17 @@ def render_comic_button(
                 height=height,
             )
 
-        # compat: se vier bytes
+        # Se vier bytes
         if not isinstance(img, Image.Image):
-            try:
-                img = Image.open(io.BytesIO(img))
-            except Exception:
-                raise RuntimeError("Falha ao decodificar imagem retornada pela API.")
+            img = Image.open(io.BytesIO(img))
 
         # ------------------------------
-        # ✅ Exibir e Download
+        # Exibir e Baixar
         # ------------------------------
         ui.image(img, caption="Painel em estilo HQ", use_column_width=True)
 
         buf = io.BytesIO()
-        img.save(buf, format="PNG")
+        img.save(buf, "PNG")
         ui.download_button(
             "⬇️ Baixar PNG",
             data=buf.getvalue(),
