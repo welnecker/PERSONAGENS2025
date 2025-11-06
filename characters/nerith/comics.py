@@ -6,22 +6,34 @@ from PIL import Image
 from huggingface_hub import InferenceClient
 import streamlit as st
 
+# Tenta importar o wrapper do USO. Se falhar, o modelo não estará disponível.
+try:
+    from .uso_wrapper import generate_image as uso_generate_image
+    USO_AVAILABLE = True
+except ImportError:
+    USO_AVAILABLE = False
+    print("AVISO: Wrapper do USO não encontrado. O modelo 'USO (FLUX.1-dev)' não estará disponível.")
+
 # ======================
 # Config / Providers
 # ======================
 PROVIDERS: Dict[str, Dict[str, str]] = {
+    "USO (FLUX.1-dev)": {
+        "provider": "uso_local", # Identificador customizado
+        "model": "bytedance-research/USO",
+        "size": "1024x1024",
+    },
     "HF • FLUX.1-dev": {
         "provider": "huggingface",
         "model": "black-forest-labs/FLUX.1-dev",
         "size": "1024x1024",
     },
-    "FAL • Stable Image Ultra": {
-        "provider": "fal-ai",
-        "model": "stabilityai/stable-image-ultra",
-        "size": "1024x1024",
-    },
 }
+# Remove o USO se o wrapper não estiver disponível
+if not USO_AVAILABLE:
+    PROVIDERS.pop("USO (FLUX.1-dev)", None)
 
+# ... (o restante do código, como _get_hf_token, blocos de prompt, etc., permanece o mesmo) ...
 # ======================
 # Token / Client
 # ======================
@@ -60,13 +72,7 @@ BODY_NEG = "balloon breasts, sphere boobs, torpedo breasts, implants, uneven bre
 SFW_NEG = "explicit, pornographic, sexual, nude, naked"
 SENSUAL_POS = "body draped in shadow and light, skin glistening under soft light, form-fitting silk robe partly open, lounging seductively, intimate atmosphere, alluring posture, moody soft shadows, implicit sensuality"
 SENSUAL_NEG = "fully clothed, modest, chaste, asexual, text, watermark, signature"
-
-# ✅ Bloco de prompt ultra-detalhado para a cauda
-TAIL_POS = (
-    "a single biomechanical blade-tail made of gleaming silver metal with razor-sharp edges and subtle blue energy lines, "
-    "anatomically fused to her lower back, originating from the sacrum and coccyx, "
-    "emerging seamlessly from her skin above the gluteal crease, clearly not a furry or fleshy tail"
-)
+TAIL_POS = ("a single biomechanical blade-tail made of gleaming silver metal with razor-sharp edges and subtle blue energy lines, anatomically fused to her lower back, originating from the sacrum and coccyx, emerging seamlessly from her skin above the gluteal crease, clearly not a furry or fleshy tail")
 TAIL_NEG = "phallic tail, penis-like tail, tail shaped like a limb, tail fused to leg, detached tail, floating tail, furry tail, fleshy tail, animal tail"
 
 # ===================================================
@@ -86,7 +92,6 @@ _DEFAULT_PRESETS: Dict[str, Dict[str, str]] = {
 }
 
 def get_all_presets() -> Dict[str, Dict[str, str]]:
-    # Em uma implementação futura, poderia carregar presets do usuário aqui
     return _DEFAULT_PRESETS
 
 # ======================
@@ -97,7 +102,6 @@ def build_prompts(preset: Dict[str, str], nsfw_on: bool, framing: str, angle: st
     base_neg = preset.get("negative", "")
     style = preset.get("style", "")
 
-    # Adiciona o prompt da cauda apenas se não for um close-up no rosto
     final_pos = base_pos
     if "close-up" not in framing:
         final_pos += f", {TAIL_POS}"
@@ -137,6 +141,7 @@ def render_comic_button(
         c1, c2 = ui.columns(2)
         prov_key = c1.selectbox("Modelo", options=list(PROVIDERS.keys()), index=0, key=f"{key_prefix}_model_sel")
         cfg = PROVIDERS.get(prov_key, {})
+        provider_name = cfg.get("provider")
         model_name, size = cfg.get("model"), cfg.get("size")
 
         all_presets = get_all_presets()
@@ -146,27 +151,24 @@ def render_comic_button(
         ui.markdown("---")
         ui.subheader("Direção da Cena")
 
+        # Adiciona campo para imagem de estilo se USO for selecionado
+        style_image_path = ""
+        if provider_name == "uso_local":
+            style_image_path = ui.text_input("Caminho da Imagem de Estilo (Opcional)", placeholder="Ex: assets/style.webp", key=f"{key_prefix}_style_img")
+            ui.info("O modelo USO pode usar uma imagem para guiar o estilo da arte. Deixe em branco para usar apenas o prompt.")
+
         col_framing, col_angle = ui.columns(2)
-        framing_map = {
-            "Retrato (close-up)": "close-up shot, portrait",
-            "Meio corpo (medium shot)": "medium shot, cowboy shot, waist up",
-            "Corpo inteiro (full body)": "full body shot, full length",
-        }
+        framing_map = {"Retrato (close-up)": "close-up shot, portrait", "Meio corpo (medium shot)": "medium shot, cowboy shot, waist up", "Corpo inteiro (full body)": "full body shot, full length"}
         framing_choice = col_framing.selectbox("Enquadramento", options=list(framing_map.keys()), index=2, key=f"{key_prefix}_framing")
         framing = framing_map[framing_choice]
 
-        angle_map = {
-            "De frente": "front view, facing the viewer",
-            "De lado": "side view, profile shot",
-            "De costas": "from behind, back view",
-            "Três quartos": "three-quarter view",
-        }
+        angle_map = {"De frente": "front view, facing the viewer", "De lado": "side view, profile shot", "De costas": "from behind, back view", "Três quartos": "three-quarter view"}
         angle_choice = col_angle.selectbox("Ângulo", options=list(angle_map.keys()), index=3, key=f"{key_prefix}_angle")
         angle = angle_map[angle_choice]
 
         with ui.expander("Direção de Arte (Opcional)"):
-            pose_details = st.text_input("Detalhes da Pose e Ação", placeholder="Ex: olhando por cima do ombro, segurando uma taça...", key=f"{key_prefix}_pose_details")
-            env_details = st.text_input("Detalhes do Ambiente", placeholder="Ex: em uma varanda com vista para a cidade cyberpunk...", key=f"{key_prefix}_env_details")
+            pose_details = st.text_input("Detalhes da Pose e Ação", placeholder="Ex: olhando por cima do ombro...", key=f"{key_prefix}_pose_details")
+            env_details = st.text_input("Detalhes do Ambiente", placeholder="Ex: em uma varanda com vista para a cidade...", key=f"{key_prefix}_env_details")
 
         ui.markdown("---")
         nsfw_on = ui.toggle("Liberar sensualidade implícita", value=True, key=f"{key_prefix}_nsfw_toggle")
@@ -182,13 +184,27 @@ def render_comic_button(
             st.markdown("**Prompt Negativo:**"); st.code(negative_prompt, language=None)
 
         width, height = map(int, str(size).lower().split("x"))
-        client = _hf_client()
-        with st.spinner("Gerando painel…"):
-            img_data = client.text_to_image(model=model_name, prompt=prompt, negative_prompt=negative_prompt, width=width, height=height)
+        
+        with st.spinner("Gerando painel com o modelo selecionado…"):
+            if provider_name == "uso_local":
+                # --- Geração com USO ---
+                if not style_image_path:
+                    st.error("Para o modelo USO, por favor, forneça um caminho para a imagem de estilo.")
+                    return
+                img = uso_generate_image(
+                    prompt=prompt,
+                    negative_prompt=negative_prompt,
+                    style_image_path=style_image_path,
+                    width=width,
+                    height=height
+                )
+            else:
+                # --- Geração com Hugging Face InferenceClient ---
+                client = _hf_client()
+                img_data = client.text_to_image(model=model_name, prompt=prompt, negative_prompt=negative_prompt, width=width, height=height)
+                img = Image.open(io.BytesIO(img_data)) if isinstance(img_data, bytes) else img_data
 
-        img = Image.open(io.BytesIO(img_data)) if isinstance(img_data, bytes) else img_data
-
-        ui.image(img, caption=f"Painel gerado com o preset '{sel_preset}'", use_column_width=True)
+        ui.image(img, caption=f"Painel gerado com '{prov_key}'", use_column_width=True)
         buf = io.BytesIO(); buf.name = 'nerith_quadrinho.png'
         img.save(buf, "PNG")
         ui.download_button("⬇️ Baixar PNG", data=buf, file_name=buf.name, mime="image/png", key=f"{key_prefix}_dl_btn")
