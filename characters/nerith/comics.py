@@ -152,45 +152,65 @@ def render_comic_button(
     model_name: str = "briaai/FIBO",
     size: str = "1024x1024",
     title: str = "🎞️ Quadrinho (beta)",
-    ui=None,  # <<< NOVO: container/placeholder onde renderizar
+    ui=None,                  # container (ex.: a sidebar)
+    key_prefix: str = "",     # <<< NOVO: prefixo para keys únicas
 ) -> None:
-    ui = ui or st  # fallback para st se nenhum container for passado
+    ui = ui or st
+    key_prefix = (key_prefix or "nerith_comics").replace(" ", "_")
 
-    ui.markdown(f"### {title}")
-    colA, colB = ui.columns([3, 1])
-    nsfw_on = colA.toggle("NSFW liberado", value=False)
-    gen = colB.button("Gerar quadrinho", use_container_width=True)
-
-    # Mostra a seção mesmo sem clicar
-    # (se só quer renderizar depois do clique, mantenha como está)
-    if not gen:
-        return
-
-    # 1) contexto
     try:
-        docs = get_history_docs_fn() or []
-    except:
-        docs = []
-    scene_desc = scene_text_provider() or "night alley, rain, two figures confronting each other."
+        ui.markdown(f"### {title}")
+        # marcador de debug visível (pode remover depois)
+        ui.caption("• bloco de quadrinhos carregado")
 
-    # 2) geração base
-    client = _hf_client()
-    prompt = _build_comic_prompt(scene_desc, nsfw_on)
-    with st.spinner("Gerando painel…"):  # spinner global funciona ok
-        img = client.text_to_image(prompt, model=model_name, size=size)
+        colA, colB = ui.columns([3, 1])
+        nsfw_on = colA.toggle(
+            "NSFW liberado",
+            value=False,
+            key=f"{key_prefix}_nsfw_toggle"
+        )
+        gen = colB.button(
+            "Gerar quadrinho",
+            key=f"{key_prefix}_gen_btn",
+            use_container_width=True
+        )
 
-    # 3) balões
-    w, h = img.size
-    pad = 24
-    b1 = (pad, pad, int(w*0.55), int(h*0.33))
-    b2 = (int(w*0.45), int(h*0.62), w-pad, h-pad)
-    balloons = _pick_dialog_balloons(docs)
-    _draw_speech_balloon(img, balloons[0], b1, tail_anchor=("left","bottom"))
-    if len(balloons) > 1:
-        _draw_speech_balloon(img, balloons[1], b2, tail_anchor=("right","top"))
+        if not gen:
+            return
 
-    # 4) exibir & baixar
-    ui.image(img, caption="Painel em estilo HQ")
-    buf = io.BytesIO(); img.save(buf, format="PNG")
-    ui.download_button("⬇️ Baixar PNG", data=buf.getvalue(),
-                       file_name="nerith_quadrinho.png", mime="image/png")
+        # 1) contexto
+        try:
+            docs = get_history_docs_fn() or []
+        except Exception:
+            docs = []
+        scene_desc = scene_text_provider() or "night alley, rain, two figures confronting each other."
+
+        # 2) geração base
+        client = _hf_client()
+        prompt = _build_comic_prompt(scene_desc, nsfw_on)
+        with st.spinner("Gerando painel…"):  # spinner global ok
+            img = client.text_to_image(prompt, model=model_name, size=size)
+
+        # 3) balões
+        w, h = img.size
+        pad = 24
+        b1 = (pad, pad, int(w*0.55), int(h*0.33))
+        b2 = (int(w*0.45), int(h*0.62), w-pad, h-pad)
+        balloons = _pick_dialog_balloons(docs)
+        _draw_speech_balloon(img, balloons[0], b1, tail_anchor=("left","bottom"))
+        if len(balloons) > 1:
+            _draw_speech_balloon(img, balloons[1], b2, tail_anchor=("right","top"))
+
+        # 4) exibir & baixar
+        ui.image(img, caption="Painel em estilo HQ", use_column_width=True)
+        buf = io.BytesIO(); img.save(buf, format="PNG")
+        ui.download_button(
+            "⬇️ Baixar PNG",
+            data=buf.getvalue(),
+            file_name="nerith_quadrinho.png",
+            mime="image/png",
+            key=f"{key_prefix}_dl_btn"
+        )
+
+    except Exception as e:
+        ui.error(f"Quadrinhos: {e}")
