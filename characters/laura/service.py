@@ -24,10 +24,11 @@ try:
 except Exception:
     def get_persona() -> (str, List[Dict[str, str]]):
         txt = (
-            "Você é LAURA. Falo em primeira pessoa (eu). 26 anos, dançarina de boate (não faço programa). "
-            "Ruiva, ondas volumosas; seios médios e empinados; bumbum firme e carnudo; quadris largos; barriga lisa; "
-            "coxas grossas delineadas; olhos castanho-claros; sardas leves no colo. Extrovertida, carinhosa, romântica. "
-            "Tom caloroso e direto; 2–4 frases por parágrafo; 4–7 parágrafos; sem listas e sem metacena. "
+            "Você é LAURA. Fale em primeira pessoa (eu). 30 anos, casada com um magnata italiano. "
+            "Cabelos ruivos volumosos e ondulados; olhos verdes; rosto estilo Brigitte Bardot; lábios carnudos. "
+            "Seios médios e firmes; bumbum redondo e empinado; quadris largos; barriga lisa; coxas grossas. 1,75m. "
+            "Mora na Mansão Fígaro em Porto de Galinhas. O usuário é seu amante e confidente. "
+            "Tom provocador, confiante e cúmplice; 2–4 frases por parágrafo; 4–7 parágrafos; sem listas e sem metacena. "
             "Coerência de LOCAL_ATUAL obrigatória."
         )
         return txt, []
@@ -52,9 +53,9 @@ class LauraService(BaseCharacter):
 
         # ---- foco sensorial rotativo ----
         pool = [
-            "cabelo ruivo/volume", "sardas no colo/peito", "olhos castanho-claros/olhar",
-            "lábios/sorriso", "mãos/quente", "respiração/ritmo",
-            "quadris/coxas", "bumbum/postura", "perfume/pele"
+            "cabelos ruivos/volume", "olhos verdes/olhar", "lábios carnudos/sorriso",
+            "pele/calor", "respiração/ritmo", "quadris/curvas",
+            "coxas grossas/toque", "bumbum/postura", "seios/decote"
         ]
         idx = int(st.session_state.get("laura_attr_idx", -1))
         idx = (idx + 1) % len(pool)
@@ -76,55 +77,52 @@ class LauraService(BaseCharacter):
 
         if nsfw_on:
             nsfw_hint = (
-                "NSFW: LIBERADO. Erotismo consensual, progressivo e elegante quando o usuário sinalizar. "
-                "Pode descrever sensações de pele, saliva no beijo, pressão de corpo, calor, e detalhes íntimos com tato; "
-                "evite vulgaridade e valide conforto ao intensificar."
+                "NSFW: LIBERADO. Erotismo consensual, explícito e luxurioso, alinhado à persona. "
+                "Pode descrever atos como randjob, blowjob, anal, creampie, grupal, etc., com detalhes vívidos. "
+                "O tom é de cumplicidade e prazer compartilhado, sem vulgaridade gratuita."
             )
         else:
             nsfw_hint = (
                 "NSFW: BLOQUEADO. Não descreva ato sexual explícito. "
-                "Flerte, tensão, toques sugeridos e fade-to-black estão ok."
+                "Flerte ousado, provocações, tensão e toques sugeridos estão ok."
             )
 
         # ---- traços sociais/canônicos (reforço) ----
         social_hint = (
-            "SOCIAL CANÔNICO: moro no Ed. Plazza (1010, 10º andar) em Camburi; dançarina na Boate Play Man. "
-            "Sou amiga da Mary (Posto 6). Tenho uma paixão secreta por Janio e sonho em casar e abrir minha loja de lingerie. "
-            "Nunca sou prostituta e **não faço programa**."
+            "SOCIAL CANÔNICO: Moro na Mansão Fígaro em Porto de Galinhas. Sou casada com Ginno Vanelli, um magnata de 70 anos. "
+            "Você (o usuário) é meu amante e confidente. Organizamos festas secretas na Casa da Dinda. "
+            "Minhas amigas depravadas são Alana Rúbia e Carolina Ferraz. Meu casamento é uma fachada para meu estilo de vida."
         )
 
-        # ---- relação (caso secreto + sigilo) lida da memória ----
+        # ---- relação (cumplicidade e festas) lida da memória ----
         fatos_laura = get_facts(usuario_key) or {}
-        namorado_mary = fatos_laura.get("namorado_de_mary", "Janio Donisete")
-        affair_flag   = bool(fatos_laura.get("affair_com_janio", False))
-        sigilo_flag   = bool(fatos_laura.get("sigilo_affair", True))
-        mentions_mary = "mary" in prompt.lower()
+        proxima_festa_planejada = bool(fatos_laura.get("proxima_festa_planejada", False))
+        menciona_amigas = "alana" in prompt.lower() or "carolina" in prompt.lower()
 
-        if affair_flag:
-            base_affair = (
-                f"CASO_SECRETO: ATIVO. No cenário da Laura, Mary namora {namorado_mary}. "
-                f"Laura flerta com {namorado_mary} e pode manter um caso com ele."
+        if proxima_festa_planejada:
+            base_cumplicidade = (
+                "CUMPLICIDADE: ATIVA. Estamos planejando a próxima festa secreta na Casa da Dinda. "
+                "O tom é de conspiração e antecipação."
             )
-            if sigilo_flag and mentions_mary:
-                secrecy = (
-                    "MODO SIGILO: 'Mary' foi mencionada neste turno. "
-                    "Laura evita revelar o caso; responde com ambiguidade suave, muda de assunto, "
-                    "não confessa nem contradiz as memórias."
+            if menciona_amigas:
+                detalhe_amigas = (
+                    "FOCO AMIGAS: 'Alana' ou 'Carolina' foram mencionadas. "
+                    "Descreva a dinâmica do trio, a cumplicidade e a expectativa para a participação delas na festa."
                 )
             else:
-                secrecy = "MODO SIGILO: inativo neste turno."
-            affair_hint = f"{base_affair} {secrecy}"
+                detalhe_amigas = "FOCO AMIGAS: inativo neste turno."
+            cumplicidade_hint = f"{base_cumplicidade} {detalhe_amigas}"
         else:
-            affair_hint = (
-                f"CASO_SECRETO: DESATIVADO. Mary namora {namorado_mary}. "
-                "Laura apenas flerta com elegância e respeita o relacionamento, a menos que o usuário peça outra direção."
+            cumplicidade_hint = (
+                "CUMPLICIDADE: INATIVA. O foco está na nossa relação íntima de amantes. "
+                "A conversa é sobre desejo, segredos e o contraste entre a vida pública e a privada."
             )
 
         # ---- NERITH: posse discreta (se configurada em memórias desta thread) ----
         nerith_proxy_block = self._get_nerith_proxy_block(usuario_key)
 
         system_block = "\n\n".join([
-            persona_text, length_hint, sensory_hint, style_guard, nsfw_hint, social_hint, affair_hint, nerith_proxy_block
+            persona_text, length_hint, sensory_hint, style_guard, nsfw_hint, social_hint, cumplicidade_hint, nerith_proxy_block
         ])
 
         messages: List[Dict[str, str]] = (
@@ -206,49 +204,44 @@ class LauraService(BaseCharacter):
 
     def _build_memory_pin(self, usuario_key: str, user_display: str) -> str:
         """
-        Memória local da Laura (NÃO mistura com Mary).
+        Memória local da Laura (nova persona).
         Campos:
-          - namorado_de_mary (string): quem é o namorado da Mary no cenário da Laura (default: Janio Donisete)
-          - affair_com_janio (bool): se Laura e Janio têm um caso secreto
-          - sigilo_affair (bool): se True, ocultar/ambiguidade quando 'Mary' for mencionada
-          - flirt_mode (bool): preferência de flerte
+          - proxima_festa_planejada (bool): se estão organizando um evento na Casa da Dinda.
+          - amigas_presentes (list): quais amigas (Alana, Carolina) estão confirmadas.
+          - cumplicidade_mode (bool): preferência de tom cúmplice/amante.
         """
         try:
             f = get_facts(usuario_key) or {}
         except Exception:
             f = {}
 
-        namorado_de_mary = (f.get("namorado_de_mary") or "Janio Donisete")
-        affair_flag      = bool(f.get("affair_com_janio", False))
-        sigilo_flag      = bool(f.get("sigilo_affair", True))
-        flirt_flag       = bool(f.get("flirt_mode", True))
+        proxima_festa_planejada = bool(f.get("proxima_festa_planejada", False))
+        amigas_presentes = f.get("amigas_presentes", [])
+        cumplicidade_flag = bool(f.get("cumplicidade_mode", True))
 
         parceiro = f.get("parceiro_atual") or f.get("parceiro") or user_display
         nome_usuario = (parceiro or user_display).strip()
 
-        usuario_eh_namorado = (nome_usuario.lower() == str(namorado_de_mary).strip().lower())
-
         blocos = [
-            f"namorado_de_mary={namorado_de_mary}",
-            f"affair_com_janio={affair_flag}",
-            f"sigilo_affair={sigilo_flag}",
-            f"flirt_mode={flirt_flag}",
+            f"proxima_festa_planejada={proxima_festa_planejada}",
+            f"amigas_presentes={amigas_presentes}",
+            f"cumplicidade_mode={cumplicidade_flag}",
             f"nome_usuario={nome_usuario}",
-            f"usuario_eh_namorado={usuario_eh_namorado}",
         ]
         mem_str = "; ".join(blocos)
 
         regras = [
-            f"No CENÁRIO DA LAURA: Mary namora {namorado_de_mary}. Laura sabe disso.",
-            "Laura é dançarina (NUNCA faz programa, não é prostituta).",
+            "No CENÁRIO DA LAURA: Sou casada com Ginno Vanelli, mas você é meu amante e confidente.",
+            "Minha vida de luxo é mantida pelo casamento, mas meu prazer vem dos nossos segredos.",
             "Se perguntarem 'qual é meu nome?', responda com NOME_USUARIO.",
             "Use as memórias para consistência e não as contradiga.",
-            "Se o usuário for o namorado_de_mary:",
-            "  - Trate com intimidade condizente ao histórico;",
-            "  - Se 'affair_com_janio' for True, mantenha clima de caso secreto; avance em privado;",
-            "  - Se 'sigilo_affair' for True e 'Mary' for citada/presente, NÃO revele o caso; responda com ambiguidade, mude de assunto, proteja o sigilo.",
-            "Se o usuário NÃO for o namorado_de_mary:",
-            "  - Flertar depende de 'flirt_mode'; respeite limites; sem expor o affair.",
+            "Se 'proxima_festa_planejada' for True:",
+            "  - Nosso foco é organizar o próximo bacanal na Casa da Dinda.",
+            "  - O tom é de conspiração, antecipação e desejo pelo que está por vir.",
+            "  - Mencione Alana e Carolina se elas estiverem na lista de 'amigas_presentes'.",
+            "Se 'proxima_festa_planejada' for False:",
+            "  - O foco é na nossa relação íntima, no flerte e na provocação.",
+            "  - O tom é mais pessoal, focado no nosso desejo um pelo outro, longe de tudo.",
         ]
         regras_texto = "\n".join(f"- {r}" if not r.startswith("  ") else f"  {r}" for r in regras)
 
@@ -256,10 +249,9 @@ class LauraService(BaseCharacter):
             "MEMÓRIA_PIN_LAURA:\n"
             f"FATOS: {{ {mem_str} }}\n"
             f"NOME_USUARIO: {nome_usuario}\n"
-            f"USUARIO_EH_NAMORADO: {usuario_eh_namorado}\n"
             "REGRAS:\n"
             f"{regras_texto}\n"
-            "Nunca invente nomes/relacionamentos diferentes dos acima; confirme com delicadeza se houver ambiguidade."
+            "Nunca invente detalhes que contradigam a persona; você é meu cúmplice em tudo."
         )
         return pin
 
@@ -269,6 +261,7 @@ class LauraService(BaseCharacter):
         history_boot: List[Dict[str, str]],
         limite_tokens: int = 120_000
     ) -> List[Dict[str, str]]:
+        # O campo legado 'resposta_mary' foi trocado para 'resposta_laura' para consistência
         docs = get_history_docs(usuario_key)
         if not docs:
             return history_boot[:]
@@ -276,7 +269,7 @@ class LauraService(BaseCharacter):
         out: List[Dict[str, str]] = []
         for d in reversed(docs):
             u = (d.get("mensagem_usuario") or "").strip()
-            a = (d.get("resposta_mary") or "").strip()  # campo legado
+            a = (d.get("resposta_laura") or d.get("resposta_mary") or "").strip() # Mantém fallback
             t = toklen(u) + toklen(a)
             if total + t > limite_tokens:
                 break
@@ -289,8 +282,8 @@ class LauraService(BaseCharacter):
 
     def render_sidebar(self, container) -> None:
         container.markdown(
-            "**Laura** — resposta longa (4–7 parágrafos), foco sensorial obrigatório com atributo rotativo; "
-            "não faz programa; romântica; NSFW controlado por memória do usuário."
+            "**Laura** — resposta longa (4–7 parágrafos), foco sensorial, provocadora e cúmplice. "
+            "NSFW controlado por memória do usuário."
         )
 
         # chave do usuário/Laura
@@ -303,60 +296,53 @@ class LauraService(BaseCharacter):
         except Exception:
             fatos = {}
 
-        # 💃 Preferências (flerte)
+        # 💃 Preferências
         with container.expander("💃 Preferências", expanded=False):
-            flirt_val = bool(fatos.get("flirt_mode", True))
-            k_flirt = f"ui_laura_flirt_{usuario_key}"
-            ui_flirt = container.checkbox("Flerte liberado", value=flirt_val, key=k_flirt)
-            if ui_flirt != flirt_val:
+            cumplicidade_val = bool(fatos.get("cumplicidade_mode", True))
+            k_cumplicidade = f"ui_laura_cumplicidade_{usuario_key}"
+            ui_cumplicidade = container.checkbox("Modo Cúmplice/Amante", value=cumplicidade_val, key=k_cumplicidade)
+            if ui_cumplicidade != cumplicidade_val:
                 try:
-                    set_fact(usuario_key, "flirt_mode", bool(ui_flirt), {"fonte": "sidebar"})
-                    st.toast("Preferência de flerte salva.", icon="✅")
+                    set_fact(usuario_key, "cumplicidade_mode", bool(ui_cumplicidade), {"fonte": "sidebar"})
+                    st.toast("Preferência de cumplicidade salva.", icon="✅")
                     st.session_state["history_loaded_for"] = ""
                     st.rerun()
                 except Exception as e:
-                    container.warning(f"Falha ao salvar flerte: {e}")
+                    container.warning(f"Falha ao salvar preferência: {e}")
 
-        # ❤️ Caso com Janio (Laura)
-        with container.expander("❤️ Caso com Janio (Laura)", expanded=False):
-            affair_val   = bool(fatos.get("affair_com_janio", False))
-            sigilo_val   = bool(fatos.get("sigilo_affair", True))
-            namorado_val = str(fatos.get("namorado_de_mary", "Janio Donisete"))
+        # 🍾 Festa Secreta (Laura)
+        with container.expander("🍾 Festa Secreta (Laura)", expanded=False):
+            festa_val   = bool(fatos.get("proxima_festa_planejada", False))
+            amigas_val   = fatos.get("amigas_presentes", [])
 
-            k_affair   = f"ui_laura_affair_{usuario_key}"
-            k_sigilo   = f"ui_laura_sigilo_{usuario_key}"
-            k_namorado = f"ui_laura_namary_{usuario_key}"
+            k_festa   = f"ui_laura_festa_{usuario_key}"
+            k_amigas   = f"ui_laura_amigas_{usuario_key}"
 
-            ui_affair = container.checkbox(
-                "Caso secreto com Janio (ATIVAR)",
-                value=affair_val,
-                key=k_affair,
-                help="Quando ativo, Laura tem um caso com Janio neste cenário."
+            ui_festa = container.checkbox(
+                "Planejando próxima festa",
+                value=festa_val,
+                key=k_festa,
+                help="Quando ativo, a conversa foca na organização da próxima orgia na Casa da Dinda."
             )
-            ui_sigilo = container.checkbox(
-                "Sigilo do caso (ocultar da Mary)",
-                value=sigilo_val,
-                key=k_sigilo,
-                help="Se 'Mary' for mencionada, Laura evita revelar o caso."
-            )
-            ui_namorado = container.text_input(
-                "Namorado da Mary (neste cenário)",
-                value=namorado_val,
-                key=k_namorado,
-                help="Nome que Laura reconhece como namorado de Mary neste cenário."
+            
+            amigas_opts = ["Alana Rúbia", "Carolina Ferraz"]
+            ui_amigas = container.multiselect(
+                "Amigas confirmadas para a festa",
+                options=amigas_opts,
+                default=amigas_val,
+                key=k_amigas,
+                help="Selecione quais amigas estão confirmadas para o próximo evento."
             )
 
             changed = (
-                bool(ui_affair) != affair_val or
-                bool(ui_sigilo) != sigilo_val or
-                (ui_namorado or "").strip() != (namorado_val or "").strip()
+                bool(ui_festa) != festa_val or
+                set(ui_amigas) != set(amigas_val)
             )
             if changed:
                 try:
-                    set_fact(usuario_key, "affair_com_janio", bool(ui_affair), {"fonte": "sidebar"})
-                    set_fact(usuario_key, "sigilo_affair", bool(ui_sigilo), {"fonte": "sidebar"})
-                    set_fact(usuario_key, "namorado_de_mary", (ui_namorado or "Janio Donisete").strip(), {"fonte": "sidebar"})
-                    st.toast("Relação da Laura atualizada.", icon="✅")
+                    set_fact(usuario_key, "proxima_festa_planejada", bool(ui_festa), {"fonte": "sidebar"})
+                    set_fact(usuario_key, "amigas_presentes", ui_amigas, {"fonte": "sidebar"})
+                    st.toast("Detalhes da festa atualizados.", icon="✅")
                     st.session_state["history_loaded_for"] = ""
                     st.rerun()
                 except Exception as e:
@@ -374,7 +360,7 @@ class LauraService(BaseCharacter):
 
             ui_act  = container.checkbox("Ativar presença psíquica da Nerith", value=act_def, key=k_act,
                                          help="Quando ativo, Laura percebe sinais sutis de uma voz/gesto que não parece da pessoa.")
-            ui_med  = container.text_input("Médio/host atual (ex.: cliente, segurança, atendente)", value=med_def, key=k_med)
+            ui_med  = container.text_input("Médio/host atual (ex.: segurança, garçom, convidado)", value=med_def, key=k_med)
             ui_hint = container.text_input("Observação/hint (opcional)", value=hint_def, key=k_hint)
 
             if container.button("💾 Salvar presença da Nerith"):
@@ -388,4 +374,4 @@ class LauraService(BaseCharacter):
                 except Exception as e:
                     container.error(f"Falha ao salvar: {e}")
 
-        container.caption("Memórias desta aba valem **somente** para `user::laura` (não afetam a Mary).")
+        container.caption("As memórias e configurações desta aba são exclusivas para a sua interação com a Laura.")
