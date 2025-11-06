@@ -1,4 +1,3 @@
-# characters/nerith/comics.py
 from __future__ import annotations
 import os, io, textwrap, random
 from typing import Callable, List, Dict, Tuple
@@ -12,17 +11,17 @@ import streamlit as st
 PROVIDERS: Dict[str, Dict[str, str]] = {
     # chave -> {provider, model, size}
     "FAL • BRIA FIBO": {
-        "provider": "fal-ai",
+        "provider": "fal-ai",  # informativo
         "model": "briaai/FIBO",
         "size": "1024x1024",
     },
     "FAL • FLUX Schnell": {
-        "provider": "fal-ai",
+        "provider": "fal-ai",  # informativo
         "model": "black-forest-labs/FLUX.1-schnell",
         "size": "1024x1024",
     },
     "FAL • Stable Image Ultra": {
-        "provider": "fal-ai",
+        "provider": "fal-ai",  # informativo
         "model": "stabilityai/stable-image-ultra",
         "size": "1024x1024",
     },
@@ -38,10 +37,9 @@ def _get_hf_token() -> str:
         raise RuntimeError("Defina HUGGINGFACE_API_KEY (ou HF_TOKEN) em st.secrets ou variável de ambiente.")
     return tok
 
-def _hf_client(provider: str) -> InferenceClient:
-    # OBS: sua base usa um cliente compatível com `provider` (wrapper interno).
-    # Se estiver usando o InferenceClient padrão da HF, adapte para `InferenceClient(api_key=...)`.
-    return InferenceClient(provider=provider, api_key=_get_hf_token())
+def _hf_client() -> InferenceClient:
+    # huggingface_hub.InferenceClient usa 'token'
+    return InferenceClient(token=_get_hf_token())
 
 # ======================
 # Balão de fala
@@ -149,8 +147,7 @@ def render_comic_button(
     get_history_docs_fn: Callable[[], List[Dict]],
     scene_text_provider: Callable[[], str],
     *,
-    # defaults serão substituídos pela seleção do usuário
-    model_name: str = "briaai/FIBO",
+    model_name: str = "briaai/FIBO",  # pode ser trocado pela UI
     size: str = "1024x1024",
     title: str = "🎞️ Quadrinho (beta)",
     ui=None,                  # container (ex.: a sidebar)
@@ -163,7 +160,7 @@ def render_comic_button(
         ui.markdown(f"### {title}")
         ui.caption("• bloco de quadrinhos carregado")
 
-        # Seleção de modelo/provedor
+        # Seleção de modelo/provedor (provider é apenas informativo aqui)
         prov_key = ui.selectbox(
             "Modelo para quadrinho",
             options=list(PROVIDERS.keys()),
@@ -171,7 +168,7 @@ def render_comic_button(
             key=f"{key_prefix}_model_sel"
         )
         cfg = PROVIDERS.get(prov_key, {})
-        provider = cfg.get("provider", "fal-ai")
+        # provider = cfg.get("provider", "fal-ai")  # não usado pelo InferenceClient
         model_name = cfg.get("model", model_name)
         size = cfg.get("size", size)
 
@@ -197,16 +194,27 @@ def render_comic_button(
             docs = []
         scene_desc = scene_text_provider() or "night alley, rain, two figures confronting each other."
 
-        # 2) geração base (usa provider + modelo selecionados)
-        client = _hf_client(provider)
+        # 2) geração base (Hugging Face Inference)
+        client = _hf_client()
         prompt = _build_comic_prompt(scene_desc, nsfw_on)
 
-        # ❌ antes (quebra quando ui = st.sidebar):
-        # with ui.spinner("Gerando painel…"):
+        # parse de size -> width/height
+        if isinstance(size, str) and "x" in size.lower():
+            w_str, h_str = size.lower().split("x", 1)
+            width, height = int(w_str), int(h_str)
+        elif isinstance(size, (tuple, list)) and len(size) == 2:
+            width, height = int(size[0]), int(size[1])
+        else:
+            width = height = 1024
 
-        # ✅ depois (sempre funciona):
+        # spinner deve ser sempre st.spinner (sidebar não tem .spinner)
         with st.spinner("Gerando painel…"):
-            img = client.text_to_image(prompt, model=model_name, size=size)
+            img = client.text_to_image(
+                model=model_name,
+                prompt=prompt,
+                width=width,
+                height=height,
+            )
 
         # 3) balões
         w, h = img.size
