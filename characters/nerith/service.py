@@ -282,6 +282,7 @@ def _current_user_key() -> str:
     uid = str(st.session_state.get("user_id", "") or "").strip()
     return f"{uid}::nerith" if uid else "anon::nerith"
 
+
 # ============ SERVIÇO PRINCIPAL ============
 class NerithService(BaseCharacter):
     id: str = "nerith"
@@ -748,17 +749,6 @@ class NerithService(BaseCharacter):
         if scene_loc: return f"No {scene_loc} mesmo — aproxima e conduz."
         return "Mantém o cenário e escala com calma."
 
-    # ===== Evidência concisa =====
-    def _compact_user_evidence(self, docs: List[Dict], max_chars: int = 320) -> str:
-        snippets: List[str] = []
-        for d in reversed(docs):
-            u = (d.get("mensagem_usuario") or "").strip()
-            if u:
-                u = re.sub(r"\s+", " ", u)
-                snippets.append(u)
-            if len(snippets) >= 4: break
-        return (" | ".join(reversed(snippets)))[:max_chars]
-
     # ===== Persistência do boot (colar na hora) =====
     def _persist_boot(self, usuario_key: str, boot_text: str) -> None:
         if not (usuario_key and boot_text): return
@@ -809,170 +799,161 @@ class NerithService(BaseCharacter):
         except Exception as e:
             return f"ERRO: {e}"
 
-    # ===== Sidebar (atualizada com Painel de Caça) =====
-def render_sidebar(self, container) -> None:
-    container.markdown(
-        "**Nerith — Elfa caçadora de elfos condenados** • Disfarce humano, foco em missão. "
-        "Regra: não mudar tempo/lugar sem pedido explícito."
-    )
-
-    usuario_key = _current_user_key()
-
-    # ===== Estado de Missão (session_state) =====
-    ms = st.session_state.setdefault("nerith_missao", {
-        "modo": "capturar",   # ou "eliminar"
-        "ultimo_pulso": "",   # ex: "forte @ 19:42"
-        "suspeitos": [],      # lista: {"nome": "...", "assinatura": "...", "risco": "baixo/médio/alto"}
-        "local_isolado": "",  # ex: "beco"
-        "andamento": "ocioso" # "ocioso" | "varrendo" | "em_contato" | "isolado" | "interrogando" | "concluido"
-    })
-
-    # ===== Preferências/flags usuais =====
-    json_on = container.checkbox(
-        "JSON Mode",
-        value=bool(st.session_state.get("json_mode_on", False))
-    )
-    tool_on = container.checkbox(
-        "Tool-Calling",
-        value=bool(st.session_state.get("tool_calling_on", False))
-    )
-    st.session_state["json_mode_on"] = json_on
-    st.session_state["tool_calling_on"] = tool_on
-
-    lora = container.text_input(
-        "Adapter ID (Together LoRA) — opcional",
-        value=st.session_state.get("together_lora_id", "")
-    )
-    st.session_state["together_lora_id"] = lora
-
-    # ===== Modo da missão =====
-    ms["modo"] = container.selectbox(
-        "Modo da operação",
-        options=["capturar", "eliminar"],
-        index=0 if ms.get("modo") != "eliminar" else 1
-    )
-
-    # ===== Painel de status =====
-    container.markdown("### 🎯 Status da Caça")
-    colA, colB = container.columns(2)
-    colA.metric("Andamento", ms.get("andamento") or "—")
-    colB.metric("Último pulso", ms.get("ultimo_pulso") or "—")
-
-    # ===== Recall de memória (por palavra-chave) =====
-    container.markdown("### 🧠 Memória")
-    rec_col1, rec_col2 = container.columns([3, 1])
-    recall_kw = rec_col1.text_input(
-        "Palavra-chave (ex.: 'terraço', 'floresta', 'beco')",
-        value=st.session_state.get("nerith_recall_kw", "")
-    )
-    rec_col2.write("")  # espaçamento
-    btn_recall = container.button("🔎 Buscar memória", use_container_width=True)
-    if btn_recall:
-        st.session_state["nerith_recall_kw"] = recall_kw
-        kw = (recall_kw or "").strip() or "__LAST__"
-        txt = self._recall_lore_text(usuario_key, kw)  # helper de recall
-        if txt:
-            st.session_state["nerith_recall_inject"] = txt
-            container.success("Memória recuperada. Será injetada na próxima resposta.")
-        else:
-            container.warning("Nenhuma memória encontrada para essa palavra-chave.")
-
-    # ===== Quadrinhos (providers + botão) =====
-    # Descrição curta 'filmável' para o painel
-    # ... dentro de render_sidebar(...)
-    def _scene_text_provider() -> str:
-        ms_local = st.session_state.get("nerith_missao", {})
-        local = (
-            ms_local.get("local_isolado")
-            or st.session_state.get("momento_atual")
-            or "noite, beco molhado de chuva"
+    # ===== Sidebar (AGORA MÉTODO DA CLASSE) =====
+    def render_sidebar(self, container) -> None:
+        container.markdown(
+            "**Nerith — Elfa caçadora de elfos condenados** • Disfarce humano, foco em missão. "
+            "Regra: não mudar tempo/lugar sem pedido explícito."
         )
-        last_assistant = (st.session_state.get("last_assistant_message") or "")[:120]
-        return f"{local}; two characters; tense, close-up; dynamic angle; {last_assistant}"
-    
-    render_comic_button(
-        get_history_docs_fn=lambda: cached_get_history(usuario_key),
-        scene_text_provider=_scene_text_provider,
-        title="🎞️ Quadrinho (beta)",
-        ui=container,                      # <<< renderiza na sidebar
-        key_prefix=f"{usuario_key}_comics" # <<< evita DuplicateWidgetID
-    )
 
+        usuario_key = _current_user_key()
 
+        # ===== Estado de Missão (session_state) =====
+        ms = st.session_state.setdefault("nerith_missao", {
+            "modo": "capturar",   # ou "eliminar"
+            "ultimo_pulso": "",   # ex: "forte @ 19:42"
+            "suspeitos": [],      # lista: {"nome": "...", "assinatura": "...", "risco": "baixo/médio/alto"}
+            "local_isolado": "",  # ex: "beco"
+            "andamento": "ocioso" # "ocioso" | "varrendo" | "em_contato" | "isolado" | "interrogando" | "concluido"
+        })
 
-    # ===== Lista de suspeitos =====
-    suspeitos = ms.get("suspeitos") or []
-    if suspeitos:
-        with container.expander("Suspeitos detectados", expanded=True):
-            for i, s in enumerate(suspeitos, start=1):
-                container.markdown(
-                    f"- **{i}. {s.get('nome','?')}** • assinatura: `{s.get('assinatura','?')}` • risco: **{s.get('risco','?')}**"
-                )
-    else:
-        container.caption("Nenhum suspeito ainda.")
+        # ===== Preferências/flags usuais =====
+        json_on = container.checkbox(
+            "JSON Mode",
+            value=bool(st.session_state.get("json_mode_on", False))
+        )
+        tool_on = container.checkbox(
+            "Tool-Calling",
+            value=bool(st.session_state.get("tool_calling_on", False))
+        )
+        st.session_state["json_mode_on"] = json_on
+        st.session_state["tool_calling_on"] = tool_on
 
-    # ===== Botões de ação =====
-    container.markdown("### 🕵️‍♀️ Ações da Operação")
-    a1, a2 = container.columns(2)
-    b1 = a1.button("🔎 Varrer área", use_container_width=True)
-    b2 = a2.button("🚧 Isolar alvo", use_container_width=True)
-    a3, a4 = container.columns(2)
-    b3 = a3.button("🗝️ Extrair informação", use_container_width=True)
-    b4 = a4.button("✅ Encerrar operação", use_container_width=True)
+        lora = container.text_input(
+            "Adapter ID (Together LoRA) — opcional",
+            value=st.session_state.get("together_lora_id", "")
+        )
+        st.session_state["together_lora_id"] = lora
 
-    # ===== Handlers =====
-    if b1:
-        self._acao_varrer_area(usuario_key)
-        container.success("Área varrida: pulso arcano registrado e possível suspeito adicionado.")
-    if b2:
-        self._acao_isolar_alvo(usuario_key)
-        container.info("Alvo isolado em zona discreta. Local da cena atualizado.")
-    if b3:
-        self._acao_extrair_info(usuario_key)
-        container.warning("Interrogatório breve registrado nos fatos.")
-    if b4:
-        self._acao_encerrar(usuario_key)
-        container.success("Operação concluída. Estado de missão limpo.")
+        # ===== Modo da missão =====
+        ms["modo"] = container.selectbox(
+            "Modo da operação",
+            options=["capturar", "eliminar"],
+            index=0 if ms.get("modo") != "eliminar" else 1
+        )
 
-    # ===== Info leve de entidades/resumo (opcional) =====
-    try:
-        f = cached_get_facts(usuario_key) or {}
-    except Exception:
-        f = {}
-    ent = _entities_to_line(f)
-    if ent and ent != "—":
-        container.caption(f"Entidades salvas: {ent}")
+        # ===== Painel de status =====
+        container.markdown("### 🎯 Status da Caça")
+        colA, colB = container.columns(2)
+        colA.metric("Andamento", ms.get("andamento") or "—")
+        colB.metric("Último pulso", ms.get("ultimo_pulso") or "—")
 
-    rs = (f.get("nerith.rs.v2") or "")[:200]
-    if rs:
-        container.caption("Resumo rolante ativo (v2).")
+        # ===== Recall de memória (por palavra-chave) =====
+        container.markdown("### 🧠 Memória")
+        rec_col1, rec_col2 = container.columns([3, 1])
+        recall_kw = rec_col1.text_input(
+            "Palavra-chave (ex.: 'terraço', 'floresta', 'beco')",
+            value=st.session_state.get("nerith_recall_kw", "")
+        )
+        rec_col2.write("")  # espaçamento
+        btn_recall = container.button("🔎 Buscar memória", use_container_width=True, key=f"{usuario_key}_btn_recall")
+        if btn_recall:
+            st.session_state["nerith_recall_kw"] = recall_kw
+            kw = (recall_kw or "").strip() or "__LAST__"
+            txt = self._recall_lore_text(usuario_key, kw)  # helper de recall
+            if txt:
+                st.session_state["nerith_recall_inject"] = txt
+                container.success("Memória recuperada. Será injetada na próxima resposta.")
+            else:
+                container.warning("Nenhuma memória encontrada para essa palavra-chave.")
 
+        # ===== Quadrinhos (providers + botão) =====
+        def _scene_text_provider() -> str:
+            ms_local = st.session_state.get("nerith_missao", {})
+            local = (
+                ms_local.get("local_isolado")
+                or st.session_state.get("momento_atual")
+                or "noite, beco molhado de chuva"
+            )
+            last_assistant = (st.session_state.get("last_assistant_message") or "")[:120]
+            return f"{local}; two characters; tense, close-up; dynamic angle; {last_assistant}"
 
-    # ===== Ações do Painel de Caça =====
+        render_comic_button(
+            get_history_docs_fn=lambda: cached_get_history(usuario_key),
+            scene_text_provider=_scene_text_provider,
+            title="🎞️ Quadrinho (beta)",
+            ui=container,
+            key_prefix=f"{usuario_key}_comics"  # evita DuplicateWidgetID
+        )
+
+        # ===== Lista de suspeitos =====
+        suspeitos = ms.get("suspeitos") or []
+        if suspeitos:
+            with container.expander("Suspeitos detectados", expanded=True):
+                for i, s in enumerate(suspeitos, start=1):
+                    container.markdown(
+                        f"- **{i}. {s.get('nome','?')}** • assinatura: `{s.get('assinatura','?')}` • risco: **{s.get('risco','?')}**"
+                    )
+        else:
+            container.caption("Nenhum suspeito ainda.")
+
+        # ===== Botões de ação =====
+        container.markdown("### 🕵️‍♀️ Ações da Operação")
+        a1, a2 = container.columns(2)
+        b1 = a1.button("🔎 Varrer área", use_container_width=True, key=f"{usuario_key}_btn_varrer")
+        b2 = a2.button("🚧 Isolar alvo", use_container_width=True, key=f"{usuario_key}_btn_isolar")
+        a3, a4 = container.columns(2)
+        b3 = a3.button("🗝️ Extrair informação", use_container_width=True, key=f"{usuario_key}_btn_extrair")
+        b4 = a4.button("✅ Encerrar operação", use_container_width=True, key=f"{usuario_key}_btn_encerrar")
+
+        # ===== Handlers =====
+        if b1:
+            self._acao_varrer_area(usuario_key)
+            container.success("Área varrida: pulso arcano registrado e possível suspeito adicionado.")
+        if b2:
+            self._acao_isolar_alvo(usuario_key)
+            container.info("Alvo isolado em zona discreta. Local da cena atualizado.")
+        if b3:
+            self._acao_extrair_info(usuario_key)
+            container.warning("Interrogatório breve registrado nos fatos.")
+        if b4:
+            self._acao_encerrar(usuario_key)
+            container.success("Operação concluída. Estado de missão limpo.")
+
+        # ===== Info leve de entidades/resumo (opcional) =====
+        try:
+            f = cached_get_facts(usuario_key) or {}
+        except Exception:
+            f = {}
+        ent = _entities_to_line(f)
+        if ent and ent != "—":
+            container.caption(f"Entidades salvas: {ent}")
+
+        rs = (f.get("nerith.rs.v2") or "")[:200]
+        if rs:
+            container.caption("Resumo rolante ativo (v2).")
+
+    # ===== Ações do Painel de Caça (AGORA MÉTODOS DA CLASSE) =====
     def _acao_varrer_area(self, usuario_key: str) -> None:
         """Simula varredura: registra pulso, insere/atualiza suspeito e marca andamento."""
         try:
             ms = st.session_state.get("nerith_missao", {})
             hhmm = time.strftime("%H:%M")
-            # Pulso e possível assinatura arcana (determinística leve)
             seed = str(int(time.time()))[-4:]
             assinatura = f"Σ-{seed}"
             riscos = ["baixo", "médio", "alto"]
             risco = random.choice(riscos)
             nome = random.choice(["Darian", "Seliane", "Kael", "Mirel", "Vorin", "Althaea"])
 
-            # Atualiza painel
             ms["ultimo_pulso"] = f"forte @ {hhmm}"
             ms["andamento"] = "varrendo"
 
-            # Adiciona/atualiza suspeito principal (evita duplicar mesma assinatura)
             lista = ms.get("suspeitos") or []
             if not any(s.get("assinatura") == assinatura for s in lista):
                 lista.append({"nome": nome, "assinatura": assinatura, "risco": risco})
             ms["suspeitos"] = lista
             st.session_state["nerith_missao"] = ms
 
-            # Persiste fatos úteis
             set_fact(usuario_key, "nerith.hunt.last_pulse", ms["ultimo_pulso"], {"fonte": "scanner"})
             set_fact(usuario_key, "nerith.hunt.last_sig", assinatura, {"fonte": "scanner"})
             set_fact(usuario_key, "nerith.hunt.status", "varrendo", {"fonte": "scanner"})
@@ -986,7 +967,6 @@ def render_sidebar(self, container) -> None:
             ms = st.session_state.get("nerith_missao", {})
             candidatos = ms.get("suspeitos") or []
             if not candidatos:
-                # cria um alvo mínimo para não falhar UX
                 candidatos = [{"nome": "Alvo anônimo", "assinatura": "Σ-0000", "risco": "médio"}]
                 ms["suspeitos"] = candidatos
 
@@ -1001,11 +981,8 @@ def render_sidebar(self, container) -> None:
             ms["andamento"] = "isolado"
             st.session_state["nerith_missao"] = ms
 
-            # Atualiza 'local_cena_atual' usado pelo service para continuidade
             set_fact(usuario_key, "local_cena_atual", local, {"fonte": "isolamento"})
-            # Portal não é aberto aqui; cena é no mundo humano
             set_fact(usuario_key, "portal_aberto", False, {"fonte": "isolamento"})
-            # Marcar alvo atual (nome+assinatura) para referência do modelo
             set_fact(usuario_key, "nerith.hunt.target", f"{alvo.get('nome')}|{alvo.get('assinatura')}", {"fonte": "isolamento"})
             set_fact(usuario_key, "nerith.hunt.status", "isolado", {"fonte": "isolamento"})
             clear_user_cache(usuario_key)
@@ -1025,7 +1002,6 @@ def render_sidebar(self, container) -> None:
                 "Nerith pressiona com presença e toques calculados; alvo confessa rotas de passagem e contatos no cais."
             )
 
-            # Salva como fato/“evento”
             set_fact(usuario_key, f"nerith.evento.interrogatorio_{int(time.time())}", texto_evento, {"fonte": "missao"})
             set_fact(usuario_key, "nerith.hunt.status", "interrogando", {"fonte": "missao"})
             ms["andamento"] = "interrogando"
@@ -1047,7 +1023,6 @@ def render_sidebar(self, container) -> None:
             st.session_state["nerith_missao"] = ms_default
 
             set_fact(usuario_key, "nerith.hunt.status", "concluido", {"fonte": "missao"})
-            # Mantém local_cena_atual como está; não fecha portal aqui.
             clear_user_cache(usuario_key)
         except Exception:
             pass
