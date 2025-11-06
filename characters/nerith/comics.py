@@ -464,11 +464,17 @@ def render_comic_button(
             force_solo=force_solo,
             legs_visible=legs_visible,
             anti_mirror=anti_mirror,
-            tail_base_visible=tail_base_visible,           # <<< novo
-            proportions_profile=proportions_profile,       # <<< novo
+            tail_base_visible=tail_base_visible,
+            proportions_profile=proportions_profile,
         )
+        
+        # ✅ Ajustar ao limite de 1900 chars
+        prompt, reduced = _fit_to_limit(prompt, MAX_PROMPT_LEN)
+        if reduced:
+            ui.warning("⚠️ O prompt estava acima do limite e foi compactado automaticamente.")
+        
+        ui.caption(f"Tamanho final do prompt: {len(prompt)}/{MAX_PROMPT_LEN} chars")
 
-        ui.caption(f"Tamanho do prompt: {len(prompt)}/{MAX_PROMPT_LEN} chars")
 
         # --------------------------------------------------
         # Converter size
