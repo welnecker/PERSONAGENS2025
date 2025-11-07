@@ -753,3 +753,88 @@ try:
 
 except Exception as e:
     _safe_error("Auto-seed Mary: falha inesperada.", e)
+
+# ========= UI FINAL: HISTÓRICO + SIDEBAR DO PERSONAGEM + PROMPT =========
+
+def _ensure_boot_message_in_ui():
+    """Se a UI não tem histórico, injeta a first message da persona (sem depender de DB)."""
+    if st.session_state.get("history"):
+        return
+    char = (st.session_state.get("character") or "").strip()
+    if not char:
+        return
+    try:
+        mod = __import__(f"characters.{char.lower()}.persona", fromlist=["get_persona"])
+        get_persona = getattr(mod, "get_persona", None)
+    except Exception:
+        get_persona = None
+    if callable(get_persona):
+        try:
+            _persona_text, history_boot = get_persona()
+            first_msg = next(
+                (m.get("content", "").strip()
+                 for m in (history_boot or [])
+                 if (m.get("role") or "") == "assistant"),
+                ""
+            )
+            if first_msg:
+                st.session_state["history"] = [("assistant", first_msg)]
+        except Exception:
+            pass
+
+# 1) Tenta recarregar histórico se ainda não carregou
+if not st.session_state.get("history"):
+    _reload_history(force=True)
+_ensure_boot_message_in_ui()
+
+# 2) Instancia o serviço do personagem (sem bloquear a UI se falhar)
+_srv = None
+try:
+    _char = (st.session_state.get("character") or "").strip()
+    _srv_mod = get_service(_char)  # via registry ou fallback dinâmico
+    # Convenção: <Nome>Service (MaryService, NerithService, etc.)
+    _cls_name = (_char[:1].upper() + _char[1:].lower()) + "Service"
+    _ServiceClass = getattr(_srv_mod, _cls_name, None)
+    if _ServiceClass is None:
+        # fallback: pega a primeira classe que termina com 'Service'
+        for _n in dir(_srv_mod):
+            if _n.lower().endswith("service"):
+                _ServiceClass = getattr(_srv_mod, _n)
+                break
+    _srv = _ServiceClass() if _ServiceClass else None
+except Exception as _e:
+    _safe_error("Falha ao carregar serviço do personagem.", _e)
+
+# 3) Render do painel do personagem no sidebar (se existir)
+try:
+    if _srv and hasattr(_srv, "render_sidebar"):
+        with st.sidebar:
+            _srv.render_sidebar(st.sidebar)
+except Exception as _e:
+    _safe_error("Falha ao renderizar o sidebar do personagem.", _e)
+
+# 4) Render do histórico em formato chat
+for role, txt in st.session_state.get("history", []):
+    if role == "assistant":
+        st.chat_message("assistant")
+        render_assistant_bubbles(txt)
+    else:
+        st.chat_message("user").markdown(txt)
+
+# 5) Campo de entrada do usuário (sempre visível)
+_user_msg = st.chat_input("Digite sua mensagem para o personagem…")
+if _user_msg:
+    st.session_state["history"].append(("user", _user_msg))
+    resposta = ""
+    try:
+        if _srv and hasattr(_srv, "reply"):
+            resposta = _srv.reply(st.session_state["user_id"], st.session_state["model"]) or ""
+        else:
+            resposta = "Pronto(a) para falar, mas o serviço do personagem não foi encontrado."
+    except Exception as _e:
+        _safe_error("Falha ao gerar a resposta do personagem.", _e)
+        resposta = "Houve um erro ao chamar o modelo (veja o erro acima no modo dev)."
+
+    st.session_state["history"].append(("assistant", resposta))
+    st.rerun()
+
