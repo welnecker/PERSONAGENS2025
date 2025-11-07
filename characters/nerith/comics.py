@@ -17,20 +17,30 @@ def render_comic_button(
     ui=None,
     key_prefix: str = ""
 ) -> None:
-    ui = ui or st
-    key_prefix = key_prefix or "nerith_comics"
+    ui = ui or st  # aceita injeção de container externo
+    key_prefix = (key_prefix or "nerith_comics").replace(" ", "_")
 
     try:
-        st.markdown(f"### {title}")
+        ui.markdown(f"### {title}")
 
         # =======================
         # Modelo + Preset
         # =======================
-        c1, c2 = st.columns(2)
-        prov_key = c1.selectbox("Modelo", list(PROVIDERS.keys()), index=0, key=f"{key_prefix}_model")
-        cfg = PROVIDERS[prov_key]
+        model_keys = list(PROVIDERS.keys())
+        if not model_keys:
+            ui.warning("Nenhum modelo disponível (PROVIDERS vazio). Confira characters/nerith/providers.py.")
+            return
 
-        # Seleção automática de preset
+        c1, c2 = ui.columns(2)
+        prov_key = c1.selectbox(
+            "Modelo",
+            model_keys,
+            index=0,
+            key=f"{key_prefix}_model"
+        )
+        cfg = PROVIDERS.get(prov_key, {})
+
+        # Seleção automática de preset coerente com o provider escolhido
         if prov_key == "FAL • Dark Fantasy Flux":
             default_preset = "FLUX • Nerith Dark Fantasy"
         elif cfg.get("qwen"):
@@ -41,23 +51,33 @@ def render_comic_button(
             default_preset = "FLUX • Nerith HQ"
 
         preset_list = list(PRESETS.keys())
-        idx = preset_list.index(default_preset) if default_preset in preset_list else 0
-        preset_name = c2.selectbox("Preset", preset_list, index=idx, key=f"{key_prefix}_preset")
+        default_idx = preset_list.index(default_preset) if default_preset in preset_list else 0
+        preset_name = c2.selectbox(
+            "Preset",
+            preset_list,
+            index=default_idx,
+            key=f"{key_prefix}_preset"
+        )
         preset = PRESETS[preset_name]
 
         # =======================
         # Direção da Cena
         # =======================
-        st.markdown("---")
-        st.subheader("Direção da Cena")
+        ui.markdown("---")
+        ui.subheader("Direção da Cena")
 
-        col_f, col_a = st.columns(2)
+        col_f, col_a = ui.columns(2)
         framing_map = {
             "Retrato (close-up)": "close-up portrait",
             "Meio corpo": "medium shot",
             "Corpo inteiro": "full body",
         }
-        framing = framing_map[col_f.selectbox("Enquadramento", list(framing_map.keys()), index=2, key=f"{key_prefix}_frame")]
+        framing = framing_map[col_f.selectbox(
+            "Enquadramento",
+            list(framing_map.keys()),
+            index=2,
+            key=f"{key_prefix}_frame"
+        )]
 
         angle_map = {
             "Frente": "front view",
@@ -65,29 +85,34 @@ def render_comic_button(
             "Costas": "back view",
             "Três quartos": "three-quarter view",
         }
-        angle = angle_map[col_a.selectbox("Ângulo", list(angle_map.keys()), index=3, key=f"{key_prefix}_angle")]
+        angle = angle_map[col_a.selectbox(
+            "Ângulo",
+            list(angle_map.keys()),
+            index=3,
+            key=f"{key_prefix}_angle"
+        )]
 
-        with st.expander("Direção de Arte (Opcional)"):
-            pose = st.text_input("Pose / Ação", key=f"{key_prefix}_pose")
-            env = st.text_input("Ambiente / Cenário", key=f"{key_prefix}_env")
+        with ui.expander("Direção de Arte (Opcional)"):
+            pose = ui.text_input("Pose / Ação", key=f"{key_prefix}_pose")
+            env = ui.text_input("Ambiente / Cenário", key=f"{key_prefix}_env")
 
-        st.markdown("---")
-        nsfw = st.toggle("Liberar sensualidade implícita", value=True, key=f"{key_prefix}_nsfw")
-        mad = st.toggle("🔥 Modo Automático Anti-Deformações", value=True, key=f"{key_prefix}_mad")
+        ui.markdown("---")
+        nsfw = ui.toggle("Liberar sensualidade implícita", value=True, key=f"{key_prefix}_nsfw")
+        mad = ui.toggle("🔥 Modo Automático Anti-Deformações", value=True, key=f"{key_prefix}_mad")
 
         # =======================
         # Resolução
         # =======================
         if cfg.get("sdxl"):
-            sz = st.selectbox("📐 Resolução SDXL", list(SDXL_SIZES.keys()), index=0, key=f"{key_prefix}_size")
+            sz = ui.selectbox("📐 Resolução SDXL", list(SDXL_SIZES.keys()), index=0, key=f"{key_prefix}_size")
             width, height = SDXL_SIZES[sz]
         else:
-            width, height = parse_size(str(cfg["size"]))
+            width, height = parse_size(str(cfg.get("size", "1024x1024")))
 
         # =======================
-        # Steps / Guidance (faixas por modelo)
+        # Steps / Guidance
         # =======================
-        col_s, col_g = st.columns(2)
+        col_s, col_g = ui.columns(2)
         if cfg.get("lightning"):
             steps = col_s.slider("Steps", 4, 24, 8, key=f"{key_prefix}_steps")
             guidance = col_g.slider("Guidance", 0.0, 2.0, 1.5, key=f"{key_prefix}_guidance")
@@ -98,12 +123,12 @@ def render_comic_button(
             steps = col_s.slider("Steps", 20, 60, 30, key=f"{key_prefix}_steps")
             guidance = col_g.slider("Guidance", 2.0, 12.0, 7.0, key=f"{key_prefix}_guidance")
 
-        # Ajustes Qwen básicos
+        # Ajustes Qwen
         if cfg.get("qwen"):
             steps = min(steps, 24)
             guidance = min(guidance, 6.0)
 
-        # MAD — tuning por modelo
+        # MAD
         if mad:
             if cfg.get("lightning"):
                 guidance = min(1.8, guidance)
@@ -124,38 +149,32 @@ def render_comic_button(
         # =======================
         # Botão
         # =======================
-        go = st.button("Gerar Painel 🎨", use_container_width=True, key=f"{key_prefix}_go")
+        go = ui.button("Gerar Painel 🎨", use_container_width=True, key=f"{key_prefix}_go")
         if not go:
             return
 
         # Prompts
         prompt, negative = build_prompts(preset, nsfw, framing, angle, pose, env)
-
-        # Anti-barbie adicional
         if mad:
             negative += ", barbie-doll, plastic texture, CGI texture, over-smooth shader, beauty-filtered skin, poreless skin"
-
-        # Fix específico Qwen
         if cfg.get("qwen"):
             prompt = qwen_prompt_fix(prompt)
             negative += ", over-smooth skin, plastic face, barbie face"
 
-        with st.expander("Prompts finais"):
-            st.code(prompt)
-            st.code(negative)
+        with ui.expander("Prompts finais"):
+            ui.code(prompt)
+            ui.code(negative)
 
         # Cliente
-        client = get_client(str(cfg["provider"]))
-        st.info(f"✅ Provider: {cfg['provider']} — Modelo: {cfg['model']} ({width}×{height}, steps={steps}, guidance={guidance})")
+        client = get_client(str(cfg.get("provider", "huggingface")))
+        ui.info(f"✅ Provider: {cfg.get('provider')} — Modelo: {cfg.get('model')} ({width}×{height}, steps={steps}, guidance={guidance})")
 
-        # Clamp final para Lightning (evita 422)
         if cfg.get("lightning"):
             guidance = min(guidance, 2.0)
 
         # Geração
         if cfg.get("refiner"):
-            # Passo 1: SDXL Base
-            with st.spinner("Etapa 1: SDXL Base..."):
+            with ui.spinner("Etapa 1: SDXL Base..."):
                 base_img = client.text_to_image(
                     prompt=prompt,
                     model="stabilityai/stable-diffusion-xl-base-1.0",
@@ -165,8 +184,7 @@ def render_comic_button(
                     num_inference_steps=steps,
                     guidance_scale=guidance,
                 )
-            # Passo 2: Refiner (usa imagem do passo 1)
-            with st.spinner("Etapa 2: Refiner..."):
+            with ui.spinner("Etapa 2: Refiner..."):
                 img_data = client.text_to_image(
                     prompt=prompt,
                     model="stabilityai/stable-diffusion-xl-refiner-1.0",
@@ -176,10 +194,10 @@ def render_comic_button(
                     guidance_scale=guidance,
                 )
         else:
-            with st.spinner("Gerando painel..."):
+            with ui.spinner("Gerando painel..."):
                 img_data = client.text_to_image(
                     prompt=prompt,
-                    model=str(cfg["model"]),
+                    model=str(cfg.get("model")),
                     negative_prompt=negative,
                     width=width,
                     height=height,
@@ -187,13 +205,13 @@ def render_comic_button(
                     guidance_scale=guidance,
                 )
 
+        # Render
         img = Image.open(io.BytesIO(img_data)) if isinstance(img_data, (bytes, bytearray)) else img_data
-
-        st.image(img, caption=f"Preset: {preset_name}", use_column_width=True)
+        ui.image(img, caption=f"Preset: {preset_name}", use_column_width=True)
 
         buf = io.BytesIO()
         img.save(buf, "PNG")
-        st.download_button(
+        ui.download_button(
             "⬇️ Baixar PNG",
             data=buf.getvalue(),
             file_name="nerith_comic.png",
@@ -202,5 +220,10 @@ def render_comic_button(
         )
 
     except Exception as e:
-        st.error(f"Erro: {e}")
-        st.exception(e)
+        ui.error(f"Erro: {e}")
+        # Mostra stack trace dentro do mesmo container
+        try:
+            import traceback
+            ui.code("".join(traceback.format_exc()))
+        except Exception:
+            pass
