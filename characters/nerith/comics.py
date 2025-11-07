@@ -1,7 +1,7 @@
 # characters/nerith/comics.py
 from __future__ import annotations
 import os, io, re
-from typing import Callable, List, Dict, Tuple
+from typing import Callable, List, Dict, Tuple, Optional
 from PIL import Image
 from huggingface_hub import InferenceClient
 import streamlit as st
@@ -11,8 +11,13 @@ import streamlit as st
 # ======================
 PROVIDERS: Dict[str, Dict[str, str]] = {
     "HF • FLUX.1-dev": {
-        "provider": "huggingface",
+        "provider": "huggingface",  # Inference API padrão do HF
         "model": "black-forest-labs/FLUX.1-dev",
+        "size": "1024x1024",
+    },
+    "HF • SDXL (nscale)": {         # NOVO: SDXL via provider nscale (GPU remota HF)
+        "provider": "huggingface-nscale",
+        "model": "stabilityai/stable-diffusion-xl-base-1.0",
         "size": "1024x1024",
     },
     "FAL • Stable Image Ultra": {
@@ -33,8 +38,19 @@ def _get_hf_token() -> str:
         raise RuntimeError("Defina HUGGINGFACE_API_KEY (ou HF_TOKEN) em st.secrets ou variável de ambiente.")
     return tok.strip()
 
-def _hf_client() -> InferenceClient:
-    return InferenceClient(token=_get_hf_token())
+def _get_client(provider: Optional[str]) -> InferenceClient:
+    """
+    Retorna um InferenceClient adequado ao provider informado.
+    - "huggingface" / "hf": Inference API padrão
+    - "huggingface-nscale" / "nscale" / "hf-nscale": Nscale (GPU gerenciada pelo HF)
+    """
+    token = _get_hf_token()
+    pv = (provider or "").strip().lower()
+    if pv in ("huggingface-nscale", "nscale", "hf-nscale"):
+        # Nscale exige 'api_key=' e 'provider="nscale"'
+        return InferenceClient(provider="nscale", api_key=token)
+    # Padrão: Inference API do HF
+    return InferenceClient(token=token)
 
 # ======================
 # Utilitários de Prompt
@@ -102,7 +118,7 @@ def build_prompts(preset: Dict[str, str], nsfw_on: bool, framing: str, angle: st
     if "close-up" not in framing:
         final_pos += f", {TAIL_POS}"
 
-    details_pos = f"{framing}, {angle}, {pose_details}"
+    details_pos = f"{framing}, {angle}, {pose_details}".strip().strip(", ")
     scene_desc = env_details
 
     if nsfw_on:
@@ -114,7 +130,6 @@ def build_prompts(preset: Dict[str, str], nsfw_on: bool, framing: str, angle: st
 
     prompt = _fit_to_limit(f"{final_pos}, {details_pos}, style: {final_style}, Scene: {scene_desc}")
     negative_prompt = _fit_to_limit(final_neg)
-    
     return prompt, negative_prompt
 
 # ===================================================
@@ -134,6 +149,7 @@ def render_comic_button(
     try:
         ui.markdown(f"### {title}")
 
+        # Seleção de modelo e preset
         c1, c2 = ui.columns(2)
         prov_key = c1.selectbox("Modelo", options=list(PROVIDERS.keys()), index=0, key=f"{key_prefix}_model_sel")
         cfg = PROVIDERS.get(prov_key, {})
@@ -146,6 +162,7 @@ def render_comic_button(
         ui.markdown("---")
         ui.subheader("Direção da Cena")
 
+        # Enquadramento e ângulo
         col_framing, col_angle = ui.columns(2)
         framing_map = {
             "Retrato (close-up)": "close-up shot, portrait",
@@ -164,34 +181,62 @@ def render_comic_button(
         angle_choice = col_angle.selectbox("Ângulo", options=list(angle_map.keys()), index=3, key=f"{key_prefix}_angle")
         angle = angle_map[angle_choice]
 
+        # Detalhes de pose e ambiente
         with ui.expander("Direção de Arte (Opcional)"):
-            pose_details = st.text_input("Detalhes da Pose e Ação", placeholder="Ex: olhando por cima do ombro, segurando uma taça...", key=f"{key_prefix}_pose_details")
-            env_details = st.text_input("Detalhes do Ambiente", placeholder="Ex: em uma varanda com vista para a cidade cyberpunk...", key=f"{key_prefix}_env_details")
+            pose_details = st.text_input(
+                "Detalhes da Pose e Ação",
+                placeholder="Ex: olhando por cima do ombro, segurando uma taça...",
+                key=f"{key_prefix}_pose_details"
+            )
+            env_details = st.text_input(
+                "Detalhes do Ambiente",
+                placeholder="Ex: em uma varanda com vista para a cidade cyberpunk...",
+                key=f"{key_prefix}_env_details"
+            )
 
         ui.markdown("---")
         nsfw_on = ui.toggle("Liberar sensualidade implícita", value=True, key=f"{key_prefix}_nsfw_toggle")
-        gen = ui.button("Gerar Painel", use_container_width=True, key=f"{key_prefix}_gen_btn")
+        # Controles básicos de qualidade
+        col_steps, col_guid = ui.columns(2)
+        steps = int(col_steps.slider("Steps", min_value=20, max_value=60, value=30, step=2, key=f"{key_prefix}_steps"))
+        guidance = float(col_guid.slider("Guidance", min_value=3.0, max_value=10.0, value=7.0, step=0.5, key=f"{key_prefix}_guidance"))
 
+        gen = ui.button("Gerar Painel", use_container_width=True, key=f"{key_prefix}_gen_btn")
         if not gen:
             return
 
+        # Monta prompts
         prompt, negative_prompt = build_prompts(cur, nsfw_on, framing, angle, pose_details, env_details)
 
         with ui.expander("Ver prompts finais", expanded=False):
             st.markdown("**Prompt Positivo:**"); st.code(prompt, language=None)
             st.markdown("**Prompt Negativo:**"); st.code(negative_prompt, language=None)
 
+        # Dimensões do provider
         width, height = map(int, str(size).lower().split("x"))
-        client = _hf_client()
-        with st.spinner("Gerando painel…"):
-            img_data = client.text_to_image(model=model_name, prompt=prompt, negative_prompt=negative_prompt, width=width, height=height)
 
-        img = Image.open(io.BytesIO(img_data)) if isinstance(img_data, bytes) else img_data
+        # Cliente correto conforme provider escolhido
+        client = _get_client(cfg.get("provider"))
+
+        # Geração
+        with st.spinner("Gerando painel…"):
+            img_data = client.text_to_image(
+                prompt=prompt,
+                model=model_name,
+                negative_prompt=negative_prompt,
+                width=width,
+                height=height,
+                guidance_scale=guidance,
+                num_inference_steps=steps,
+            )
+
+        # Pode vir como bytes (alguns provedores) ou PIL.Image
+        img = Image.open(io.BytesIO(img_data)) if isinstance(img_data, (bytes, bytearray)) else img_data
 
         ui.image(img, caption=f"Painel gerado com o preset '{sel_preset}'", use_column_width=True)
         buf = io.BytesIO(); buf.name = 'nerith_quadrinho.png'
         img.save(buf, "PNG")
-        ui.download_button("⬇️ Baixar PNG", data=buf, file_name=buf.name, mime="image/png", key=f"{key_prefix}_dl_btn")
+        ui.download_button("⬇️ Baixar PNG", data=buf.getvalue(), file_name=buf.name, mime="image/png", key=f"{key_prefix}_dl_btn")
 
     except Exception as e:
         ui.error(f"Falha na geração de quadrinhos: {e}")
