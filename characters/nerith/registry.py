@@ -20,6 +20,8 @@ MODELS = [
     "HF • SDXL (nscale)",
     "HF • SDXL (nscale + Refiner)",
     "FAL • Stable Image Ultra",
+    "FAL • Dark Fantasy Flux",
+    "FAL • SDXL Lightning",   # ✅ novo
 ]
 
 def list_models():
