@@ -16,6 +16,14 @@ from pymongo import MongoClient
 from datetime import datetime
 import html
 
+import streamlit as st
+from characters.registry import list_models_for_character
+
+if st.sidebar.checkbox("🔍 DEBUG MODEL NERITH"):
+    st.sidebar.write("Modelos detectados para Nerith:")
+    st.sidebar.write(list_models_for_character("Nerith"))
+
+
 # ========== BOOT (indexes/paths) ==========
 try:
     from core.memoria_longa import ensure_indexes
