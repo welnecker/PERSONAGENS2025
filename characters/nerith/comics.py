@@ -1,5 +1,5 @@
 # ============================================================
-# characters/nerith/comics.py — VERSÃO FINAL COMPLETA (Comic Adulto + Sophia Loren)
+# characters/nerith/comics.py — VERSÃO FINAL COM DARK FANTASY
 # ============================================================
 from __future__ import annotations
 import os, io
@@ -9,7 +9,7 @@ from huggingface_hub import InferenceClient
 import streamlit as st
 
 # ============================================================
-# PROVIDERS (Modelos disponíveis)
+# PROVIDERS — TODOS OS MODELOS DA NERITH
 # ============================================================
 PROVIDERS: Dict[str, Dict[str, str]] = {
     # FLUX nativo HF
@@ -20,7 +20,7 @@ PROVIDERS: Dict[str, Dict[str, str]] = {
         "size": "1024x1024",
     },
 
-    # SDXL via Nscale (GPU remota HF)
+    # SDXL base via Nscale
     "HF • SDXL (nscale)": {
         "provider": "huggingface-nscale",
         "model": "stabilityai/stable-diffusion-xl-base-1.0",
@@ -28,7 +28,7 @@ PROVIDERS: Dict[str, Dict[str, str]] = {
         "size": "1152x896",
     },
 
-    # SDXL Refiner (opcional)
+    # SDXL Refiner
     "HF • SDXL (nscale + Refiner)": {
         "provider": "huggingface-nscale",
         "model": "stabilityai/stable-diffusion-xl-refiner-1.0",
@@ -37,10 +37,18 @@ PROVIDERS: Dict[str, Dict[str, str]] = {
         "size": "1152x896",
     },
 
-    # Fal
+    # FAL: Stable Image Ultra
     "FAL • Stable Image Ultra": {
         "provider": "fal-ai",
         "model": "stabilityai/stable-image-ultra",
+        "sdxl": False,
+        "size": "1024x1024",
+    },
+
+    # ✅ NOVO — Dark Fantasy Flux: HQ adulto / estilo sombrio
+    "FAL • Dark Fantasy Flux": {
+        "provider": "fal-ai",
+        "model": "nerijs/dark-fantasy-illustration-flux",
         "sdxl": False,
         "size": "1024x1024",
     },
@@ -50,15 +58,15 @@ PROVIDERS: Dict[str, Dict[str, str]] = {
 # SDXL OFFICIAL RESOLUTIONS
 # ============================================================
 SDXL_SIZES = {
-    "1024×1024": (1024, 1024),
     "1152×896 (horizontal)": (1152, 896),
     "896×1152 (vertical)": (896, 1152),
     "1216×832 (wide)": (1216, 832),
     "832×1216 (tall)": (832, 1216),
+    "1024×1024": (1024, 1024),
 }
 
 # ============================================================
-# TOKENS / CLIENTS
+# CLIENTES HF / NSCALE / FAL
 # ============================================================
 def _get_hf_token() -> str:
     tok = (
@@ -79,125 +87,155 @@ def _get_client(provider: Optional[str]) -> InferenceClient:
     if pv in ("huggingface-nscale", "nscale", "hf-nscale"):
         return InferenceClient(provider="nscale", api_key=token)
 
+    # fal-ai, huggingface normal — funciona automaticamente
     return InferenceClient(token=token)
 
 # ============================================================
-# PROMPTS (blocos reutilizáveis)
+# PROMPTS
 # ============================================================
 MAX_PROMPT_LEN = 1800
-def _clean(s: str) -> str:
-    return " ".join((s or "").split())
-def _limit(s: str) -> str:
-    return _clean(s)[:MAX_PROMPT_LEN]
+def _clean(s: str) -> str: return " ".join((s or "").split())
+def _limit(s: str): return _clean(s)[:MAX_PROMPT_LEN]
 
-# Anatomia / corpo
-ANATOMY_NEG = (
-    "bad anatomy, deformed, mutated, malformed, dislocated, twisted torso, "
-    "broken spine, fused fingers, missing fingers, extra fingers, extra limbs"
-)
+# BLOCO FACIAL — Sophia Loren
 FACE_POS = (
-    "face like a young Sophia Loren, sultry almond-shaped eyes, defined cheekbones, "
-    "soft cat-eye eyeliner, full lips, confident mature allure"
+    "face like a young Sophia Loren, almond-shaped sultry eyes, "
+    "defined cheekbones, soft cat-eye eyeliner, full lips, "
+    "mature confident allure, subtle intensity"
 )
-BODY_POS = "hourglass figure, soft muscle tone, firm natural breasts, narrow waist, round glutes"
-BODY_NEG = "balloon breasts, implants, disfigured body, warped waist, mutilated skin"
 
-# Sensualidade
-SENSUAL_POS = (
-    "soft cinematic shadows, light caressing skin, subtle sensual posture, "
-    "moody highlights, silhouette emphasis, implicit sensuality"
+# Corpo
+BODY_POS = (
+    "hourglass figure, soft athletic tone, firm natural breasts, "
+    "narrow waist, defined abdomen, high-set rounded glutes"
 )
-SENSUAL_NEG = "text, watermark, censored, lowres, jpeg artifacts"
+
+# Anatomia negativa
+ANATOMY_NEG = (
+    "bad anatomy, deformed body, mutated body, malformed limbs, "
+    "warped body, twisted spine, extra limbs, fused fingers, missing fingers"
+)
+
+BODY_NEG = (
+    "balloon breasts, implants, sagging breasts, torpedo breasts, "
+    "plastic body, barbie proportions, distorted waist"
+)
+
+# Sensualidade & SFW
+SENSUAL_POS = (
+    "subtle sensual posture, cinematic shadows caressing the skin, "
+    "dramatic rimlight, implicit sensuality"
+)
+SENSUAL_NEG = "explicit, pornographic, nude, censored, text, watermark"
 
 # Cauda biomecânica
 TAIL_POS = (
-    "a sleek biomechanical blade-tail fused to spine, silver metal, blue glowing energy vein"
+    "a single biomechanical blade-tail fused to the spine, silver metal, "
+    "sharp edges, blue glowing energy vein"
 )
 TAIL_NEG = "furry tail, fleshy tail, animal tail, penis tail, detached tail"
 
-# Anti-boneca / textura de HQ
+# Anti-boneca
 DOLL_NEG = (
-    "doll, plastic, toy-like, mannequin, wax figure, uncanny valley, "
-    "over-smooth skin, airbrushed skin, CGI look, glossy skin, rubber skin"
-)
-INK_LINE_POS = (
-    "inked line art, hand-inked contours, clean bold outlines, cel shading, "
-    "subtle paper grain, halftone texture, fine cross-hatching, film grain"
-)
-COMIC_ADULT_STYLE = (
-    "adult comic illustration, bande dessinee vibe, dramatic chiaroscuro, "
-    "rich blacks, controlled color palette"
+    "doll, barbie, plastic skin, CGI skin, beauty-filter, "
+    "uncanny-valley, over-smooth skin, poreless skin, wax figure"
 )
 
-DEFAULT_NEG = f"{ANATOMY_NEG}, {BODY_NEG}, {TAIL_NEG}, {DOLL_NEG}, watermark, text, signature, logo"
+# Textura HQ
+INK_LINE_POS = (
+    "inked line art, strong outlines, cel shading, halftone dots, "
+    "cross-hatching, textured paper grain, gritty shadows"
+)
+
+# Estilo Comic Adulto
+COMIC_ADULT = (
+    "adult comic illustration, dark mature tone, dramatic chiaroscuro, "
+    "rich blacks, heavy shadows, limited palette"
+)
+
+DEFAULT_NEG = f"{ANATOMY_NEG}, {BODY_NEG}, {TAIL_NEG}, {DOLL_NEG}, watermark, text, signature"
 
 # ============================================================
-# PRESETS (Comic Adulto + Sophia Loren)
+# PRESETS — INCLUINDO DARK FANTASY
 # ============================================================
 PRESETS: Dict[str, Dict[str, str]] = {
-    # FLUX: HQ nítido
+    # FLUX HQ clássico
     "FLUX • Nerith HQ": {
         "positive": (
-            f"{FACE_POS}, metallic silver hair, piercing green eyes, "
-            "dark-elf, luminous blue-slate skin, "
-            f"{BODY_POS}, {INK_LINE_POS}, elegant, regal posture"
+            f"{FACE_POS}, metallic silver hair, green eyes, dark-elf, "
+            f"{BODY_POS}, blue-slate skin, {INK_LINE_POS}, elegant posture"
         ),
-        "negative": f"{DEFAULT_NEG}",
-        "style": "masterpiece comic art, sharp edges, neon rimlight, high contrast",
+        "negative": DEFAULT_NEG,
+        "style": "masterpiece comic art, neon rimlight, high contrast",
     },
 
-    # SDXL — Quadrinho Adulto (principal)
+    # SDXL Quadrinho Adulto
     "SDXL • Nerith Comic (Adulto)": {
         "positive": (
-            f"{FACE_POS}, metallic silver hair with subtle speculars, deep green eyes, "
-            "dark-elf warrior, matte blue-slate skin, "
-            f"{BODY_POS}, {INK_LINE_POS}, confident mature expression"
+            f"{FACE_POS}, metallic silver hair, deep green eyes, "
+            f"{BODY_POS}, matte blue-slate skin, {INK_LINE_POS}, "
+            "mature intensity, warrior presence"
         ),
-        "negative": f"{DEFAULT_NEG}",
-        "style": f"{COMIC_ADULT_STYLE}",
+        "negative": DEFAULT_NEG,
+        "style": f"{COMIC_ADULT}",
     },
 
-    # SDXL — Noir (dramático)
+    # SDXL Noir
     "SDXL • Nerith Noir Comic": {
         "positive": (
-            f"{FACE_POS}, silver hair, jade green eyes, "
-            "dark-elf, matte blue-slate skin, "
-            f"{BODY_POS}, {INK_LINE_POS}, dynamic pose, moody atmosphere"
+            f"{FACE_POS}, jade eyes, silver hair, "
+            f"{BODY_POS}, {INK_LINE_POS}, rain reflections, moody atmosphere"
         ),
-        "negative": f"{DEFAULT_NEG}",
-        "style": f"{COMIC_ADULT_STYLE}, deep contrast, moody lighting, rain reflections",
+        "negative": DEFAULT_NEG,
+        "style": f"{COMIC_ADULT}, noir tone, cinematic shadows",
+    },
+
+    # ✅ NOVO — DARK FANTASY (Flux / Fal-ai)
+    "FLUX • Nerith Dark Fantasy": {
+        "positive": (
+            f"{FACE_POS}, metallic silver hair flowing dramatically, "
+            "deep green eyes glowing faintly, blue-slate dark-elf skin, "
+            f"{BODY_POS}, {INK_LINE_POS}, "
+            "dark fantasy aura, arcane energy, dramatic heavy shadows"
+        ),
+        "negative": DEFAULT_NEG,
+        "style": (
+            "dark fantasy illustration, heavy ink, deep shadows, "
+            "misty atmosphere, gothic mood, dramatic highlights"
+        ),
     },
 }
 
-def build_prompts(preset, nsfw_on, framing, angle, pose, env):
-    base_pos = preset["positive"]
-    base_neg = preset["negative"]
+# ============================================================
+# BUILDER DE PROMPTS
+# ============================================================
+def build_prompts(preset, nsfw, framing, angle, pose, env):
+    pos = preset["positive"]
+    neg = preset["negative"]
     style = preset["style"]
 
-    final_pos = base_pos
+    # Cauda só fora de close-up
     if "close-up" not in framing:
-        final_pos += ", " + TAIL_POS
+        pos += ", " + TAIL_POS
 
-    final_pos += f", {framing}, {angle}"
-    if pose:
-        final_pos += f", {pose}"
-    if env:
-        final_pos += f", scene: {env}"
+    pos += f", {framing}, {angle}"
 
-    if nsfw_on:
+    if pose: pos += f", {pose}"
+    if env: pos += f", scene: {env}"
+
+    if nsfw:
         final_style = style
-        final_neg = f"{base_neg}, {SENSUAL_NEG}"
+        final_neg = f"{neg}, {SENSUAL_NEG}"
     else:
-        final_style = f"{COMIC_ADULT_STYLE}, cinematic, elegant, dramatic lighting"
-        final_neg = f"{base_neg}, {SENSUAL_POS}"
+        final_style = f"{style}, soft cinematic elegance"
+        final_neg = f"{neg}, {SENSUAL_POS}"
 
-    # Garantir textura de HQ para quebrar look plástico
-    prompt = _limit(f"{final_pos}, style: {final_style}, {INK_LINE_POS}")
+    prompt = _limit(f"{pos}, style: {final_style}, {INK_LINE_POS}")
     negative = _limit(final_neg)
     return prompt, negative
 
 # ============================================================
-# UI MAIN BUTTON
+# UI PRINCIPAL
 # ============================================================
 def render_comic_button(
     get_history_docs_fn: Callable[[], List[Dict]],
@@ -213,28 +251,29 @@ def render_comic_button(
     try:
         st.markdown(f"### {title}")
 
-        # -----------------------------
-        # Modelo + Preset
-        # -----------------------------
+        # -------------------------
+        # Modelo e Predefinição
+        # -------------------------
         c1, c2 = st.columns(2)
         prov_key = c1.selectbox("Modelo", list(PROVIDERS.keys()), index=0)
         cfg = PROVIDERS[prov_key]
 
-        # Seleção automática de preset por modelo
-        if cfg.get("sdxl"):
+        # Seleção automática
+        if prov_key == "FAL • Dark Fantasy Flux":
+            default_preset = "FLUX • Nerith Dark Fantasy"
+        elif cfg.get("sdxl"):
             default_preset = "SDXL • Nerith Comic (Adulto)"
         else:
             default_preset = "FLUX • Nerith HQ"
 
         preset_list = list(PRESETS.keys())
-        # Segurança: se preset não existir, cai para index 0
-        idx = preset_list.index(default_preset) if default_preset in preset_list else 0
+        idx = preset_list.index(default_preset)
         preset_name = c2.selectbox("Preset", preset_list, index=idx)
         preset = PRESETS[preset_name]
 
-        # -----------------------------
-        # Direção de cena
-        # -----------------------------
+        # -------------------------
+        # Direção da cena
+        # -------------------------
         st.markdown("---")
         st.subheader("Direção da Cena")
 
@@ -262,59 +301,65 @@ def render_comic_button(
         nsfw = st.toggle("Liberar sensualidade implícita", value=True)
         mad = st.toggle("🔥 Modo Automático Anti-Deformações", value=True)
 
-        # -----------------------------
-        # SDXL Sizes
-        # -----------------------------
+        # -------------------------
+        # Resolução
+        # -------------------------
         if cfg.get("sdxl"):
-            size_label = st.selectbox("📐 Resolução SDXL", list(SDXL_SIZES.keys()), index=1)
-            width, height = SDXL_SIZES[size_label]
+            sz = st.selectbox("📐 Resolução SDXL", list(SDXL_SIZES.keys()), index=0)
+            width, height = SDXL_SIZES[sz]
         else:
             width, height = map(int, cfg["size"].split("x"))
 
-        # -----------------------------
-        # Ajustes técnicos
-        # -----------------------------
+        # -------------------------
+        # Steps / Guidance
+        # -------------------------
         col_s, col_g = st.columns(2)
-        steps = col_s.slider("Steps", 20, 60, 30)
+        steps = col_s.slider("Steps", 20, 60, 32)
         guidance = col_g.slider("Guidance", 3.0, 12.0, 7.0)
 
-        # Ajuste automático MAD (afinando para HQ adulto)
+        # MAD automático
         if mad:
-            if cfg.get("sdxl"):
-                # Guidance menor reduz “plástico” no SDXL
-                guidance = 5.5
+            if prov_key == "FAL • Dark Fantasy Flux":
+                guidance = 6.3
                 steps = max(30, steps)
+            elif cfg.get("sdxl"):
+                guidance = 5.6
+                steps = max(32, steps)
             else:
-                guidance = 7.0
+                guidance = 7.2
                 steps = max(26, steps)
 
-        # Gerar
+        # -------------------------
+        # Botão
+        # -------------------------
         go = st.button("Gerar Painel 🎨", use_container_width=True)
         if not go:
             return
 
         prompt, negative = build_prompts(preset, nsfw, framing, angle, pose, env)
 
-        # Reforço extra anti-boneca no MAD
-        if mad and cfg.get("sdxl"):
+        # Anti-Barbie adicional (segurança)
+        if mad:
             negative += (
-                ", plastic doll face, beauty filter, poreless skin, hyper-smooth shader, "
-                "overprocessed, waxy highlights"
+                ", barbie-doll, plastic texture, CGI texture, over-smooth shader, "
+                "beauty-filtered skin, poreless skin"
             )
-        elif mad and not cfg.get("sdxl"):
-            negative += ", lowres edges, messy outlines, watercolor bleed"
 
         with st.expander("Prompts finais"):
             st.code(prompt)
             st.code(negative)
 
+        # -------------------------
         # Client
+        # -------------------------
         client = _get_client(cfg["provider"])
-        st.info(f"✅ Usando provider: {cfg['provider']} — modelo: {cfg['model']} ({width}×{height}, steps={steps}, guidance={guidance})")
+        st.info(f"✅ Provider: {cfg['provider']} — Modelo: {cfg['model']} ({width}×{height})")
 
-        # SDXL + Refiner
+        # -------------------------
+        # SDXL com REFINE
+        # -------------------------
         if cfg.get("refiner"):
-            with st.spinner("Etapa 1: Gerando imagem base SDXL..."):
+            with st.spinner("Etapa 1: SDXL Base..."):
                 latent = client.text_to_image(
                     prompt=prompt,
                     model="stabilityai/stable-diffusion-xl-base-1.0",
@@ -325,7 +370,7 @@ def render_comic_button(
                     guidance_scale=guidance,
                     output_type="latent",
                 )
-            with st.spinner("Etapa 2: Refinando..."):
+            with st.spinner("Etapa 2: Refiner..."):
                 img_data = client.text_to_image(
                     prompt=prompt,
                     model="stabilityai/stable-diffusion-xl-refiner-1.0",
@@ -346,7 +391,9 @@ def render_comic_button(
                     guidance_scale=guidance,
                 )
 
-        # Converter
+        # -------------------------
+        # Render final
+        # -------------------------
         img = Image.open(io.BytesIO(img_data)) if isinstance(img_data, (bytes, bytearray)) else img_data
 
         st.image(img, caption=f"Preset: {preset_name}", use_column_width=True)
