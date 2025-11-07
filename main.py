@@ -511,16 +511,21 @@ def render_assistant_bubbles(markdown_text: str) -> None:
 
     # 2) Fallback: Markdown por parágrafo e blocos de código
     # Este bloco agora é alcançado se o texto não for um JSON válido.
-    parts = re.split(r"(```[\\s\\S]*?```)", markdown_text)
+    import re, html
+    
+    parts = re.split(r"(```[\s\S]*?```)", markdown_text)  # CORREÇÃO: [\s\S] em vez de [\\s\\S]
     for part in parts:
         if part.startswith("```") and part.endswith("```"):
+            # Mantém bloco de código intacto (pode ter ```python, ```json etc.)
             st.markdown(part)
         else:
+            # Quebra por parágrafos (linhas em branco)
             paras = [p.strip() for p in re.split(r"\n\s*\n", part) if p.strip()]
             for p in paras:
-                safe = html.escape(p).replace("\n", "  
-")
+                # CORREÇÃO: evitar quebra real dentro das aspas; use <br> ou "  \\n"
+                safe = html.escape(p).replace("\n", "<br>")
                 st.markdown(f"<div class='assistant-paragraph'>{safe}</div>", unsafe_allow_html=True)
+
 
 def _user_keys_for_history(user_id: str, character_name: str) -> List[str]:
     ch = (character_name or "").strip().lower()
