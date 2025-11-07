@@ -437,13 +437,25 @@ st.session_state.setdefault("history_loaded_for", "")
 st.session_state.setdefault("_active_key", "")
 
 # ========== CONTROLES TOPO ==========
-# ===== Seletor de personagem (blindado) =====
+# ===== Seletor de personagem (sem st.stop) =====
+def _scan_character_candidates() -> list[str]:
+    found = []
+    for base in [ROOT / "characters", ROOT]:
+        if base.is_dir():
+            for p in base.iterdir():
+                if p.is_dir() and not p.name.startswith((".", "_")):
+                    if (p / "persona.py").exists() or (p / "service.py").exists():
+                        try:
+                            found.append(str(p.relative_to(ROOT)))
+                        except Exception:
+                            found.append(str(p))
+    return found
+
 c1, c2 = st.columns([2, 2])
 with c1:
     st.text_input("👤 Usuário", key="user_id", placeholder="Seu nome ou identificador")
 
 with c2:
-    # Tenta listar; se falhar, mostra diagnóstico em vez de travar a app
     try:
         names = list_characters() or []
     except Exception as e:
@@ -451,29 +463,19 @@ with c2:
         names = []
 
     if not names:
-        # Varre pastas para sugerir onde há persona.py/service.py
-        candidates = []
-        for base in [ROOT / "characters", ROOT]:
-            if base.is_dir():
-                for p in base.iterdir():
-                    if p.is_dir() and not p.name.startswith((".", "_")):
-                        if (p / "persona.py").exists() or (p / "service.py").exists():
-                            try:
-                                candidates.append(str(p.relative_to(ROOT)))
-                            except Exception:
-                                candidates.append(str(p))
-
-        st.error("Nenhum personagem encontrado.")
+        st.warning("Nenhum personagem válido encontrado (sem `persona.py`/`service.py`). "
+                   "Usando fallback para continuar a interface.")
+        # Diagnóstico não-bloqueante
+        candidates = _scan_character_candidates()
         if candidates:
-            st.info(
-                "Foram encontrados diretórios candidatos com `persona.py` ou `service.py`:\n\n- " +
-                "\n- ".join(candidates)
-            )
-        else:
-            st.info("Crie `./characters/<nome>/persona.py` (e opcionalmente `service.py`).")
-        st.stop()
+            with st.expander("Ver diretórios candidatos encontrados"):
+                st.markdown("- " + "\n- ".join(candidates))
+        # Fallback para não travar a UI
+        names = ["Mary"]
+        if "character" not in st.session_state:
+            st.session_state["character"] = "Mary"
 
-    # Coloca 'Mary' como padrão se existir (case-insensitive), senão o primeiro
+    # 'Mary' como padrão se existir (case-insensitive)
     try:
         default_idx = next((i for i, n in enumerate(names) if n.lower() == "mary"), 0)
     except Exception:
@@ -481,23 +483,20 @@ with c2:
 
     st.selectbox("🎭 Personagem", names, index=default_idx, key="character")
 
-# ===== Seletor de modelos (resiliente) =====
+# ===== Seletor de modelos (resiliente, sem st.stop) =====
 def _label_model(mid: str) -> str:
     prov = _provider_for(mid)
     tag = "" if mid in (list_models(None) or []) else " • forçado"
     return f"{prov} • {mid}{tag}"
 
-# Garante uma lista não-vazia para o select de modelos
 _effective_models = list(dict.fromkeys(all_models or []))  # dedup
 if not _effective_models:
-    # fallback: mantém o atual ou aplica um default seguro
     fallback_model = st.session_state.get("model") or "deepseek/deepseek-chat-v3-0324"
     _effective_models = [fallback_model]
 
-# Garante que o valor atual esteja presente na lista
 _current_model = st.session_state.get("model") or _effective_models[0]
 if _current_model not in _effective_models:
-    _effective_models = [ _current_model ] + [m for m in _effective_models if m != _current_model]
+    _effective_models = [_current_model] + [m for m in _effective_models if m != _current_model]
 
 _prev_model = st.session_state.get("_last_model_id", _current_model)
 
