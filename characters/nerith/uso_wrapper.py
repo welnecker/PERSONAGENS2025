@@ -4,106 +4,121 @@ import torch
 import streamlit as st
 from PIL import Image, ImageDraw
 from pathlib import Path
-from huggingface_hub import hf_hub_download
 
-# Este import agora pode falhar, e o comics.py irá tratar a ausência do wrapper.
-from inference import setup_model, generate
+# --- Importações essenciais do código do USO ---
+# [IMPORTANTE] Note como o import agora começa com "uso."
+# Isso funciona porque o requirements.txt instalou o pacote "uso".
+try:
+    from uso.flux.pipeline import USOPipeline, preprocess_ref
+    from transformers import SiglipVisionModel, SiglipImageProcessor
+except ImportError as e:
+    raise ImportError(
+        "Não foi possível importar os componentes do USO. "
+        "Certifique-se de que o pacote está instalado corretamente (via 'pip install git+https://github.com/bytedance-research/USO.git' ) "
+        f"e as dependências estão no requirements.txt. Detalhe: {e}"
+    )
 
-# --- Variáveis Globais ---
+# --- Variáveis Globais e Cache ---
 _device = "cuda" if torch.cuda.is_available() else "cpu"
 
 @st.cache_resource
-def download_and_get_paths() -> dict:
-    """
-    Baixa os checkpoints do USO do Hugging Face Hub e retorna os caminhos.
-    Usa o cache do Streamlit para baixar apenas uma vez.
-    """
-    print("USO Wrapper: Baixando checkpoints (executado apenas uma vez)...")
-    save_dir = Path("./uso_checkpoints")
-    save_dir.mkdir(exist_ok=True)
-    
-    lora_path = hf_hub_download(
-        repo_id="bytedance-research/USO",
-        filename="uso_flux_v1.0/dit_lora.safetensors",
-        local_dir=save_dir,
-        local_dir_use_symlinks=False
-    )
-    projector_path = hf_hub_download(
-        repo_id="bytedance-research/USO",
-        filename="uso_flux_v1.0/projector.safetensors",
-        local_dir=save_dir,
-        local_dir_use_symlinks=False
-    )
-    
-    print("USO Wrapper: Checkpoints baixados.")
-    return {
-        "flux_path": "black-forest-labs/FLUX.1-dev",
-        "t5_path": "google-t5/t5-v1_1-xxl",
-        "clip_path": "openai/clip-vit-large-patch14",
-        "lora_path": str(lora_path),
-        "projector_path": str(projector_path),
-    }
+def get_siglip_model():
+    """Carrega e cacheia o modelo SigLIP."""
+    try:
+        # O caminho pode ser um repo do HF ou um caminho local
+        siglip_path = os.getenv("SIGLIP_PATH", "google/siglip-so400m-patch14-384")
+        print(f"USO Wrapper: Carregando SigLIP de '{siglip_path}'...")
+        processor = SiglipImageProcessor.from_pretrained(siglip_path)
+        model = SiglipVisionModel.from_pretrained(siglip_path)
+        model.eval().to(_device)
+        print("USO Wrapper: Modelo SigLIP carregado com sucesso.")
+        return model, processor
+    except Exception as e:
+        st.error(f"Falha ao carregar o modelo SigLIP: {e}")
+        print(f"Erro detalhado ao carregar SigLIP: {e}")
+        return None, None
 
 @st.cache_resource
-def get_uso_models() -> dict:
-    """
-    Carrega e cacheia os modelos na memória usando o cache de recursos do Streamlit.
-    Isso garante que os modelos sejam carregados apenas uma vez durante a sessão do app.
-    """
-    print("USO Wrapper: Carregando modelos na memória (executado apenas uma vez)...")
-    paths = download_and_get_paths()
+def get_uso_pipeline():
+    """Carrega e cacheia o pipeline principal do USO."""
+    print("USO Wrapper: Carregando pipeline USO pela primeira vez...")
+    siglip_model, _ = get_siglip_model()
     
-    os.environ.setdefault("FLUX_DEV", paths["flux_path"])
-    os.environ.setdefault("T5", paths["t5_path"])
-    os.environ.setdefault("CLIP", paths["clip_path"])
-    os.environ.setdefault("LORA", paths["lora_path"])
-    os.environ.setdefault("PROJECTION_MODEL", paths["projector_path"])
-
-    models = setup_model(_device)
-    print("USO Wrapper: Modelos carregados e cacheados com sucesso.")
-    return models
+    # hf_download=False é crucial para garantir que ele use os caminhos locais
+    # que o diffusers encontra em seu cache ou que são definidos por variáveis de ambiente.
+    pipeline = USOPipeline(
+        model_type="flux-dev",
+        device=_device,
+        offload=False,
+        only_lora=True,
+        lora_rank=128,
+        hf_download=False, # MUITO IMPORTANTE: Evita downloads automáticos indesejados.
+    )
+    
+    if siglip_model:
+        pipeline.model.vision_encoder = siglip_model
+        
+    print("USO Wrapper: Pipeline USO carregado e cacheado com sucesso.")
+    return pipeline
 
 def generate_image(
     prompt: str,
-    negative_prompt: str,
+    negative_prompt: str, # Embora o pipeline original não use, mantemos por consistência
     style_image_path: str,
     width: int = 1024,
     height: int = 1024,
-    num_inference_steps: int = 30,
-    style_strength: float = 0.8,
+    num_inference_steps: int = 25,
+    guidance: float = 4.0,
+    seed: int = 3407,
 ) -> Image.Image:
     """
-    Função principal que gera uma imagem usando o modelo USO.
+    Função adaptada para gerar uma imagem usando o pipeline do USO.
     """
     try:
-        # 1. Obter modelos (usando cache do Streamlit)
-        models = get_uso_models()
+        # 1. Obter o pipeline e os processadores cacheados
+        pipeline = get_uso_pipeline()
+        _, siglip_processor = get_siglip_model()
 
-        # 2. Preparar os caminhos das imagens de referência
-        image_paths = ["", style_image_path]
+        if not pipeline or not siglip_processor:
+            raise RuntimeError("Pipeline USO ou processador SigLIP não puderam ser inicializados.")
 
-        # 3. Chamar a função de geração do script original do USO
-        generated_images = generate(
-            models=models,
+        # 2. Carregar e processar a imagem de estilo
+        style_image = Image.open(style_image_path).convert("RGB")
+        
+        # O pipeline do USO espera uma lista de imagens de referência.
+        # A primeira é para conteúdo (vazia no nosso caso) e a segunda para estilo.
+        ref_imgs = [None, style_image]
+
+        # 3. Preparar inputs para o SigLIP (processador de imagem de estilo)
+        with torch.no_grad():
+            siglip_inputs = [
+                siglip_processor(img, return_tensors="pt").to(_device)
+                for img in ref_imgs[1:] if isinstance(img, Image.Image)
+            ]
+
+        # 4. Chamar o pipeline com os argumentos corretos
+        print("USO Wrapper: Gerando imagem...")
+        generated_image = pipeline(
             prompt=prompt,
-            neg_prompt=negative_prompt,
-            image_paths=image_paths,
             width=width,
             height=height,
-            num_inference_steps=num_inference_steps,
-            style_strength=style_strength,
-            device=_device,
+            guidance=guidance,
+            num_steps=num_inference_steps,
+            seed=seed,
+            ref_imgs=[], # A referência de conteúdo não é usada para transferência de estilo
+            pe="d", # Valor padrão do script original
+            siglip_inputs=siglip_inputs,
         )
+        print("USO Wrapper: Imagem gerada com sucesso.")
 
-        if not generated_images:
-            raise RuntimeError("A geração com USO não retornou nenhuma imagem.")
-
-        return generated_images[0]
+        return generated_image
 
     except Exception as e:
-        print(f"Erro no wrapper do USO: {e}")
-        # Retorna uma imagem de erro para feedback visual no app
-        error_img = Image.new('RGB', (512, 512), color='red')
+        st.error(f"Erro durante a geração com USO: {e}")
+        print(f"Erro detalhado no wrapper do USO: {e}")
+        # Retorna uma imagem de erro para feedback visual
+        error_img = Image.new('RGB', (512, 512), color='darkred')
         d = ImageDraw.Draw(error_img)
-        d.text((10, 10), f"USO Error:\n{e}", fill=(255, 255, 255))
+        d.text((10, 10), f"USO Wrapper Error:\n{e}", fill=(255, 255, 255))
         return error_img
+
