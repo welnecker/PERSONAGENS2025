@@ -176,6 +176,10 @@ def render_comic_button(
         # =======================
         # Geração (spinners fora do sidebar)
         # =======================
+        def _qwen_kwargs():
+            # Evita 422 no FAL-Qwen que tenta carregar LoRA default:
+            return {"loras": []} if cfg.get("qwen") else {}
+
         if cfg.get("refiner"):
             # Passo 1: SDXL Base
             with st.spinner("Etapa 1: SDXL Base..."):
@@ -187,6 +191,7 @@ def render_comic_button(
                     height=height,
                     num_inference_steps=steps,
                     guidance_scale=guidance,
+                    **_qwen_kwargs(),
                 )
             # Passo 2: Refiner
             with st.spinner("Etapa 2: Refiner..."):
@@ -197,6 +202,7 @@ def render_comic_button(
                     image=base_img,
                     num_inference_steps=steps,
                     guidance_scale=guidance,
+                    **_qwen_kwargs(),
                 )
         else:
             with st.spinner("Gerando painel..."):
@@ -208,6 +214,7 @@ def render_comic_button(
                     height=height,
                     num_inference_steps=steps,
                     guidance_scale=guidance,
+                    **_qwen_kwargs(),
                 )
 
         # Render
