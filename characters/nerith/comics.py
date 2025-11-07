@@ -326,25 +326,28 @@ def render_comic_button(
 
         # Defaults sensatos por modelo
         if cfg.get("lightning"):
-            # Lightning é distilled: poucos steps e guidance baixo
+            # SDXL-Lightning (fal-ai) exige guidance ≤ 2.0 e funciona com poucos steps
             steps_default = 8
-            guidance_default = 3.0
+            guidance_default = 1.5
+            steps = col_s.slider("Steps", 4, 24, steps_default)
+            guidance = col_g.slider("Guidance", 0.0, 2.0, guidance_default)
         elif cfg.get("sdxl"):
             steps_default = 32
             guidance_default = 7.0
+            steps = col_s.slider("Steps", 20, 60, steps_default)
+            guidance = col_g.slider("Guidance", 2.0, 12.0, guidance_default)
         else:
             steps_default = 30
             guidance_default = 7.0
-
-        steps = col_s.slider("Steps", 2, 60, steps_default)
-        guidance = col_g.slider("Guidance", 1.0, 12.0, guidance_default)
+            steps = col_s.slider("Steps", 20, 60, steps_default)
+            guidance = col_g.slider("Guidance", 2.0, 12.0, guidance_default)
 
         # MAD automático
         if mad:
             if cfg.get("lightning"):
-                # afinado para Lightning (rápido, menos artefatos)
-                guidance = 2.5
-                steps = max(6, steps)   # 6–8 costuma ser ótimo
+                # Lightning: guidance ≤ 2.0, poucos steps
+                guidance = min(1.8, guidance)
+                steps = max(6, min(12, steps))  # 6–12 é o sweet spot
             elif prov_key == "FAL • Dark Fantasy Flux":
                 guidance = 6.3
                 steps = max(30, steps)
@@ -354,6 +357,7 @@ def render_comic_button(
             else:
                 guidance = 7.2
                 steps = max(26, steps)
+
 
         # -------------------------
         # Botão
@@ -406,6 +410,10 @@ def render_comic_button(
                     guidance_scale=guidance,
                 )
         else:
+                        # Garantia final para Lightning (evita 422)
+            if cfg.get("lightning"):
+                guidance = min(guidance, 2.0)
+
             with st.spinner("Gerando painel..."):
                 img_data = client.text_to_image(
                     prompt=prompt,
