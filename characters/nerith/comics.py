@@ -1,5 +1,5 @@
 # ============================================================
-# characters/nerith/comics.py — VERSÃO FINAL COM DARK FANTASY
+# characters/nerith/comics.py — VERSÃO FINAL COM DARK FANTASY + SDXL LIGHTNING
 # ============================================================
 from __future__ import annotations
 import os, io
@@ -45,11 +45,20 @@ PROVIDERS: Dict[str, Dict[str, str]] = {
         "size": "1024x1024",
     },
 
-    # ✅ NOVO — Dark Fantasy Flux: HQ adulto / estilo sombrio
+    # FAL: Dark Fantasy Flux (novo)
     "FAL • Dark Fantasy Flux": {
         "provider": "fal-ai",
         "model": "nerijs/dark-fantasy-illustration-flux",
         "sdxl": False,
+        "size": "1024x1024",
+    },
+
+    # ✅ NOVO: SDXL-Lightning (fal-ai) — SDXL distilled para poucos steps
+    "FAL • SDXL Lightning": {
+        "provider": "fal-ai",
+        "model": "ByteDance/SDXL-Lightning",
+        "sdxl": True,         # continua sendo SDXL, só que lightning/distilled
+        "lightning": True,    # flag para ajustes de steps/guidance
         "size": "1024x1024",
     },
 }
@@ -190,7 +199,7 @@ PRESETS: Dict[str, Dict[str, str]] = {
         "style": f"{COMIC_ADULT}, noir tone, cinematic shadows",
     },
 
-    # ✅ NOVO — DARK FANTASY (Flux / Fal-ai)
+    # Dark Fantasy (Flux / Fal-ai)
     "FLUX • Nerith Dark Fantasy": {
         "positive": (
             f"{FACE_POS}, metallic silver hair flowing dramatically, "
@@ -267,7 +276,7 @@ def render_comic_button(
             default_preset = "FLUX • Nerith HQ"
 
         preset_list = list(PRESETS.keys())
-        idx = preset_list.index(default_preset)
+        idx = preset_list.index(default_preset) if default_preset in preset_list else 0
         preset_name = c2.selectbox("Preset", preset_list, index=idx)
         preset = PRESETS[preset_name]
 
@@ -314,12 +323,29 @@ def render_comic_button(
         # Steps / Guidance
         # -------------------------
         col_s, col_g = st.columns(2)
-        steps = col_s.slider("Steps", 20, 60, 32)
-        guidance = col_g.slider("Guidance", 3.0, 12.0, 7.0)
+
+        # Defaults sensatos por modelo
+        if cfg.get("lightning"):
+            # Lightning é distilled: poucos steps e guidance baixo
+            steps_default = 8
+            guidance_default = 3.0
+        elif cfg.get("sdxl"):
+            steps_default = 32
+            guidance_default = 7.0
+        else:
+            steps_default = 30
+            guidance_default = 7.0
+
+        steps = col_s.slider("Steps", 2, 60, steps_default)
+        guidance = col_g.slider("Guidance", 1.0, 12.0, guidance_default)
 
         # MAD automático
         if mad:
-            if prov_key == "FAL • Dark Fantasy Flux":
+            if cfg.get("lightning"):
+                # afinado para Lightning (rápido, menos artefatos)
+                guidance = 2.5
+                steps = max(6, steps)   # 6–8 costuma ser ótimo
+            elif prov_key == "FAL • Dark Fantasy Flux":
                 guidance = 6.3
                 steps = max(30, steps)
             elif cfg.get("sdxl"):
@@ -353,7 +379,7 @@ def render_comic_button(
         # Client
         # -------------------------
         client = _get_client(cfg["provider"])
-        st.info(f"✅ Provider: {cfg['provider']} — Modelo: {cfg['model']} ({width}×{height})")
+        st.info(f"✅ Provider: {cfg['provider']} — Modelo: {cfg['model']} ({width}×{height}, steps={steps}, guidance={guidance})")
 
         # -------------------------
         # SDXL com REFINE
