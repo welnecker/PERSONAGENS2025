@@ -1,5 +1,5 @@
 # ============================================================
-# characters/nerith/comics.py — VERSÃO FINAL COMPLETA
+# characters/nerith/comics.py — VERSÃO FINAL COMPLETA (Comic Adulto + Sophia Loren)
 # ============================================================
 from __future__ import annotations
 import os, io
@@ -81,9 +81,8 @@ def _get_client(provider: Optional[str]) -> InferenceClient:
 
     return InferenceClient(token=token)
 
-
 # ============================================================
-# PROMPTS
+# PROMPTS (blocos reutilizáveis)
 # ============================================================
 MAX_PROMPT_LEN = 1800
 def _clean(s: str) -> str:
@@ -91,53 +90,84 @@ def _clean(s: str) -> str:
 def _limit(s: str) -> str:
     return _clean(s)[:MAX_PROMPT_LEN]
 
-
+# Anatomia / corpo
 ANATOMY_NEG = (
     "bad anatomy, deformed, mutated, malformed, dislocated, twisted torso, "
     "broken spine, fused fingers, missing fingers, extra fingers, extra limbs"
 )
-FACE_POS = "face like a young Sophia Loren, high cheekbones, almond-shaped deep eyes, full lips"
+FACE_POS = (
+    "face like a young Sophia Loren, sultry almond-shaped eyes, defined cheekbones, "
+    "soft cat-eye eyeliner, full lips, confident mature allure"
+)
 BODY_POS = "hourglass figure, soft muscle tone, firm natural breasts, narrow waist, round glutes"
 BODY_NEG = "balloon breasts, implants, disfigured body, warped waist, mutilated skin"
+
+# Sensualidade
 SENSUAL_POS = (
     "soft cinematic shadows, light caressing skin, subtle sensual posture, "
     "moody highlights, silhouette emphasis, implicit sensuality"
 )
 SENSUAL_NEG = "text, watermark, censored, lowres, jpeg artifacts"
+
+# Cauda biomecânica
 TAIL_POS = (
     "a sleek biomechanical blade-tail fused to spine, silver metal, blue glowing energy vein"
 )
 TAIL_NEG = "furry tail, fleshy tail, animal tail, penis tail, detached tail"
 
-DEFAULT_NEG = f"{ANATOMY_NEG}, {BODY_NEG}, {TAIL_NEG}"
+# Anti-boneca / textura de HQ
+DOLL_NEG = (
+    "doll, plastic, toy-like, mannequin, wax figure, uncanny valley, "
+    "over-smooth skin, airbrushed skin, CGI look, glossy skin, rubber skin"
+)
+INK_LINE_POS = (
+    "inked line art, hand-inked contours, clean bold outlines, cel shading, "
+    "subtle paper grain, halftone texture, fine cross-hatching, film grain"
+)
+COMIC_ADULT_STYLE = (
+    "adult comic illustration, bande dessinee vibe, dramatic chiaroscuro, "
+    "rich blacks, controlled color palette"
+)
+
+DEFAULT_NEG = f"{ANATOMY_NEG}, {BODY_NEG}, {TAIL_NEG}, {DOLL_NEG}, watermark, text, signature, logo"
 
 # ============================================================
-# PRESETS
+# PRESETS (Comic Adulto + Sophia Loren)
 # ============================================================
 PRESETS: Dict[str, Dict[str, str]] = {
+    # FLUX: HQ nítido
     "FLUX • Nerith HQ": {
         "positive": (
-            f"{FACE_POS}, silver hair, piercing green eyes, blue-slate skin, "
-            f"dark-elf, elegant, {BODY_POS}"
+            f"{FACE_POS}, metallic silver hair, piercing green eyes, "
+            "dark-elf, luminous blue-slate skin, "
+            f"{BODY_POS}, {INK_LINE_POS}, elegant, regal posture"
         ),
         "negative": f"{DEFAULT_NEG}",
-        "style": "ultra-detailed, flux-render, soft neon rimlight, masterpiece",
+        "style": "masterpiece comic art, sharp edges, neon rimlight, high contrast",
     },
 
-    "SDXL • Nerith Cinematic": {
+    # SDXL — Quadrinho Adulto (principal)
+    "SDXL • Nerith Comic (Adulto)": {
         "positive": (
-            f"{FACE_POS}, metallic silver hair, deep green eyes, "
-            "dark-elf warrior queen, smooth blue-slate skin, "
-            f"{BODY_POS}, elegant, regal, cinematic presence"
+            f"{FACE_POS}, metallic silver hair with subtle speculars, deep green eyes, "
+            "dark-elf warrior, matte blue-slate skin, "
+            f"{BODY_POS}, {INK_LINE_POS}, confident mature expression"
         ),
         "negative": f"{DEFAULT_NEG}",
-        "style": (
-            "sdxl-photoreal, 35mm lens, moody cinematic rimlight, "
-            "ultra-quality skin texture, volumetric lighting"
+        "style": f"{COMIC_ADULT_STYLE}",
+    },
+
+    # SDXL — Noir (dramático)
+    "SDXL • Nerith Noir Comic": {
+        "positive": (
+            f"{FACE_POS}, silver hair, jade green eyes, "
+            "dark-elf, matte blue-slate skin, "
+            f"{BODY_POS}, {INK_LINE_POS}, dynamic pose, moody atmosphere"
         ),
+        "negative": f"{DEFAULT_NEG}",
+        "style": f"{COMIC_ADULT_STYLE}, deep contrast, moody lighting, rain reflections",
     },
 }
-
 
 def build_prompts(preset, nsfw_on, framing, angle, pose, env):
     base_pos = preset["positive"]
@@ -158,13 +188,13 @@ def build_prompts(preset, nsfw_on, framing, angle, pose, env):
         final_style = style
         final_neg = f"{base_neg}, {SENSUAL_NEG}"
     else:
-        final_style = "cinematic, elegant, dramatic lighting"
+        final_style = f"{COMIC_ADULT_STYLE}, cinematic, elegant, dramatic lighting"
         final_neg = f"{base_neg}, {SENSUAL_POS}"
 
-    prompt = _limit(f"{final_pos}, style: {final_style}")
+    # Garantir textura de HQ para quebrar look plástico
+    prompt = _limit(f"{final_pos}, style: {final_style}, {INK_LINE_POS}")
     negative = _limit(final_neg)
     return prompt, negative
-
 
 # ============================================================
 # UI MAIN BUTTON
@@ -190,14 +220,15 @@ def render_comic_button(
         prov_key = c1.selectbox("Modelo", list(PROVIDERS.keys()), index=0)
         cfg = PROVIDERS[prov_key]
 
-        # Seleção automática
+        # Seleção automática de preset por modelo
         if cfg.get("sdxl"):
-            default_preset = "SDXL • Nerith Cinematic"
+            default_preset = "SDXL • Nerith Comic (Adulto)"
         else:
             default_preset = "FLUX • Nerith HQ"
 
         preset_list = list(PRESETS.keys())
-        idx = preset_list.index(default_preset)
+        # Segurança: se preset não existir, cai para index 0
+        idx = preset_list.index(default_preset) if default_preset in preset_list else 0
         preset_name = c2.selectbox("Preset", preset_list, index=idx)
         preset = PRESETS[preset_name]
 
@@ -247,14 +278,15 @@ def render_comic_button(
         steps = col_s.slider("Steps", 20, 60, 30)
         guidance = col_g.slider("Guidance", 3.0, 12.0, 7.0)
 
-        # Ajuste automático MAD
+        # Ajuste automático MAD (afinando para HQ adulto)
         if mad:
             if cfg.get("sdxl"):
-                guidance = 6.0
-                steps = 35
+                # Guidance menor reduz “plástico” no SDXL
+                guidance = 5.5
+                steps = max(30, steps)
             else:
-                guidance = 7.5
-                steps = 28
+                guidance = 7.0
+                steps = max(26, steps)
 
         # Gerar
         go = st.button("Gerar Painel 🎨", use_container_width=True)
@@ -262,14 +294,23 @@ def render_comic_button(
             return
 
         prompt, negative = build_prompts(preset, nsfw, framing, angle, pose, env)
+
+        # Reforço extra anti-boneca no MAD
+        if mad and cfg.get("sdxl"):
+            negative += (
+                ", plastic doll face, beauty filter, poreless skin, hyper-smooth shader, "
+                "overprocessed, waxy highlights"
+            )
+        elif mad and not cfg.get("sdxl"):
+            negative += ", lowres edges, messy outlines, watercolor bleed"
+
         with st.expander("Prompts finais"):
             st.code(prompt)
             st.code(negative)
 
         # Client
         client = _get_client(cfg["provider"])
-
-        st.info(f"✅ Usando provider: {cfg['provider']} — modelo: {cfg['model']}")
+        st.info(f"✅ Usando provider: {cfg['provider']} — modelo: {cfg['model']} ({width}×{height}, steps={steps}, guidance={guidance})")
 
         # SDXL + Refiner
         if cfg.get("refiner"):
