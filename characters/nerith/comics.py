@@ -9,7 +9,7 @@ import streamlit as st
 # Tenta importar o wrapper do USO e define uma flag de disponibilidade.
 # Esta abordagem é mais robusta para diferentes estruturas de projeto.
 try:
-    import uso_wrapper
+    from . import uso_wrapper
     USO_AVAILABLE = True
 except ImportError:
     USO_AVAILABLE = False
