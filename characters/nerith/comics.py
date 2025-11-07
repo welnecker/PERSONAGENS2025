@@ -1,5 +1,5 @@
 # ============================================================
-# characters/nerith/comics.py — VERSÃO FINAL COM DARK FANTASY + SDXL LIGHTNING
+# characters/nerith/comics.py — VERSÃO FINAL (Identidade Nerith + Lightning)
 # ============================================================
 from __future__ import annotations
 import os, io
@@ -28,7 +28,7 @@ PROVIDERS: Dict[str, Dict[str, str]] = {
         "size": "1152x896",
     },
 
-    # SDXL Refiner
+    # SDXL Refiner (pipeline 2 estágios)
     "HF • SDXL (nscale + Refiner)": {
         "provider": "huggingface-nscale",
         "model": "stabilityai/stable-diffusion-xl-refiner-1.0",
@@ -45,7 +45,7 @@ PROVIDERS: Dict[str, Dict[str, str]] = {
         "size": "1024x1024",
     },
 
-    # FAL: Dark Fantasy Flux (novo)
+    # FAL: Dark Fantasy Flux (estilo HQ adulto / sombrio)
     "FAL • Dark Fantasy Flux": {
         "provider": "fal-ai",
         "model": "nerijs/dark-fantasy-illustration-flux",
@@ -53,12 +53,12 @@ PROVIDERS: Dict[str, Dict[str, str]] = {
         "size": "1024x1024",
     },
 
-    # ✅ NOVO: SDXL-Lightning (fal-ai) — SDXL distilled para poucos steps
+    # ✅ NOVO: SDXL-Lightning (fal-ai) — SDXL distilled, poucos steps, guidance ≤ 2.0
     "FAL • SDXL Lightning": {
         "provider": "fal-ai",
         "model": "ByteDance/SDXL-Lightning",
-        "sdxl": True,         # continua sendo SDXL, só que lightning/distilled
-        "lightning": True,    # flag para ajustes de steps/guidance
+        "sdxl": True,
+        "lightning": True,   # flag especial para UI/MAD e clamps
         "size": "1024x1024",
     },
 }
@@ -96,21 +96,21 @@ def _get_client(provider: Optional[str]) -> InferenceClient:
     if pv in ("huggingface-nscale", "nscale", "hf-nscale"):
         return InferenceClient(provider="nscale", api_key=token)
 
-    # fal-ai, huggingface normal — funciona automaticamente
+    # fal-ai e huggingface normal — funciona automaticamente
     return InferenceClient(token=token)
 
 # ============================================================
-# PROMPTS
+# PROMPTS (SEM REFERÊNCIA A CELEBRIDADES)
 # ============================================================
 MAX_PROMPT_LEN = 1800
 def _clean(s: str) -> str: return " ".join((s or "").split())
 def _limit(s: str): return _clean(s)[:MAX_PROMPT_LEN]
 
-# BLOCO FACIAL — Sophia Loren
+# Traços faciais próprios da Nerith (sem citar pessoas reais)
 FACE_POS = (
-    "face like a young Sophia Loren, almond-shaped sultry eyes, "
+    "striking mediterranean features, almond-shaped captivating eyes, "
     "defined cheekbones, soft cat-eye eyeliner, full lips, "
-    "mature confident allure, subtle intensity"
+    "mature confident allure, intense gaze"
 )
 
 # Corpo
@@ -128,6 +128,13 @@ ANATOMY_NEG = (
 BODY_NEG = (
     "balloon breasts, implants, sagging breasts, torpedo breasts, "
     "plastic body, barbie proportions, distorted waist"
+)
+
+# ✋ Bloqueio explícito de celebridades / likeness
+CELEB_NEG = (
+    "celebrity, celebrity lookalike, look alike, famous actress, "
+    "face recognition match, portrait of a celebrity, sophia loren, monica bellucci, "
+    "penelope cruz, gal gadot, angelina jolie"
 )
 
 # Sensualidade & SFW
@@ -162,17 +169,24 @@ COMIC_ADULT = (
     "rich blacks, heavy shadows, limited palette"
 )
 
-DEFAULT_NEG = f"{ANATOMY_NEG}, {BODY_NEG}, {TAIL_NEG}, {DOLL_NEG}, watermark, text, signature"
+# Negativo padrão com anti-celebridade
+DEFAULT_NEG = f"{ANATOMY_NEG}, {BODY_NEG}, {TAIL_NEG}, {DOLL_NEG}, {CELEB_NEG}, watermark, text, signature"
 
 # ============================================================
-# PRESETS — INCLUINDO DARK FANTASY
+# PRESETS — com âncora de identidade da Nerith
 # ============================================================
+IDENTITY_ANCHOR = (
+    "Nerith, original character, female dark-elf (drow) with blue-slate matte skin, "
+    "long metallic silver hair, vivid emerald-green eyes, elongated pointed elven ears (no horns), "
+    "solo subject, elegant yet fierce presence"
+)
+
 PRESETS: Dict[str, Dict[str, str]] = {
     # FLUX HQ clássico
     "FLUX • Nerith HQ": {
         "positive": (
-            f"{FACE_POS}, metallic silver hair, green eyes, dark-elf, "
-            f"{BODY_POS}, blue-slate skin, {INK_LINE_POS}, elegant posture"
+            f"{IDENTITY_ANCHOR}, {FACE_POS}, {BODY_POS}, {INK_LINE_POS}, "
+            "subtle arcane glow accents"
         ),
         "negative": DEFAULT_NEG,
         "style": "masterpiece comic art, neon rimlight, high contrast",
@@ -181,8 +195,7 @@ PRESETS: Dict[str, Dict[str, str]] = {
     # SDXL Quadrinho Adulto
     "SDXL • Nerith Comic (Adulto)": {
         "positive": (
-            f"{FACE_POS}, metallic silver hair, deep green eyes, "
-            f"{BODY_POS}, matte blue-slate skin, {INK_LINE_POS}, "
+            f"{IDENTITY_ANCHOR}, {FACE_POS}, {BODY_POS}, {INK_LINE_POS}, "
             "mature intensity, warrior presence"
         ),
         "negative": DEFAULT_NEG,
@@ -192,8 +205,8 @@ PRESETS: Dict[str, Dict[str, str]] = {
     # SDXL Noir
     "SDXL • Nerith Noir Comic": {
         "positive": (
-            f"{FACE_POS}, jade eyes, silver hair, "
-            f"{BODY_POS}, {INK_LINE_POS}, rain reflections, moody atmosphere"
+            f"{IDENTITY_ANCHOR}, {FACE_POS}, {BODY_POS}, {INK_LINE_POS}, "
+            "rain reflections, moody atmosphere"
         ),
         "negative": DEFAULT_NEG,
         "style": f"{COMIC_ADULT}, noir tone, cinematic shadows",
@@ -202,9 +215,7 @@ PRESETS: Dict[str, Dict[str, str]] = {
     # Dark Fantasy (Flux / Fal-ai)
     "FLUX • Nerith Dark Fantasy": {
         "positive": (
-            f"{FACE_POS}, metallic silver hair flowing dramatically, "
-            "deep green eyes glowing faintly, blue-slate dark-elf skin, "
-            f"{BODY_POS}, {INK_LINE_POS}, "
+            f"{IDENTITY_ANCHOR}, {FACE_POS}, {BODY_POS}, {INK_LINE_POS}, "
             "dark fantasy aura, arcane energy, dramatic heavy shadows"
         ),
         "negative": DEFAULT_NEG,
@@ -219,7 +230,8 @@ PRESETS: Dict[str, Dict[str, str]] = {
 # BUILDER DE PROMPTS
 # ============================================================
 def build_prompts(preset, nsfw, framing, angle, pose, env):
-    pos = preset["positive"]
+    # Força nome da personagem no começo (alguns modelos ponderam mais o prefixo)
+    pos = "Nerith; " + preset["positive"]
     neg = preset["negative"]
     style = preset["style"]
 
@@ -228,7 +240,6 @@ def build_prompts(preset, nsfw, framing, angle, pose, env):
         pos += ", " + TAIL_POS
 
     pos += f", {framing}, {angle}"
-
     if pose: pos += f", {pose}"
     if env: pos += f", scene: {env}"
 
@@ -239,7 +250,7 @@ def build_prompts(preset, nsfw, framing, angle, pose, env):
         final_style = f"{style}, soft cinematic elegance"
         final_neg = f"{neg}, {SENSUAL_POS}"
 
-    prompt = _limit(f"{pos}, style: {final_style}, {INK_LINE_POS}")
+    prompt = _limit(f"{pos}, style: {final_style}, {INK_LINE_POS}, original character, no celebrity likeness")
     negative = _limit(final_neg)
     return prompt, negative
 
@@ -267,7 +278,7 @@ def render_comic_button(
         prov_key = c1.selectbox("Modelo", list(PROVIDERS.keys()), index=0)
         cfg = PROVIDERS[prov_key]
 
-        # Seleção automática
+        # Seleção automática de preset
         if prov_key == "FAL • Dark Fantasy Flux":
             default_preset = "FLUX • Nerith Dark Fantasy"
         elif cfg.get("sdxl"):
@@ -320,13 +331,11 @@ def render_comic_button(
             width, height = map(int, cfg["size"].split("x"))
 
         # -------------------------
-        # Steps / Guidance
+        # Steps / Guidance (com faixas por modelo)
         # -------------------------
         col_s, col_g = st.columns(2)
-
-        # Defaults sensatos por modelo
         if cfg.get("lightning"):
-            # SDXL-Lightning (fal-ai) exige guidance ≤ 2.0 e funciona com poucos steps
+            # Lightning exige guidance ≤ 2.0 e poucos steps
             steps_default = 8
             guidance_default = 1.5
             steps = col_s.slider("Steps", 4, 24, steps_default)
@@ -342,12 +351,12 @@ def render_comic_button(
             steps = col_s.slider("Steps", 20, 60, steps_default)
             guidance = col_g.slider("Guidance", 2.0, 12.0, guidance_default)
 
-        # MAD automático
+        # MAD automático (tuning por modelo)
         if mad:
             if cfg.get("lightning"):
-                # Lightning: guidance ≤ 2.0, poucos steps
+                # Lightning: guidance ≤ 2.0, 6–12 steps costuma ser ideal
                 guidance = min(1.8, guidance)
-                steps = max(6, min(12, steps))  # 6–12 é o sweet spot
+                steps = max(6, min(12, steps))
             elif prov_key == "FAL • Dark Fantasy Flux":
                 guidance = 6.3
                 steps = max(30, steps)
@@ -357,7 +366,6 @@ def render_comic_button(
             else:
                 guidance = 7.2
                 steps = max(26, steps)
-
 
         # -------------------------
         # Botão
@@ -385,8 +393,12 @@ def render_comic_button(
         client = _get_client(cfg["provider"])
         st.info(f"✅ Provider: {cfg['provider']} — Modelo: {cfg['model']} ({width}×{height}, steps={steps}, guidance={guidance})")
 
+        # Clamp final para Lightning (evita 422 do backend)
+        if cfg.get("lightning"):
+            guidance = min(guidance, 2.0)
+
         # -------------------------
-        # SDXL com REFINE
+        # SDXL com REFINE (2 etapas) ou geração simples
         # -------------------------
         if cfg.get("refiner"):
             with st.spinner("Etapa 1: SDXL Base..."):
@@ -410,10 +422,6 @@ def render_comic_button(
                     guidance_scale=guidance,
                 )
         else:
-                        # Garantia final para Lightning (evita 422)
-            if cfg.get("lightning"):
-                guidance = min(guidance, 2.0)
-
             with st.spinner("Gerando painel..."):
                 img_data = client.text_to_image(
                     prompt=prompt,
