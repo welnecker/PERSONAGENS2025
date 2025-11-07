@@ -1,10 +1,9 @@
-# Instala o pacote USO diretamente do GitHub
-git+https://github.com/bytedance-research/USO.git
+# Instala o pacote USO diretamente do repositório correto no GitHub
+git+https://github.com/bytedance/USO.git
 
 # Dependências do modelo USO e do seu projeto
 streamlit
 pandas
-numpy
 diffusers==0.29.0.dev0
 transformers>=4.38.2
 accelerate>=0.28.0
