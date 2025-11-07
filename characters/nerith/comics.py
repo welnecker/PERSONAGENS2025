@@ -17,7 +17,7 @@ def render_comic_button(
     ui=None,
     key_prefix: str = ""
 ) -> None:
-    ui = ui or st  # aceita injeção de container externo
+    ui = ui or st  # aceita injeção de container externo (ex.: st.sidebar)
     key_prefix = (key_prefix or "nerith_comics").replace(" ", "_")
 
     try:
@@ -40,7 +40,7 @@ def render_comic_button(
         )
         cfg = PROVIDERS.get(prov_key, {})
 
-        # Seleção automática de preset coerente com o provider escolhido
+        # Seleção automática de preset coerente com o provider
         if prov_key == "FAL • Dark Fantasy Flux":
             default_preset = "FLUX • Nerith Dark Fantasy"
         elif cfg.get("qwen"):
@@ -169,12 +169,16 @@ def render_comic_button(
         client = get_client(str(cfg.get("provider", "huggingface")))
         ui.info(f"✅ Provider: {cfg.get('provider')} — Modelo: {cfg.get('model')} ({width}×{height}, steps={steps}, guidance={guidance})")
 
+        # Clamp final para Lightning (evita 422)
         if cfg.get("lightning"):
             guidance = min(guidance, 2.0)
 
-        # Geração
+        # =======================
+        # Geração (spinners fora do sidebar)
+        # =======================
         if cfg.get("refiner"):
-            with ui.spinner("Etapa 1: SDXL Base..."):
+            # Passo 1: SDXL Base
+            with st.spinner("Etapa 1: SDXL Base..."):
                 base_img = client.text_to_image(
                     prompt=prompt,
                     model="stabilityai/stable-diffusion-xl-base-1.0",
@@ -184,7 +188,8 @@ def render_comic_button(
                     num_inference_steps=steps,
                     guidance_scale=guidance,
                 )
-            with ui.spinner("Etapa 2: Refiner..."):
+            # Passo 2: Refiner
+            with st.spinner("Etapa 2: Refiner..."):
                 img_data = client.text_to_image(
                     prompt=prompt,
                     model="stabilityai/stable-diffusion-xl-refiner-1.0",
@@ -194,7 +199,7 @@ def render_comic_button(
                     guidance_scale=guidance,
                 )
         else:
-            with ui.spinner("Gerando painel..."):
+            with st.spinner("Gerando painel..."):
                 img_data = client.text_to_image(
                     prompt=prompt,
                     model=str(cfg.get("model")),
@@ -221,7 +226,6 @@ def render_comic_button(
 
     except Exception as e:
         ui.error(f"Erro: {e}")
-        # Mostra stack trace dentro do mesmo container
         try:
             import traceback
             ui.code("".join(traceback.format_exc()))
