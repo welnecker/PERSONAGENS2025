@@ -198,14 +198,35 @@ PRESETS: Dict[str, Dict[str, str]] = {
 
 def qwen_prompt_fix(prompt: str) -> str:
     """
-    Ajuste leve para Qwen: remove duplicatas óbvias e suaviza termos repetidos.
+    Ajuste leve para Qwen: remove duplicatas óbvias de alguns termos estéticos,
+    normaliza vírgulas/espaços e evita inline flags inválidos no regex.
     """
-    p = prompt
-    # remova duplicatas comuns
-    p = re.sub(r"\b(inked line art, )+(?i)", "inked line art, ", p)
-    p = re.sub(r"\b(strong outlines, )+(?i)", "strong outlines, ", p)
-    p = re.sub(r"\s*,\s*,\s*", ", ", p)
-    p = re.sub(r"\s+", " ", p).strip(" ,")
+    p = str(prompt or "")
+
+    def dedupe_phrase(text: str, phrase: str) -> str:
+        # colapsa repetições do tipo "phrase, phrase, phrase," para "phrase, "
+        # case-insensitive, com vírgulas/espacos entre ocorrências
+        pat = re.compile(rf"(?:\b{re.escape(phrase)}\b\s*,\s*)+", flags=re.IGNORECASE)
+        return pat.sub(f"{phrase}, ", text)
+
+    # Frases que costumam se repetir
+    phrases = [
+        "inked line art",
+        "strong outlines",
+        "cel shading",
+        "halftone dots",
+        "cross-hatching",
+        "textured paper grain",
+        "gritty shadows",
+    ]
+    for ph in phrases:
+        p = dedupe_phrase(p, ph)
+
+    # Remover vírgulas duplicadas e espaços excessivos
+    p = re.sub(r"\s*,\s*,\s*", ", ", p)     # vírgulas repetidas
+    p = re.sub(r"\s{2,}", " ", p)           # múltiplos espaços
+    p = p.strip(" ,")
+
     return p
 
 def build_prompts(preset: Dict[str, str], nsfw_on: bool, framing: str, angle: str, pose: str, env: str) -> Tuple[str, str]:
