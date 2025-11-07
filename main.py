@@ -17,16 +17,6 @@ from datetime import datetime
 import html
 
 # ========== BOOT (indexes/paths) ==========
-# Adiciona o repositório do USO ao path do sistema para que possa ser importado
-# Esta é a solução para o erro de instalação do git+https
-try:
-    # O caminho relativo funciona porque main.py está na raiz do projeto
-    libs_path = os.path.abspath("./libs/USO" )
-    if os.path.isdir(libs_path) and libs_path not in sys.path:
-        sys.path.insert(0, libs_path)
-except Exception:
-    pass # Ignora se a pasta não existir
-
 try:
     from core.memoria_longa import ensure_indexes
     ensure_indexes()
@@ -201,68 +191,12 @@ def _safe_error(msg: str, exc: Exception | None = None):
         else:
             st.error(msg)
 
-# 1) Tenta o registry oficial; se falhar, liga o fallback dinâmico
 try:
     from characters.registry import get_service, list_characters
 except Exception as e:
-    _safe_error("Falha ao importar `characters.registry`. Ativando fallback dinâmico.", e)
+    _safe_error("Falha ao importar `characters.registry`.", e)
+    st.stop()
 
-    import importlib
-    from types import ModuleType
-
-    def _candidate_dirs():
-        """
-        Varre candidatos em ./characters/* e (modo legado) ./<personagem>/*.
-        Considera personagem se encontrar persona.py ou service.py.
-        """
-        bases = [ROOT / "characters", ROOT]
-        vistos = set()
-        for base in bases:
-            if not base.is_dir():
-                continue
-            for p in base.iterdir():
-                if not p.is_dir():
-                    continue
-                name = (p.name or "").strip()
-                if not name or name.startswith(("_", ".")):
-                    continue
-                if (p / "persona.py").exists() or (p / "service.py").exists():
-                    if name not in vistos:
-                        vistos.add(name)
-                        yield name, p
-
-    def list_characters() -> list[str]:
-        chars = [name for name, _ in _candidate_dirs()]
-        # ordem estável (case-insensitive) e “Mary” no topo se existir
-        chars = sorted(set(chars), key=str.lower)
-        lower = [c.lower() for c in chars]
-        if "mary" in lower:
-            # preserva capitalização da entrada original “Mary”, se houver
-            mary_name = next((c for c in chars if c.lower() == "mary"), "Mary")
-            chars = [mary_name] + [c for c in chars if c.lower() != "mary"]
-        return chars
-
-    def _import_character_module(char_name: str, module: str) -> ModuleType:
-        """
-        Importa `characters.<nome>.<module>`; se falhar, tenta `<nome>.<module>`.
-        Lança ImportError detalhado se ambas falharem.
-        """
-        c = (char_name or "").strip().lower()
-        errors = []
-        for mod in (f"characters.{c}.{module}", f"{c}.{module}"):
-            try:
-                return importlib.import_module(mod)
-            except Exception as ex:
-                errors.append((mod, ex))
-        msgs = "\n".join([f"- {m}: {type(ex).__name__}: {ex}" for m, ex in errors])
-        raise ImportError(
-            f"Não foi possível importar '{module}' do personagem '{char_name}'. Tentativas:\n{msgs}"
-        )
-
-    def get_service(char_name: str):
-        return _import_character_module(char_name, "service")
-
-# 2) Router de provedores (mantém seu fallback original)
 try:
     from core.service_router import available_providers, list_models, chat as provider_chat, route_chat_strict
 except Exception:
@@ -437,77 +371,27 @@ st.session_state.setdefault("history_loaded_for", "")
 st.session_state.setdefault("_active_key", "")
 
 # ========== CONTROLES TOPO ==========
-# ===== Seletor de personagem (sem st.stop) =====
-def _scan_character_candidates() -> list[str]:
-    found = []
-    for base in [ROOT / "characters", ROOT]:
-        if base.is_dir():
-            for p in base.iterdir():
-                if p.is_dir() and not p.name.startswith((".", "_")):
-                    if (p / "persona.py").exists() or (p / "service.py").exists():
-                        try:
-                            found.append(str(p.relative_to(ROOT)))
-                        except Exception:
-                            found.append(str(p))
-    return found
-
 c1, c2 = st.columns([2, 2])
 with c1:
     st.text_input("👤 Usuário", key="user_id", placeholder="Seu nome ou identificador")
-
 with c2:
-    try:
-        names = list_characters() or []
-    except Exception as e:
-        st.error(f"Falha ao listar personagens: {e}")
-        names = []
-
-    if not names:
-        st.warning("Nenhum personagem válido encontrado (sem `persona.py`/`service.py`). "
-                   "Usando fallback para continuar a interface.")
-        # Diagnóstico não-bloqueante
-        candidates = _scan_character_candidates()
-        if candidates:
-            with st.expander("Ver diretórios candidatos encontrados"):
-                st.markdown("- " + "\n- ".join(candidates))
-        # Fallback para não travar a UI
-        names = ["Mary"]
-        if "character" not in st.session_state:
-            st.session_state["character"] = "Mary"
-
-    # 'Mary' como padrão se existir (case-insensitive)
-    try:
-        default_idx = next((i for i, n in enumerate(names) if n.lower() == "mary"), 0)
-    except Exception:
-        default_idx = 0
-
+    names = list_characters()
+    default_idx = names.index("Mary") if "Mary" in names else 0
     st.selectbox("🎭 Personagem", names, index=default_idx, key="character")
 
-# ===== Seletor de modelos (resiliente, sem st.stop) =====
 def _label_model(mid: str) -> str:
     prov = _provider_for(mid)
     tag = "" if mid in (list_models(None) or []) else " • forçado"
     return f"{prov} • {mid}{tag}"
 
-_effective_models = list(dict.fromkeys(all_models or []))  # dedup
-if not _effective_models:
-    fallback_model = st.session_state.get("model") or "deepseek/deepseek-chat-v3-0324"
-    _effective_models = [fallback_model]
-
-_current_model = st.session_state.get("model") or _effective_models[0]
-if _current_model not in _effective_models:
-    _effective_models = [_current_model] + [m for m in _effective_models if m != _current_model]
-
-_prev_model = st.session_state.get("_last_model_id", _current_model)
-
+_prev_model = st.session_state.get("_last_model_id", st.session_state.get("model"))
 sel = st.selectbox(
     "🧠 Modelo",
-    _effective_models,
-    index=_effective_models.index(_current_model),
+    all_models,
+    index=all_models.index(st.session_state["model"]) if st.session_state["model"] in all_models else 0,
     format_func=_label_model,
     key="model"
 )
-
 if sel != _prev_model:
     if not _has_creds_for(sel):
         st.warning("Este modelo requer credenciais do provedor correspondentes. Revertendo para o anterior.")
@@ -561,16 +445,11 @@ def _save_json_response_to_mongo(data: dict, *, user: str, personagem: str, mode
     except Exception as e:
         st.error(f"❌ Erro ao salvar no MongoDB: {e}")
 
-# ====================================================================
-# FUNÇÃO CORRIGIDA
-# ====================================================================
 def render_assistant_bubbles(markdown_text: str) -> None:
     """
     Renderiza respostas da assistente. Se vier JSON válido (schema: fala/pensamento/acao/meta),
     formata; caso contrário, renderiza Markdown normal.
     """
-    import html  # garante que html.escape esteja disponível
-
     if not markdown_text:
         return
 
@@ -584,24 +463,24 @@ def render_assistant_bubbles(markdown_text: str) -> None:
             acao = str(data.get("acao", "") or "").strip()
             meta = str(data.get("meta", "") or "").strip()
 
-            # Use <br> em vez de inserir quebras reais dentro das aspas
             if fala:
-                safe_fala = html.escape(fala).replace("\n", "<br>")
+                safe_fala = html.escape(fala).replace("\n", "  
+")
                 st.markdown(f"<div class='assistant-paragraph'><b>{safe_fala}</b></div>", unsafe_allow_html=True)
-
             if pensamento:
-                safe_pense = html.escape(pensamento).replace("\n", "<br>")
+                safe_pense = html.escape(pensamento).replace("\n", "  
+")
                 st.markdown(f"<div class='assistant-paragraph'><em>{safe_pense}</em></div>", unsafe_allow_html=True)
-
             if acao:
-                safe_acao = html.escape(acao).replace("\n", "<br>")
+                safe_acao = html.escape(acao).replace("\n", "  
+")
                 st.caption(safe_acao)
-
             if meta:
-                safe_meta = html.escape(meta).replace("\n", "<br>")
+                safe_meta = html.escape(meta).replace("\n", "  
+")
                 st.caption(safe_meta)
 
-            # Log Mongo (personagem atual) — ignora falhas silenciosamente
+            # Log Mongo (personagem atual)
             try:
                 _user = st.session_state.get("user_name") or st.session_state.get("usuario") or "desconhecido"
                 _person = (st.session_state.get("character") or "desconhecida").strip()
@@ -609,29 +488,22 @@ def render_assistant_bubbles(markdown_text: str) -> None:
                 _save_json_response_to_mongo(data, user=_user, personagem=_person, modelo=_model)
             except Exception:
                 pass
+
             return
     except Exception:
-        # Se a análise JSON falhar, cai no fallback de Markdown
         pass
 
-
     # 2) Fallback: Markdown por parágrafo e blocos de código
-    # Este bloco agora é alcançado se o texto não for um JSON válido.
-    import re, html
-    
-    parts = re.split(r"(```[\s\S]*?```)", markdown_text)  # CORREÇÃO: [\s\S] em vez de [\\s\\S]
+    parts = re.split(r"(```[\\s\\S]*?```)", markdown_text)
     for part in parts:
         if part.startswith("```") and part.endswith("```"):
-            # Mantém bloco de código intacto (pode ter ```python, ```json etc.)
             st.markdown(part)
         else:
-            # Quebra por parágrafos (linhas em branco)
             paras = [p.strip() for p in re.split(r"\n\s*\n", part) if p.strip()]
             for p in paras:
-                # CORREÇÃO: evitar quebra real dentro das aspas; use <br> ou "  \\n"
-                safe = html.escape(p).replace("\n", "<br>")
+                safe = html.escape(p).replace("\n", "  
+")
                 st.markdown(f"<div class='assistant-paragraph'>{safe}</div>", unsafe_allow_html=True)
-
 
 def _user_keys_for_history(user_id: str, character_name: str) -> List[str]:
     ch = (character_name or "").strip().lower()
@@ -709,132 +581,65 @@ if st.session_state["_active_key"] != _current_active:
 try:
     _user = str(st.session_state.get("user_id", "")).strip()
     _char = str(st.session_state.get("character", "")).strip().lower()
-
     if _user and _char == "mary":
         _mary_key = f"{_user}::mary"
-
-        # Carrega fatos existentes
         try:
             f = get_facts(_mary_key) or {}
         except Exception:
             f = {}
-
         changed = False
-
-        # parceiro_atual
         if not str(f.get("parceiro_atual", "")).strip():
-            try:
-                set_fact(_mary_key, "parceiro_atual", _user, {"fonte": "auto_seed"})
-                changed = True
-            except Exception:
-                pass
-
-        # casados
+            set_fact(_mary_key, "parceiro_atual", _user, {"fonte": "auto_seed"}); changed = True
         if "casados" not in f:
-            try:
-                set_fact(_mary_key, "casados", True, {"fonte": "auto_seed"})
-                changed = True
-            except Exception:
-                pass
-
-        # (adicione outras seeds aqui, se houver)
-
-        # marcação de última execução
+            set_fact(_mary_key, "casados", True, {"fonte": "auto_seed"}); changed = True
+        if not str(f.get("local_cena_atual", "")).strip():
+            set_fact(_mary_key, "local_cena_atual", "quarto", {"fonte": "auto_seed"}); changed = True
         if changed:
-            try:
-                set_fact(
-                    _mary_key,
-                    "_last_auto_seed",
-                    datetime.utcnow().isoformat(),
-                    {"fonte": "auto_seed"},
-                )
-            except Exception:
-                pass
+            st.session_state["history_loaded_for"] = ""
+            _reload_history(force=True)
+except Exception as _e:
+    _safe_error("Auto-seed Mary falhou.", _e)
 
+# ========== Instancia serviço ==========
+try:
+    service = get_service(st.session_state["character"])
 except Exception as e:
-    _safe_error("Auto-seed Mary: falha inesperada.", e)
+    _safe_error("Falha ao instanciar serviço da personagem.", e)
+    st.stop()
 
-# ========= UI FINAL: HISTÓRICO + SIDEBAR DO PERSONAGEM + PROMPT =========
-
-def _ensure_boot_message_in_ui():
-    """Se a UI não tem histórico, injeta a first message da persona (sem depender de DB)."""
-    if st.session_state.get("history"):
-        return
-    char = (st.session_state.get("character") or "").strip()
-    if not char:
-        return
-    try:
-        mod = __import__(f"characters.{char.lower()}.persona", fromlist=["get_persona"])
-        get_persona = getattr(mod, "get_persona", None)
-    except Exception:
-        get_persona = None
-    if callable(get_persona):
+# ========== Sidebar específico da personagem ==========
+with st.sidebar:
+    st.caption("◻️ Sidebar base do app ativo")
+    render_sidebar = getattr(service, "render_sidebar", None)
+    if callable(render_sidebar):
         try:
-            _persona_text, history_boot = get_persona()
-            first_msg = next(
-                (m.get("content", "").strip()
-                 for m in (history_boot or [])
-                 if (m.get("role") or "") == "assistant"),
-                ""
-            )
-            if first_msg:
-                st.session_state["history"] = [("assistant", first_msg)]
-        except Exception:
-            pass
-
-# 1) Tenta recarregar histórico se ainda não carregou
-if not st.session_state.get("history"):
-    _reload_history(force=True)
-_ensure_boot_message_in_ui()
-
-# 2) Instancia o serviço do personagem (sem bloquear a UI se falhar)
-_srv = None
-try:
-    _char = (st.session_state.get("character") or "").strip()
-    _srv_mod = get_service(_char)  # via registry ou fallback dinâmico
-    # Convenção: <Nome>Service (MaryService, NerithService, etc.)
-    _cls_name = (_char[:1].upper() + _char[1:].lower()) + "Service"
-    _ServiceClass = getattr(_srv_mod, _cls_name, None)
-    if _ServiceClass is None:
-        # fallback: pega a primeira classe que termina com 'Service'
-        for _n in dir(_srv_mod):
-            if _n.lower().endswith("service"):
-                _ServiceClass = getattr(_srv_mod, _n)
-                break
-    _srv = _ServiceClass() if _ServiceClass else None
-except Exception as _e:
-    _safe_error("Falha ao carregar serviço do personagem.", _e)
-
-# 3) Render do painel do personagem no sidebar (se existir)
-try:
-    if _srv and hasattr(_srv, "render_sidebar"):
-        with st.sidebar:
-            _srv.render_sidebar(st.sidebar)
-except Exception as _e:
-    _safe_error("Falha ao renderizar o sidebar do personagem.", _e)
-
-# 4) Render do histórico em formato chat
-for role, txt in st.session_state.get("history", []):
-    if role == "assistant":
-        st.chat_message("assistant")
-        render_assistant_bubbles(txt)
+            st.caption("◻️ Hook de sidebar da personagem carregado")
+            # Passe 'st.sidebar' se seu service espera explicitamente um container de sidebar
+            render_sidebar(st.sidebar)
+        except Exception as e:
+            _safe_error(f"Erro no sidebar de {getattr(service, 'display_name', 'personagem')}.", e)
     else:
-        st.chat_message("user").markdown(txt)
+        st.caption("Sem preferências para esta personagem.")
 
-# 5) Campo de entrada do usuário (sempre visível)
-_user_msg = st.chat_input("Digite sua mensagem para o personagem…")
-if _user_msg:
-    st.session_state["history"].append(("user", _user_msg))
-    resposta = ""
+# ========== Sidebar: Manutenção ==========
+st.sidebar.markdown("---")
+st.sidebar.subheader("🧹 Manutenção")
+
+def _force_reload_history_ui():
+    st.session_state["history"] = []
+    st.session_state["history_loaded_for"] = ""
+    _reload_history(force=True)
+
+colA, colB = st.sidebar.columns(2)
+
+if colA.button("⏪ Apagar último turno"):
     try:
-        if _srv and hasattr(_srv, "reply"):
-            resposta = _srv.reply(st.session_state["user_id"], st.session_state["model"]) or ""
-        else:
-            resposta = "Pronto(a) para falar, mas o serviço do personagem não foi encontrado."
-    except Exception as _e:
-        _safe_error("Falha ao gerar a resposta do personagem.", _e)
-        resposta = "Houve um erro ao chamar o modelo (veja o erro acima no modo dev)."
+        _user_id = str(st.session_state.get("user_id", ""))
+        _char    = str(st.session_state.get("character", "")).strip().lower()
+        _key_primary = f"{_user_id}::{_char}" if _user_id and _char else _user_id
+        _key_legacy  = _user_id if _char == "mary" else None
 
-    st.session_state["history"].append(("assistant", resposta))
-    st.rerun()
-
+        deleted = False
+        try:
+            deleted = delete_last_interaction(_key_primary)
+        except Exception
