@@ -1,3 +1,21 @@
+# Instala o pacote USO diretamente do GitHub
+git+https://github.com/bytedance-research/USO.git
+
+# Dependências do modelo USO e do seu projeto
+streamlit
+pandas
+numpy
+diffusers==0.29.0.dev0
+transformers>=4.38.2
+accelerate>=0.28.0
+peft
+bitsandbytes
+safetensors
+sentencepiece
+Pillow
+python-dotenv
+huggingface_hub
+
 pymongo[srv]>=4.6
 dnspython>=2.4   # (vem com [srv], mas deixar explícito evita surpresas)
 requests>=2.31
