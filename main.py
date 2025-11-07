@@ -603,14 +603,47 @@ if st.session_state["_active_key"] != _current_active:
 try:
     _user = str(st.session_state.get("user_id", "")).strip()
     _char = str(st.session_state.get("character", "")).strip().lower()
+
     if _user and _char == "mary":
         _mary_key = f"{_user}::mary"
+
+        # Carrega fatos existentes
         try:
             f = get_facts(_mary_key) or {}
         except Exception:
             f = {}
+
         changed = False
+
+        # parceiro_atual
         if not str(f.get("parceiro_atual", "")).strip():
-            set_fact(_mary_key, "parceiro_atual", _user, {"fonte": "auto_seed"}); changed = True
+            try:
+                set_fact(_mary_key, "parceiro_atual", _user, {"fonte": "auto_seed"})
+                changed = True
+            except Exception:
+                pass
+
+        # casados
         if "casados" not in f:
-            set_fact(_mary_key, "casados", True, {"fonte": "auto_seed"}); changed = True
+            try:
+                set_fact(_mary_key, "casados", True, {"fonte": "auto_seed"})
+                changed = True
+            except Exception:
+                pass
+
+        # (adicione outras seeds aqui, se houver)
+
+        # marcação de última execução
+        if changed:
+            try:
+                set_fact(
+                    _mary_key,
+                    "_last_auto_seed",
+                    datetime.utcnow().isoformat(),
+                    {"fonte": "auto_seed"},
+                )
+            except Exception:
+                pass
+
+except Exception as e:
+    _safe_error("Auto-seed Mary: falha inesperada.", e)
