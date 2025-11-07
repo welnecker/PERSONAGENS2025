@@ -477,18 +477,26 @@ def render_assistant_bubbles(markdown_text: str) -> None:
             meta = str(data.get("meta", "") or "").strip()
 
             if fala:
+                # CORREÇÃO: Substituído a string quebrada por "  
+"
                 safe_fala = html.escape(fala).replace("\n", "  
 ")
                 st.markdown(f"<div class='assistant-paragraph'><b>{safe_fala}</b></div>", unsafe_allow_html=True)
             if pensamento:
+                # CORREÇÃO: Substituído a string quebrada por "  
+"
                 safe_pense = html.escape(pensamento).replace("\n", "  
 ")
                 st.markdown(f"<div class='assistant-paragraph'><em>{safe_pense}</em></div>", unsafe_allow_html=True)
             if acao:
+                # CORREÇÃO: Substituído a string quebrada por "  
+"
                 safe_acao = html.escape(acao).replace("\n", "  
 ")
                 st.caption(safe_acao)
             if meta:
+                # CORREÇÃO: Substituído a string quebrada por "  
+"
                 safe_meta = html.escape(meta).replace("\n", "  
 ")
                 st.caption(safe_meta)
