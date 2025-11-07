@@ -201,12 +201,68 @@ def _safe_error(msg: str, exc: Exception | None = None):
         else:
             st.error(msg)
 
+# 1) Tenta o registry oficial; se falhar, liga o fallback dinâmico
 try:
     from characters.registry import get_service, list_characters
 except Exception as e:
-    _safe_error("Falha ao importar `characters.registry`.", e)
-    st.stop()
+    _safe_error("Falha ao importar `characters.registry`. Ativando fallback dinâmico.", e)
 
+    import importlib
+    from types import ModuleType
+
+    def _candidate_dirs():
+        """
+        Varre candidatos em ./characters/* e (modo legado) ./<personagem>/*.
+        Considera personagem se encontrar persona.py ou service.py.
+        """
+        bases = [ROOT / "characters", ROOT]
+        vistos = set()
+        for base in bases:
+            if not base.is_dir():
+                continue
+            for p in base.iterdir():
+                if not p.is_dir():
+                    continue
+                name = (p.name or "").strip()
+                if not name or name.startswith(("_", ".")):
+                    continue
+                if (p / "persona.py").exists() or (p / "service.py").exists():
+                    if name not in vistos:
+                        vistos.add(name)
+                        yield name, p
+
+    def list_characters() -> list[str]:
+        chars = [name for name, _ in _candidate_dirs()]
+        # ordem estável (case-insensitive) e “Mary” no topo se existir
+        chars = sorted(set(chars), key=str.lower)
+        lower = [c.lower() for c in chars]
+        if "mary" in lower:
+            # preserva capitalização da entrada original “Mary”, se houver
+            mary_name = next((c for c in chars if c.lower() == "mary"), "Mary")
+            chars = [mary_name] + [c for c in chars if c.lower() != "mary"]
+        return chars
+
+    def _import_character_module(char_name: str, module: str) -> ModuleType:
+        """
+        Importa `characters.<nome>.<module>`; se falhar, tenta `<nome>.<module>`.
+        Lança ImportError detalhado se ambas falharem.
+        """
+        c = (char_name or "").strip().lower()
+        errors = []
+        for mod in (f"characters.{c}.{module}", f"{c}.{module}"):
+            try:
+                return importlib.import_module(mod)
+            except Exception as ex:
+                errors.append((mod, ex))
+        msgs = "\n".join([f"- {m}: {type(ex).__name__}: {ex}" for m, ex in errors])
+        raise ImportError(
+            f"Não foi possível importar '{module}' do personagem '{char_name}'. Tentativas:\n{msgs}"
+        )
+
+    def get_service(char_name: str):
+        return _import_character_module(char_name, "service")
+
+# 2) Router de provedores (mantém seu fallback original)
 try:
     from core.service_router import available_providers, list_models, chat as provider_chat, route_chat_strict
 except Exception:
@@ -381,27 +437,78 @@ st.session_state.setdefault("history_loaded_for", "")
 st.session_state.setdefault("_active_key", "")
 
 # ========== CONTROLES TOPO ==========
+# ===== Seletor de personagem (blindado) =====
 c1, c2 = st.columns([2, 2])
 with c1:
     st.text_input("👤 Usuário", key="user_id", placeholder="Seu nome ou identificador")
+
 with c2:
-    names = list_characters()
-    default_idx = names.index("Mary") if "Mary" in names else 0
+    # Tenta listar; se falhar, mostra diagnóstico em vez de travar a app
+    try:
+        names = list_characters() or []
+    except Exception as e:
+        st.error(f"Falha ao listar personagens: {e}")
+        names = []
+
+    if not names:
+        # Varre pastas para sugerir onde há persona.py/service.py
+        candidates = []
+        for base in [ROOT / "characters", ROOT]:
+            if base.is_dir():
+                for p in base.iterdir():
+                    if p.is_dir() and not p.name.startswith((".", "_")):
+                        if (p / "persona.py").exists() or (p / "service.py").exists():
+                            try:
+                                candidates.append(str(p.relative_to(ROOT)))
+                            except Exception:
+                                candidates.append(str(p))
+
+        st.error("Nenhum personagem encontrado.")
+        if candidates:
+            st.info(
+                "Foram encontrados diretórios candidatos com `persona.py` ou `service.py`:\n\n- " +
+                "\n- ".join(candidates)
+            )
+        else:
+            st.info("Crie `./characters/<nome>/persona.py` (e opcionalmente `service.py`).")
+        st.stop()
+
+    # Coloca 'Mary' como padrão se existir (case-insensitive), senão o primeiro
+    try:
+        default_idx = next((i for i, n in enumerate(names) if n.lower() == "mary"), 0)
+    except Exception:
+        default_idx = 0
+
     st.selectbox("🎭 Personagem", names, index=default_idx, key="character")
 
+# ===== Seletor de modelos (resiliente) =====
 def _label_model(mid: str) -> str:
     prov = _provider_for(mid)
     tag = "" if mid in (list_models(None) or []) else " • forçado"
     return f"{prov} • {mid}{tag}"
 
-_prev_model = st.session_state.get("_last_model_id", st.session_state.get("model"))
+# Garante uma lista não-vazia para o select de modelos
+_effective_models = list(dict.fromkeys(all_models or []))  # dedup
+if not _effective_models:
+    # fallback: mantém o atual ou aplica um default seguro
+    fallback_model = st.session_state.get("model") or "deepseek/deepseek-chat-v3-0324"
+    _effective_models = [fallback_model]
+
+# Garante que o valor atual esteja presente na lista
+_current_model = st.session_state.get("model") or _effective_models[0]
+if _current_model not in _effective_models:
+    _effective_models = [ _current_model ] + [m for m in _effective_models if m != _current_model]
+
+_prev_model = st.session_state.get("_last_model_id", _current_model)
+
 sel = st.selectbox(
     "🧠 Modelo",
-    all_models,
-    index=all_models.index(st.session_state["model"]) if st.session_state["model"] in all_models else 0,
+    _effective_models,
+    index=_effective_models.index(_current_model),
     format_func=_label_model,
     key="model"
 )
+
 if sel != _prev_model:
     if not _has_creds_for(sel):
         st.warning("Este modelo requer credenciais do provedor correspondentes. Revertendo para o anterior.")
