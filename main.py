@@ -463,6 +463,8 @@ def render_assistant_bubbles(markdown_text: str) -> None:
     Renderiza respostas da assistente. Se vier JSON válido (schema: fala/pensamento/acao/meta),
     formata; caso contrário, renderiza Markdown normal.
     """
+    import html  # garante que html.escape esteja disponível
+
     if not markdown_text:
         return
 
@@ -476,32 +478,24 @@ def render_assistant_bubbles(markdown_text: str) -> None:
             acao = str(data.get("acao", "") or "").strip()
             meta = str(data.get("meta", "") or "").strip()
 
+            # Use <br> em vez de inserir quebras reais dentro das aspas
             if fala:
-                # CORREÇÃO: Substituído a string quebrada por "  
-"
-                safe_fala = html.escape(fala).replace("\n", "  
-")
+                safe_fala = html.escape(fala).replace("\n", "<br>")
                 st.markdown(f"<div class='assistant-paragraph'><b>{safe_fala}</b></div>", unsafe_allow_html=True)
+
             if pensamento:
-                # CORREÇÃO: Substituído a string quebrada por "  
-"
-                safe_pense = html.escape(pensamento).replace("\n", "  
-")
+                safe_pense = html.escape(pensamento).replace("\n", "<br>")
                 st.markdown(f"<div class='assistant-paragraph'><em>{safe_pense}</em></div>", unsafe_allow_html=True)
+
             if acao:
-                # CORREÇÃO: Substituído a string quebrada por "  
-"
-                safe_acao = html.escape(acao).replace("\n", "  
-")
+                safe_acao = html.escape(acao).replace("\n", "<br>")
                 st.caption(safe_acao)
+
             if meta:
-                # CORREÇÃO: Substituído a string quebrada por "  
-"
-                safe_meta = html.escape(meta).replace("\n", "  
-")
+                safe_meta = html.escape(meta).replace("\n", "<br>")
                 st.caption(safe_meta)
 
-            # Log Mongo (personagem atual)
+            # Log Mongo (personagem atual) — ignora falhas silenciosamente
             try:
                 _user = st.session_state.get("user_name") or st.session_state.get("usuario") or "desconhecido"
                 _person = (st.session_state.get("character") or "desconhecida").strip()
@@ -511,8 +505,9 @@ def render_assistant_bubbles(markdown_text: str) -> None:
                 pass
             return
     except Exception:
-        # Se a análise JSON falhar, o código continua para o fallback abaixo
+        # Se a análise JSON falhar, cai no fallback de Markdown
         pass
+
 
     # 2) Fallback: Markdown por parágrafo e blocos de código
     # Este bloco agora é alcançado se o texto não for um JSON válido.
