@@ -529,7 +529,9 @@ def _reload_history(force: bool = False):
         resposta_key = f"resposta_{char.strip().lower()}"
         for d in docs:
             u = (d.get("mensagem_usuario") or "").strip()
-            a = (d.get(resposta_key) or d.get("resposta_mary") or "").strip()
+            a = (d.get(resposta_key)
+                 or d.get("resposta_adelle")  # compatibilidade Adelle
+                 or d.get("resposta_mary") or "").strip()
             if u:
                 hist.append(("user", u))
             if a:
@@ -602,6 +604,29 @@ try:
             _reload_history(force=True)
 except Exception as _e:
     _safe_error("Auto-seed Mary falhou.", _e)
+
+# ========== Auto-seed: Adelle ==========
+try:
+    _user = str(st.session_state.get("user_id", "")).strip()
+    _char = str(st.session_state.get("character", "")).strip().lower()
+    if _user and _char == "adelle":
+        _ad_key = f"{_user}::adelle"
+        try:
+            f = get_facts(_ad_key) or {}
+        except Exception:
+            f = {}
+        changed = False
+        if not str(f.get("nome_agente", "")).strip():
+            set_fact(_ad_key, "nome_agente", _user, {"fonte": "auto_seed"}); changed = True
+        if not str(f.get("adelle.missao.objetivo", "")).strip():
+            set_fact(_ad_key, "adelle.missao.objetivo", "Destruir a família Roytmann", {"fonte": "auto_seed"}); changed = True
+        if not str(f.get("local_cena_atual", "")).strip():
+            set_fact(_ad_key, "local_cena_atual", "sala de debriefing", {"fonte": "auto_seed"}); changed = True
+        if changed:
+            st.session_state["history_loaded_for"] = ""
+            _reload_history(force=True)
+except Exception as _e:
+    _safe_error("Auto-seed Adelle falhou.", _e)
 
 # ========== Instancia serviço ==========
 try:
@@ -911,6 +936,43 @@ with st.sidebar.expander("⚡ Seed rápido: Mary (Esposa Cúmplice)", expanded=F
             except Exception as e:
                 _safe_error("Falha ao limpar 'casados'.", e)
 
+# --- Seed rápido: Adelle (Diplomata Exilada) ---
+with st.sidebar.expander("⚡ Seed rápido: Adelle (Diplomata Exilada)", expanded=False):
+    u = (st.session_state.get("user_id") or "Janio Donisete").strip()
+    adelle_key = f"{u}::adelle"
+    st.caption("Grava briefing inicial da missão e define local inicial da cena.")
+    col1, col2 = st.columns(2)
+    with col1:
+        if st.button("Aplicar seed Adelle"):
+            try:
+                set_fact(adelle_key, "nome_agente", u, {"fonte": "seed"})
+                set_fact(adelle_key, "adelle.missao.objetivo", "Destruir a família Roytmann", {"fonte": "seed"})
+                set_fact(adelle_key, "adelle.missao.alvos", "Florêncio, Heitor, Pietro, Neuza", {"fonte": "seed"})
+                set_fact(adelle_key, "adelle.missao.ponto_fraco", "Sophia Roytmann (filha ingênua)", {"fonte": "seed"})
+                set_fact(adelle_key, "adelle.entity.alvo_principal", "Pietro Roytmann", {"fonte": "seed"})
+                set_fact(adelle_key, "adelle.entity.local_seguro", "flat de cobertura no Centro", {"fonte": "seed"})
+                if not str(get_fact(adelle_key, "local_cena_atual", "")).strip():
+                    set_fact(adelle_key, "local_cena_atual", "sala de debriefing", {"fonte": "seed"})
+                st.success("Seed aplicado para Adelle (briefing + entidades + local).")
+                st.session_state["history_loaded_for"] = ""
+                st.rerun()
+            except Exception as e:
+                _safe_error("Falha ao aplicar seed Adelle.", e)
+    with col2:
+        if st.button("Limpar briefing Adelle"):
+            try:
+                for k in [
+                    "nome_agente", "adelle.missao.objetivo", "adelle.missao.alvos",
+                    "adelle.missao.ponto_fraco", "adelle.entity.alvo_principal", "adelle.entity.local_seguro"
+                ]:
+                    try: delete_fact(adelle_key, k)
+                    except Exception: pass
+                st.success("Briefing/entidades limpos (Adelle).")
+                st.session_state["history_loaded_for"] = ""
+                st.rerun()
+            except Exception as e:
+                _safe_error("Falha ao limpar briefing da Adelle.", e)
+
 # ========== Sidebar: NSFW & Primeira vez ==========
 st.sidebar.markdown("---")
 st.sidebar.subheader("🔞 NSFW & Primeira vez")
@@ -964,7 +1026,8 @@ st.sidebar.subheader("🖼️ Plano de fundo")
 
 bg_files = []
 for pattern in ("nerith*.jpg","nerith*.jpeg","nerith*.png","nerith*.webp",
-                "mary*.jpg","mary*.jpeg","mary*.png","mary*.webp"):
+                "mary*.jpg","mary*.jpeg","mary*.png","mary*.webp",
+                "adelle*.jpg","adelle*.jpeg","adelle*.png","adelle*.webp"):
     bg_files += list(IMG_DIR.glob(pattern))
 bg_files = sorted({p.name: p for p in bg_files}.values(), key=lambda p: p.name)
 
@@ -1001,7 +1064,7 @@ st.session_state["bg_size"] = bg_size
 if bg_path and bg_path.exists():
     set_background(bg_path, darken=bg_darken/100.0, blur_px=bg_blur, attach_fixed=bg_fixed, size_mode=bg_size)
 
-# ========== Preferências rápidas (Mary) ==========
+# ========== Preferências rápidas (Mary/Adelle) ==========
 st.sidebar.markdown("---")
 st.sidebar.subheader("🎚️ Preferências (Mary)")
 if _char == "mary":
@@ -1031,6 +1094,35 @@ if _char == "mary":
             st.rerun()
         except Exception as e:
             _safe_error("Falha ao salvar preferências.", e)
+
+elif _char == "adelle":
+    st.sidebar.subheader("🎚️ Preferências (Adelle)")
+    abordagem_opts = ["calculista","agressiva","sedutora"]
+    ritmo_opts     = ["lento","moderado","rapido"]
+    tam_opts       = ["curta","media","longa"]
+
+    def _idx_safe2(opts: List[str], val: str, default_idx: int) -> int:
+        try:
+            return opts.index((val or "").lower())
+        except Exception:
+            return default_idx
+
+    ab_cur  = str(facts.get("adelle.pref.abordagem","calculista")).lower() if facts else "calculista"
+    rt_cur  = str(facts.get("adelle.pref.ritmo_trama","moderado")).lower() if facts else "moderado"
+    tam_cur = str(facts.get("adelle.pref.tamanho_resposta","media")).lower() if facts else "media"
+
+    abordagem = st.sidebar.selectbox("Abordagem", abordagem_opts, index=_idx_safe2(abordagem_opts, ab_cur, 0))
+    ritmo_t   = st.sidebar.selectbox("Ritmo da trama", ritmo_opts, index=_idx_safe2(ritmo_opts, rt_cur, 1))
+    tam       = st.sidebar.selectbox("Tamanho da resposta", tam_opts, index=_idx_safe2(tam_opts, tam_cur, 1))
+    if st.sidebar.button("💾 Salvar preferências (Adelle)"):
+        try:
+            set_fact(user_key, "adelle.pref.abordagem", abordagem, {"fonte":"prefs"})
+            set_fact(user_key, "adelle.pref.ritmo_trama", ritmo_t, {"fonte":"prefs"})
+            set_fact(user_key, "adelle.pref.tamanho_resposta", tam, {"fonte":"prefs"})
+            st.sidebar.success("Preferências salvas (Adelle).")
+            st.rerun()
+        except Exception as e:
+            _safe_error("Falha ao salvar preferências (Adelle).", e)
 
 # ========== Janela de contexto ==========
 st.sidebar.markdown("---")
