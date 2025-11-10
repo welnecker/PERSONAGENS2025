@@ -11,6 +11,8 @@ _CATALOG: Dict[str, Tuple[str, str]] = {
     "Mary":   ("characters.mary.service", "MaryService"),
     "Laura":  ("characters.laura.service", "LauraService"),
     "Nerith": ("characters.nerith.service", "NerithService"),
+    # ⬇️ Nova personagem
+    "Adelle": ("characters.adelle.service", "AdelleService"),
 }
 
 # Cache de serviços para não recriar instâncias a cada chamada
