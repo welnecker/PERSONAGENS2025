@@ -510,18 +510,14 @@ def render_assistant_bubbles(markdown_text: str) -> None:
 
 def _user_keys_for_history(user_id: str, character_name: str) -> List[str]:
     """
-    Retorna todas as chaves possíveis para leitura de histórico,
-    cobrindo formato canônico, legado (apenas user_id) e 'anon::personagem'.
-    A ordem importa: a primeira é a canônica atual.
+    Conjunto de chaves de histórico a consultar:
+    - canônica atual:   "<user_id>::<personagem>"
+    - legado (Mary e outros setups antigos): "<user_id>"
+    - boot/seed anônimo: "anon::<personagem>"
     """
     ch = (character_name or "").strip().lower()
     primary = f"{user_id}::{ch}"
-
-    keys = [
-        primary,       # canônica atual
-        user_id,       # legado (sem ::personagem) — já usado pela Mary
-        f"anon::{ch}", # seeds/primeiro boot sem user_id
-    ]
+    keys = [primary, user_id, f"anon::{ch}"]
     # remove vazios e dupes preservando ordem
     return list(dict.fromkeys([k for k in keys if k]))
 
@@ -529,60 +525,67 @@ def _user_keys_for_history(user_id: str, character_name: str) -> List[str]:
 def _reload_history(force: bool = False):
     user_id = str(st.session_state["user_id"])
     char = str(st.session_state["character"])
-    key = f"{user_id}|{char}|{get_backend()}"
-    if not force and st.session_state["history_loaded_for"] == key:
+    key_marker = f"{user_id}|{char}|{get_backend()}"
+    if not force and st.session_state.get("history_loaded_for") == key_marker:
         return
+
     try:
         keys = _user_keys_for_history(user_id, char)
         docs = get_history_docs_multi(keys, limit=400) or []
 
-        # Ordena por timestamp quando disponível; caso contrário,
-        # assume que veio "novo→antigo" e inverte para "antigo→novo".
-        def _sort_docs(ds: List[Dict]) -> List[Dict]:
-            if ds and ("timestamp" in ds[0] or "ts" in ds[0]):
+        # -------- ordenação robusta (antigo → novo) --------
+        from datetime import datetime
+        def _as_dt(v):
+            # tenta datetime direto
+            if hasattr(v, "isoformat"):
+                return v
+            # tenta ISO string
+            if isinstance(v, str):
                 try:
-                    return sorted(
-                        ds,
-                        key=lambda d: d.get("timestamp") or d.get("ts") or ""
-                    )
+                    return datetime.fromisoformat(v.replace("Z","+00:00"))
                 except Exception:
                     pass
-            return list(reversed(ds))
+            return None
 
-        docs = _sort_docs(docs)
+        def _doc_ts(d: Dict):
+            for k in ("timestamp", "ts", "created_at", "time", "dt"):
+                if k in d and d[k]:
+                    dt = _as_dt(d[k])
+                    if dt: return dt
+            # fallback: Mongo ObjectId.generation_time
+            try:
+                from bson import ObjectId  # opcional, se disponível
+                _id = d.get("_id")
+                if isinstance(_id, ObjectId):
+                    return _id.generation_time
+            except Exception:
+                pass
+            return datetime.min  # por último, garante ordenação estável
 
-        # Monta histórico chat-like com deduplicação
+        docs = sorted(docs, key=_doc_ts)
+
+        # -------- mapeia para (user/assistant) mantendo tudo --------
         hist: List[Tuple[str, str]] = []
-        seen = set()
-
         resposta_key = f"resposta_{char.strip().lower()}"
         fallbacks = ("resposta_adelle", "resposta_mary", "resposta_laura")
 
         for d in docs:
             u = (d.get("mensagem_usuario") or "").strip()
-
             a = (d.get(resposta_key) or "").strip()
             if not a:
                 for fk in fallbacks:
-                    if d.get(fk):
-                        a = str(d.get(fk) or "").strip()
-                        if a:
-                            break
+                    if (d.get(fk) or "").strip():
+                        a = (d.get(fk) or "").strip()
+                        break
 
             if u:
-                ku = ("u", u)
-                if ku not in seen:
-                    hist.append(("user", u))
-                    seen.add(ku)
-
+                hist.append(("user", u))
             if a:
-                ka = ("a", a)
-                if ka not in seen:
-                    hist.append(("assistant", a))
-                    seen.add(ka)
+                hist.append(("assistant", a))
 
         st.session_state["history"] = hist
-        st.session_state["history_loaded_for"] = key
+        st.session_state["history_loaded_for"] = key_marker
+
     except Exception as e:
         _safe_error("Não foi possível carregar o histórico.", e)
 
@@ -591,23 +594,16 @@ try:
     user_id = str(st.session_state.get("user_id", "")).strip()
     char    = str(st.session_state.get("character", "")).strip()
     if user_id and char:
-        # Verifica em TODAS as chaves possíveis (inclui legados/anon)
-        keys = _user_keys_for_history(user_id, char)
+        # 👇 agora checa TODAS as chaves possíveis (canônica, legado, anon)
+        keys_any = _user_keys_for_history(user_id, char)
         try:
-            existing_any = get_history_docs_multi(keys, limit=1) or []
+            existing_any = get_history_docs_multi(keys_any, limit=1) or []
         except Exception:
             existing_any = []
 
         docs_exist = len(existing_any) > 0
 
-        # Usa um flag-fact para nunca reseedar no mesmo user::char
-        fact_boot_flag_key = f"boot.first_message.done::{char.lower()}"
-        try:
-            boot_done = bool(get_fact(f"{user_id}::{char.lower()}", fact_boot_flag_key, False))
-        except Exception:
-            boot_done = False
-
-        if not docs_exist and not boot_done:
+        if not docs_exist:
             try:
                 mod = __import__(f"characters.{char.lower()}.persona", fromlist=["get_persona"])
                 get_persona = getattr(mod, "get_persona", None)
@@ -616,13 +612,12 @@ try:
 
             if callable(get_persona):
                 persona_text, history_boot = get_persona()
-                first_msg = next((m.get("content","") for m in (history_boot or [])
+                first_msg = next((m.get("content", "") for m in (history_boot or [])
                                   if (m.get("role") or "") == "assistant"), "").strip()
                 if first_msg:
-                    primary_key = f"{user_id}::{char.lower()}"
                     try:
-                        save_interaction(primary_key, "", first_msg, "boot:first_message")
-                        set_fact(primary_key, fact_boot_flag_key, True, {"fonte": "boot_guard"})
+                        char_key = f"{user_id}::{char.lower()}"
+                        save_interaction(char_key, "", first_msg, "boot:first_message")
                     except Exception:
                         pass
 except Exception as e:
