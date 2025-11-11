@@ -511,14 +511,13 @@ def render_assistant_bubbles(markdown_text: str) -> None:
 def _user_keys_for_history(user_id: str, character_name: str) -> List[str]:
     """
     Conjunto de chaves de histórico a consultar:
-    - canônica atual:   "<user_id>::<personagem>"
-    - legado (Mary e outros setups antigos): "<user_id>"
-    - boot/seed anônimo: "anon::<personagem>"
+    - canônica:     "<user_id>::<personagem>"
+    - legado:       "<user_id>"
+    - anônima/seed: "anon::<personagem>"
     """
     ch = (character_name or "").strip().lower()
-    primary = f"{user_id}::{ch}"
+    primary = f"{user_id}::{ch}" if user_id and ch else ""
     keys = [primary, user_id, f"anon::{ch}"]
-    # remove vazios e dupes preservando ordem
     return list(dict.fromkeys([k for k in keys if k]))
 
 
@@ -533,18 +532,15 @@ def _reload_history(force: bool = False):
         keys = _user_keys_for_history(user_id, char)
         docs = get_history_docs_multi(keys, limit=400) or []
 
-        # -------- ordenação robusta (antigo → novo) --------
         from datetime import datetime
         def _as_dt(v):
-            # tenta datetime direto
             if hasattr(v, "isoformat"):
                 return v
-            # tenta ISO string
             if isinstance(v, str):
                 try:
                     return datetime.fromisoformat(v.replace("Z","+00:00"))
                 except Exception:
-                    pass
+                    return None
             return None
 
         def _doc_ts(d: Dict):
@@ -552,31 +548,25 @@ def _reload_history(force: bool = False):
                 if k in d and d[k]:
                     dt = _as_dt(d[k])
                     if dt: return dt
-            # fallback: Mongo ObjectId.generation_time
             try:
-                from bson import ObjectId  # opcional, se disponível
+                from bson import ObjectId
                 _id = d.get("_id")
                 if isinstance(_id, ObjectId):
                     return _id.generation_time
             except Exception:
                 pass
-            return datetime.min  # por último, garante ordenação estável
+            return datetime.min
 
+        # ordena do mais antigo → mais novo
         docs = sorted(docs, key=_doc_ts)
 
-        # -------- mapeia para (user/assistant) mantendo tudo --------
         hist: List[Tuple[str, str]] = []
         resposta_key = f"resposta_{char.strip().lower()}"
-        fallbacks = ("resposta_adelle", "resposta_mary", "resposta_laura")
 
         for d in docs:
             u = (d.get("mensagem_usuario") or "").strip()
+            # ⚠️ Filtragem estrita: só a resposta da personagem ativa
             a = (d.get(resposta_key) or "").strip()
-            if not a:
-                for fk in fallbacks:
-                    if (d.get(fk) or "").strip():
-                        a = (d.get(fk) or "").strip()
-                        break
 
             if u:
                 hist.append(("user", u))
@@ -594,13 +584,11 @@ try:
     user_id = str(st.session_state.get("user_id", "")).strip()
     char    = str(st.session_state.get("character", "")).strip()
     if user_id and char:
-        # 👇 agora checa TODAS as chaves possíveis (canônica, legado, anon)
         keys_any = _user_keys_for_history(user_id, char)
         try:
             existing_any = get_history_docs_multi(keys_any, limit=1) or []
         except Exception:
             existing_any = []
-
         docs_exist = len(existing_any) > 0
 
         if not docs_exist:
@@ -612,7 +600,7 @@ try:
 
             if callable(get_persona):
                 persona_text, history_boot = get_persona()
-                first_msg = next((m.get("content", "") for m in (history_boot or [])
+                first_msg = next((m.get("content","") for m in (history_boot or [])
                                   if (m.get("role") or "") == "assistant"), "").strip()
                 if first_msg:
                     try:
@@ -714,17 +702,12 @@ if colA.button("⏪ Apagar último turno"):
     try:
         _user_id = str(st.session_state.get("user_id", ""))
         _char    = str(st.session_state.get("character", "")).strip().lower()
-        _key_primary = f"{_user_id}::{_char}" if _user_id and _char else _user_id
-        _key_legacy  = _user_id if _char == "mary" else None
-
         deleted = False
-        try:
-            deleted = delete_last_interaction(_key_primary)
-        except Exception:
-            pass
-        if not deleted and _key_legacy:
+        for k in _user_keys_for_history(_user_id, _char):
             try:
-                deleted = delete_last_interaction(_key_legacy)
+                if delete_last_interaction(k):
+                    deleted = True
+                    break
             except Exception:
                 pass
         if deleted:
@@ -740,17 +723,10 @@ if colB.button("🔄 Resetar histórico"):
     try:
         _user_id = str(st.session_state.get("user_id", ""))
         _char    = str(st.session_state.get("character", "")).strip().lower()
-        _key_primary = f"{_user_id}::{_char}" if _user_id and _char else _user_id
-        _key_legacy  = _user_id if _char == "mary" else None
-
         total = 0
-        try:
-            total += int(delete_user_history(_key_primary) or 0)
-        except Exception:
-            pass
-        if _key_legacy:
+        for k in _user_keys_for_history(_user_id, _char):
             try:
-                total += int(delete_user_history(_key_legacy) or 0)
+                total += int(delete_user_history(k) or 0)
             except Exception:
                 pass
         st.sidebar.success(f"Histórico apagado ({total} itens).")
@@ -763,16 +739,9 @@ if st.sidebar.button("🧨 Apagar TUDO (chat + memórias)"):
     try:
         _user_id = str(st.session_state.get("user_id", ""))
         _char    = str(st.session_state.get("character", "")).strip().lower()
-        _key_primary = f"{_user_id}::{_char}" if _user_id and _char else _user_id
-        _key_legacy  = _user_id if _char == "mary" else None
-
-        try:
-            delete_all_user_data(_key_primary)
-        except Exception:
-            pass
-        if _key_legacy:
+        for k in _user_keys_for_history(_user_id, _char):
             try:
-                delete_all_user_data(_key_legacy)
+                delete_all_user_data(k)
             except Exception:
                 pass
         st.sidebar.success("Tudo apagado para este usuário/personagem.")
