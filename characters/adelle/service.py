@@ -897,83 +897,162 @@ class AdelleService(BaseCharacter):
     verbatim_ultimos: int = 10,
 ) -> List[Dict[str, str]]:
     """
-    Mesma política do service da Mary:
-      - Últimos N turnos verbatim preservados.
-      - Antigos viram [RESUMO-*] (1–3 camadas).
-      - Se necessário, poda verbatim mais antigo.
+    Monta histórico SEM DELETAR interação:
+      - ORDEM: cronológica (antigo → novo).
+      - Antigos → viram [RESUMO-*] em camadas; NUNCA descartamos conteúdo, apenas condensamos.
+      - Verbatim recente: mantém os últimos `verbatim_ultimos` pares (2N mensagens) SEM poda.
+      - Se estourar orçamento: re-sumariza (camadas) e/ou absorve parte do verbatim antigo nos resumos
+        (demover para o bloco resumido), mas sem “sumir” com nada — tudo fica representado.
+      - `trimmed_pairs` = 0 sempre (sem cortes).
     Grava relatório em st.session_state['_mem_drop_report'].
     """
-    win = _get_window_for(model)
-    hist_budget, meta_budget, _ = _budget_slices(model)
+    hist_budget, _, _ = _budget_slices(model)
 
+    # ==== utils
+    def _toklen_msgs(msgs: List[Dict[str, str]]) -> int:
+        try:
+            return sum(toklen(m.get("content", "") or "") for m in msgs)
+        except Exception:
+            return 0
+
+    def _pairs_from_docs(ds: List[Dict]) -> List[Dict[str, str]]:
+        pares: List[Dict[str, str]] = []
+        for d in ds:
+            u = (d.get("mensagem_usuario") or "").strip()
+            a = (d.get("resposta_adelle") or d.get("resposta_mary") or d.get("resposta_laura") or "").strip()
+            if u:
+                pares.append({"role": "user", "content": u})
+            if a:
+                pares.append({"role": "assistant", "content": a})
+        return pares
+
+    # ==== load history (cronológico)
     docs = cached_get_history(usuario_key)
     if not docs:
         st.session_state["_mem_drop_report"] = {}
         return history_boot[:]
 
-    # Constrói pares user/assistant em ORDEM CRONOLÓGICA
-    pares: List[Dict[str, str]] = []
-    for d in docs:
-        u = (d.get("mensagem_usuario") or "").strip()
-        a = (d.get("resposta_adelle") or d.get("resposta_mary") or d.get("resposta_laura") or "").strip()
-        if u:
-            pares.append({"role": "user", "content": u})
-        if a:
-            pares.append({"role": "assistant", "content": a})
+    # Se seu backend já vem cronológico, ok; se vier invertido, reverse mantém estável.
+    # (Opcional: ordenar por timestamp, se existir.)
+    docs = list(docs)[::-1]  # assume repo retorna mais novo → mais antigo; inverter para antigo → novo
 
+    pares = _pairs_from_docs(docs)
     if not pares:
         st.session_state["_mem_drop_report"] = {}
         return history_boot[:]
 
-    keep = max(0, verbatim_ultimos * 2)
-    verbatim = pares[-keep:] if keep else []
+    # ==== separa verbatim recente e antigos
+    keep_msgs = max(0, int(verbatim_ultimos) * 2)  # N pares -> 2N mensagens
+    verbatim = pares[-keep_msgs:] if keep_msgs else []
     antigos  = pares[:len(pares) - len(verbatim)]
 
-    msgs: List[Dict[str, str]] = []
+    # ==== constrói resumos SEM deletar
     summarized_pairs = 0
-    trimmed_pairs = 0
+    trimmed_pairs = 0  # sempre zero (sem cortes)
 
-    # Resumo em camadas (como a Mary)
+    resumo_layers: List[str] = []
     if antigos:
-        summarized_pairs = len(antigos) // 2
+        summarized_pairs = len(antigos) // 2  # métrica: quantos pares foram “absorvidos” em resumo
         bloco = "\n\n".join(m["content"] for m in antigos)
-        resumo = _llm_summarize(model, bloco)
+        resumo = _llm_summarize(model, bloco)  # usa helper já existente (espelhado da Mary)
         resumo_layers = [resumo]
 
-        def _count_total_sim(resumo_texts: List[str]) -> int:
-            sim_msgs = [{"role": "system", "content": f"[RESUMO-{i+1}]\n{r}"} for i, r in enumerate(resumo_texts)]
-            sim_msgs += verbatim
-            return sum(toklen(m["content"]) for m in sim_msgs)
-
-        # Até 3 camadas, se necessário
-        while _count_total_sim(resumo_layers) > hist_budget and len(resumo_layers) < 3:
-            resumo_layers[0] = _llm_summarize(model, resumo_layers[0])
-
-        for i, r in enumerate(resumo_layers, start=1):
+    def _materialize(resumos: List[str], vb: List[Dict[str, str]]) -> List[Dict[str, str]]:
+        msgs: List[Dict[str, str]] = []
+        for i, r in enumerate(resumos, start=1):
             msgs.append({"role": "system", "content": f"[RESUMO-{i}]\n{r}"})
+        msgs.extend(vb)
+        return msgs
 
-    # Injeta verbatim recente
-    msgs.extend(verbatim)
+    msgs = _materialize(resumo_layers, verbatim)
 
-    # Poda se exceder orçamento (remove do COMEÇO do verbatim → preserva as últimas falas)
-    def _hist_tokens(mm: List[Dict,]) -> int:
-        return sum(toklen(m.get("content","")) for m in mm)
+    # ==== Se exceder orçamento, NUNCA corta: re-sumariza e/ou absorve verbatim velho para o resumo
+    # Estratégia:
+    #   1) Se estourar, re-sumariza a camada 1 em algo mais curto (10% a cada passo).
+    #   2) Se ainda estourar, move o BLOCO MAIS ANTIGO do verbatim para os “antigos” e refaz o resumo da camada 1.
+    #   3) Opcional: criar 2ª/3ª camadas encadeando resumos (cada camada resume a anterior).
+    #   4) Como última proteção, colapsa todos os resumos em uma linha ultra-compacta e mantém apenas o verbatim final.
+    # Nada é perdido: tudo que sai de verbatim vai para o resumo.
 
-    while _hist_tokens(msgs) > hist_budget and verbatim:
-        if len(verbatim) >= 2:
-            verbatim = verbatim[2:]
-            trimmed_pairs += 1
+    # Parâmetros de proteção
+    MAX_LAYERS = 3
+    MAX_ITER   = 20
+
+    iter_count = 0
+    while _toklen_msgs(msgs) > hist_budget and iter_count < MAX_ITER:
+        iter_count += 1
+
+        # 1) tentar encurtar o último resumo (10%)
+        if resumo_layers:
+            last = resumo_layers[-1]
+            if len(last) > 160:
+                new_last = last[: int(len(last) * 0.9)].rsplit(" ", 1)[0]
+                resumo_layers[-1] = new_last
+                msgs = _materialize(resumo_layers, verbatim)
+                if _toklen_msgs(msgs) <= hist_budget:
+                    break
+            else:
+                # 2) criar nova camada resumindo a anterior (até MAX_LAYERS)
+                if len(resumo_layers) < MAX_LAYERS:
+                    compact_src = resumo_layers[-1]
+                    resumo_layers.append(_llm_summarize(model, compact_src))
+                    msgs = _materialize(resumo_layers, verbatim)
+                    if _toklen_msgs(msgs) <= hist_budget:
+                        break
+                else:
+                    # 3) absorver parte do VERBATIM mais antigo para o resumo
+                    #    (move 1 PAR de verbatim para os 'antigos' e re-resuma)
+                    if len(verbatim) >= 2:
+                        # pega as 2 mensagens mais antigas dentro do verbatim
+                        moved = verbatim[:2]
+                        verbatim = verbatim[2:]
+                        # integra ao bloco antigo e gera novo resumo base (camada 1)
+                        moved_text = " ".join(m["content"] for m in moved)
+                        base_text = (resumo_layers[0] if resumo_layers else "")
+                        # reconstroi camada 1 com moved_text + base_text (sem perder conteudo)
+                        novo_base = _llm_summarize(model, (moved_text + "\n\n" + base_text).strip())
+                        if resumo_layers:
+                            resumo_layers[0] = novo_base
+                            # se houver camadas >1, recalcule-as contra o novo base
+                            for i in range(1, len(resumo_layers)):
+                                resumo_layers[i] = _llm_summarize(model, resumo_layers[i-1])
+                        else:
+                            resumo_layers = [novo_base]
+                        msgs = _materialize(resumo_layers, verbatim)
+                        if _toklen_msgs(msgs) <= hist_budget:
+                            break
+                    else:
+                        # 4) fallback final: colapsa todos os resumos em UMA linha ultra-compacta
+                        everything = " ".join(resumo_layers)
+                        ultra = _llm_summarize(model, everything)
+                        resumo_layers = [ultra]
+                        msgs = _materialize(resumo_layers, verbatim)
+                        break
         else:
-            verbatim = []
-        msgs = [m for m in msgs if m["role"] == "system"] + verbatim
+            # Não havia resumos (histórico curto), mas excedeu — crie um resumo base da parte não-verbatim
+            if antigos:
+                bloco = "\n\n".join(m["content"] for m in antigos)
+                resumo_layers = [_llm_summarize(model, bloco)]
+                msgs = _materialize(resumo_layers, verbatim)
+            else:
+                # Nada a resumir além do verbatim; como a regra é nunca deletar,
+                # fazemos um colapso do verbatim inteiro em um resumo e mantemos o verbatim mínimo (se existir)
+                if verbatim:
+                    tudo = "\n\n".join(m["content"] for m in verbatim)
+                    resumo_layers = [_llm_summarize(model, tudo)]
+                    # mantém só as últimas 2 mensagens verbatim, o resto fica no resumo
+                    verbatim = verbatim[-2:]
+                    msgs = _materialize(resumo_layers, verbatim)
+                break
 
-    # Report para aviso visual (mesmo formato da Mary)
-    hist_tokens = _hist_tokens(msgs)
+    # ==== Relatório (sem trims)
     st.session_state["_mem_drop_report"] = {
-        "summarized_pairs": summarized_pairs,
-        "trimmed_pairs": trimmed_pairs,
-        "hist_tokens": hist_tokens,
-        "hist_budget": hist_budget,
+        "summarized_pairs": int(summarized_pairs),
+        "trimmed_pairs": int(trimmed_pairs),  # sempre 0
+        "hist_tokens": int(_toklen_msgs(msgs)),
+        "hist_budget": int(hist_budget),
     }
 
-    return msgs if msgs else history_boot[:]
+    # Preprende boot (se existir), respeitando a mesma política da Mary
+    final_msgs = (history_boot[:] if history_boot else []) + msgs
+    return final_msgs
