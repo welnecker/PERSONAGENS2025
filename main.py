@@ -509,11 +509,22 @@ def render_assistant_bubbles(markdown_text: str) -> None:
                 st.markdown(f"<div class='assistant-paragraph'>{safe}</div>", unsafe_allow_html=True)
 
 def _user_keys_for_history(user_id: str, character_name: str) -> List[str]:
+    """
+    Retorna todas as chaves possíveis para leitura de histórico,
+    cobrindo formato canônico, legado (apenas user_id) e 'anon::personagem'.
+    A ordem importa: a primeira é a canônica atual.
+    """
     ch = (character_name or "").strip().lower()
     primary = f"{user_id}::{ch}"
-    if ch == "mary":
-        return [primary, user_id]
-    return [primary]
+
+    keys = [
+        primary,       # canônica atual
+        user_id,       # legado (sem ::personagem) — já usado pela Mary
+        f"anon::{ch}", # seeds/primeiro boot sem user_id
+    ]
+    # remove vazios e dupes preservando ordem
+    return list(dict.fromkeys([k for k in keys if k]))
+
 
 def _reload_history(force: bool = False):
     user_id = str(st.session_state["user_id"])
@@ -524,18 +535,52 @@ def _reload_history(force: bool = False):
     try:
         keys = _user_keys_for_history(user_id, char)
         docs = get_history_docs_multi(keys, limit=400) or []
+
+        # Ordena por timestamp quando disponível; caso contrário,
+        # assume que veio "novo→antigo" e inverte para "antigo→novo".
+        def _sort_docs(ds: List[Dict]) -> List[Dict]:
+            if ds and ("timestamp" in ds[0] or "ts" in ds[0]):
+                try:
+                    return sorted(
+                        ds,
+                        key=lambda d: d.get("timestamp") or d.get("ts") or ""
+                    )
+                except Exception:
+                    pass
+            return list(reversed(ds))
+
+        docs = _sort_docs(docs)
+
+        # Monta histórico chat-like com deduplicação
         hist: List[Tuple[str, str]] = []
+        seen = set()
 
         resposta_key = f"resposta_{char.strip().lower()}"
+        fallbacks = ("resposta_adelle", "resposta_mary", "resposta_laura")
+
         for d in docs:
             u = (d.get("mensagem_usuario") or "").strip()
-            a = (d.get(resposta_key)
-                 or d.get("resposta_adelle")  # compatibilidade Adelle
-                 or d.get("resposta_mary") or "").strip()
+
+            a = (d.get(resposta_key) or "").strip()
+            if not a:
+                for fk in fallbacks:
+                    if d.get(fk):
+                        a = str(d.get(fk) or "").strip()
+                        if a:
+                            break
+
             if u:
-                hist.append(("user", u))
+                ku = ("u", u)
+                if ku not in seen:
+                    hist.append(("user", u))
+                    seen.add(ku)
+
             if a:
-                hist.append(("assistant", a))
+                ka = ("a", a)
+                if ka not in seen:
+                    hist.append(("assistant", a))
+                    seen.add(ka)
+
         st.session_state["history"] = hist
         st.session_state["history_loaded_for"] = key
     except Exception as e:
@@ -546,16 +591,23 @@ try:
     user_id = str(st.session_state.get("user_id", "")).strip()
     char    = str(st.session_state.get("character", "")).strip()
     if user_id and char:
-        char_key = f"{user_id}::{char.lower()}"
-        docs_exist = False
+        # Verifica em TODAS as chaves possíveis (inclui legados/anon)
+        keys = _user_keys_for_history(user_id, char)
         try:
-            existing = get_history_docs(char_key) or []
-            docs_exist = len(existing) > 0
+            existing_any = get_history_docs_multi(keys, limit=1) or []
         except Exception:
-            existing = []
-            docs_exist = False
+            existing_any = []
 
-        if not docs_exist:
+        docs_exist = len(existing_any) > 0
+
+        # Usa um flag-fact para nunca reseedar no mesmo user::char
+        fact_boot_flag_key = f"boot.first_message.done::{char.lower()}"
+        try:
+            boot_done = bool(get_fact(f"{user_id}::{char.lower()}", fact_boot_flag_key, False))
+        except Exception:
+            boot_done = False
+
+        if not docs_exist and not boot_done:
             try:
                 mod = __import__(f"characters.{char.lower()}.persona", fromlist=["get_persona"])
                 get_persona = getattr(mod, "get_persona", None)
@@ -567,8 +619,10 @@ try:
                 first_msg = next((m.get("content","") for m in (history_boot or [])
                                   if (m.get("role") or "") == "assistant"), "").strip()
                 if first_msg:
+                    primary_key = f"{user_id}::{char.lower()}"
                     try:
-                        save_interaction(char_key, "", first_msg, "boot:first_message")
+                        save_interaction(primary_key, "", first_msg, "boot:first_message")
+                        set_fact(primary_key, fact_boot_flag_key, True, {"fonte": "boot_guard"})
                     except Exception:
                         pass
 except Exception as e:
@@ -578,6 +632,7 @@ except Exception as e:
 _current_active = f"{st.session_state['user_id']}::{str(st.session_state['character']).lower()}"
 if st.session_state["_active_key"] != _current_active:
     st.session_state["_active_key"] = _current_active
+    # limpa apenas cache de UI; dados vêm do repo
     st.session_state["history"] = []
     st.session_state["history_loaded_for"] = ""
     _reload_history(force=True)
