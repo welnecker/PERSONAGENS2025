@@ -214,8 +214,16 @@ TOOLS = [
 # =========================
 
 def _current_user_key() -> str:
+    """
+    Mesma política do service da Mary:
+    - se houver login, usa "<uid>::adelle"
+    - se não houver, usa "anon::adelle"
+    """
     uid = str(st.session_state.get("user_id", "") or "").strip()
-    return f"{uid}::adelle" if uid else "anon::adelle"
+    if not uid:
+        return "anon::adelle"
+    return f"{uid}::adelle"
+
 
 # Preferências do usuário (estilo de missão)
 def _read_prefs(facts: Dict) -> Dict:
@@ -296,6 +304,39 @@ def _mem_drop_warn(report: dict) -> None:
             "Peça um **‘recap da missão’** se notar lacunas.",
             icon="⚠️",
         )
+
+def _heuristic_summarize(texto: str, max_bullets: int = 10) -> str:
+    """Compacta texto grande em bullets telegráficos (fallback sem LLM)."""
+    texto = re.sub(r"\s+", " ", (texto or "").strip())
+    sent = re.split(r"(?<=[\.\!\?])\s+", texto)
+    sent = [s.strip() for s in sent if s.strip()]
+    return " • " + "\n • ".join(sent[:max_bullets])
+
+def _llm_summarize(model: str, user_chunk: str) -> str:
+    """
+    Usa o mesmo roteador do resto do app para resumir bloco antigo.
+    Espelho do service da Mary. Cai no heurístico se falhar.
+    """
+    seed = (
+        "Resuma em 6–10 frases telegráficas, somente fatos duráveis (decisões, nomes, locais, tempo, "
+        "itens/gestos fixos e rumo da cena). Proibido diálogo literal."
+    )
+    try:
+        data, used_model, provider = route_chat_strict(model, {
+            "model": model,
+            "messages": [
+                {"role": "system", "content": seed},
+                {"role": "user", "content": user_chunk}
+            ],
+            "max_tokens": 220,
+            "temperature": 0.2,
+            "top_p": 0.9
+        })
+        txt = (data.get("choices", [{}])[0].get("message", {}) or {}).get("content", "") or ""
+        return txt.strip() or _heuristic_summarize(user_chunk)
+    except Exception:
+        return _heuristic_summarize(user_chunk)
+
 
 # ===== Bloco de system =====
 
@@ -848,151 +889,91 @@ class AdelleService(BaseCharacter):
         )
         return pin
 
-            def _montar_historico(
-        self,
-        usuario_key: str,
-        history_boot: List[Dict[str, str]],
-        model: str,
-        verbatim_ultimos: int = 10,
-    ) -> List[Dict[str, str]]:
-        """Últimos N turnos verbatim + 1 camada de resumo; respeita orçamento e mantém as mensagens mais recentes."""
+           def _montar_historico(
+    self,
+    usuario_key: str,
+    history_boot: List[Dict[str, str]],
+    model: str,
+    verbatim_ultimos: int = 10,
+) -> List[Dict[str, str]]:
+    """
+    Mesma política do service da Mary:
+      - Últimos N turnos verbatim preservados.
+      - Antigos viram [RESUMO-*] (1–3 camadas).
+      - Se necessário, poda verbatim mais antigo.
+    Grava relatório em st.session_state['_mem_drop_report'].
+    """
+    win = _get_window_for(model)
+    hist_budget, meta_budget, _ = _budget_slices(model)
 
-        hist_budget, _, _ = _budget_slices(model)
+    docs = cached_get_history(usuario_key)
+    if not docs:
+        st.session_state["_mem_drop_report"] = {}
+        return history_boot[:]
 
-        def _messages_toklen(msgs: List[Dict[str, str]]) -> int:
-            try:
-                return sum(toklen(m.get("content", "") or "") for m in msgs)
-            except Exception:
-                return 0
+    # Constrói pares user/assistant em ORDEM CRONOLÓGICA
+    pares: List[Dict[str, str]] = []
+    for d in docs:
+        u = (d.get("mensagem_usuario") or "").strip()
+        a = (d.get("resposta_adelle") or d.get("resposta_mary") or d.get("resposta_laura") or "").strip()
+        if u:
+            pares.append({"role": "user", "content": u})
+        if a:
+            pares.append({"role": "assistant", "content": a})
 
-        # 1) Carrega docs e força ORDEM CRONOLÓGICA (antigo → novo)
-        docs = cached_get_history(usuario_key) or []
+    if not pares:
+        st.session_state["_mem_drop_report"] = {}
+        return history_boot[:]
 
-        # Se seu backend já entrega cronológico, isso não muda nada.
-        # Se entregar "mais novo → mais antigo", o reversed corrige.
-        # Preferível: ordenar por timestamp se existir.
-        def _chrono_sort(ds: List[Dict]) -> List[Dict]:
-            # tenta chaves comuns; se não houver, assume que veio "mais novo → mais antigo" e dá reverse
-            for k in ("timestamp", "ts", "created_at", "time", "dt"):
-                if ds and k in ds[0]:
-                    try:
-                        return sorted(ds, key=lambda d: d.get(k) or 0)
-                    except Exception:
-                        pass
-            return list(reversed(ds))
-        docs = _chrono_sort(docs)
+    keep = max(0, verbatim_ultimos * 2)
+    verbatim = pares[-keep:] if keep else []
+    antigos  = pares[:len(pares) - len(verbatim)]
 
-        if not docs:
-            st.session_state["_mem_drop_report"] = {}
-            return history_boot[:]
+    msgs: List[Dict[str, str]] = []
+    summarized_pairs = 0
+    trimmed_pairs = 0
 
-        # 2) Constrói pares (U/A) em ordem cronológica
-        pares: List[Dict[str, str]] = []
-        for d in docs:
-            u = (d.get("mensagem_usuario") or "").strip()
-            a = (d.get("resposta_adelle") or d.get("resposta_mary") or d.get("resposta_laura") or "").strip()
-            if u:
-                pares.append({"role": "user", "content": u})
-            if a:
-                pares.append({"role": "assistant", "content": a})
+    # Resumo em camadas (como a Mary)
+    if antigos:
+        summarized_pairs = len(antigos) // 2
+        bloco = "\n\n".join(m["content"] for m in antigos)
+        resumo = _llm_summarize(model, bloco)
+        resumo_layers = [resumo]
 
-        if not pares:
-            st.session_state["_mem_drop_report"] = {}
-            return history_boot[:]
+        def _count_total_sim(resumo_texts: List[str]) -> int:
+            sim_msgs = [{"role": "system", "content": f"[RESUMO-{i+1}]\n{r}"} for i, r in enumerate(resumo_texts)]
+            sim_msgs += verbatim
+            return sum(toklen(m["content"]) for m in sim_msgs)
 
-        # 3) Separa verbatim (N mais recentes) e 'antigos'
-        keep = max(0, int(verbatim_ultimos) * 2)
-        if keep > 0:
-            verbatim = pares[-keep:]               # estes são os MAIS RECENTES (ok)
-            antigos  = pares[:-keep]               # tudo que vem antes
+        # Até 3 camadas, se necessário
+        while _count_total_sim(resumo_layers) > hist_budget and len(resumo_layers) < 3:
+            resumo_layers[0] = _llm_summarize(model, resumo_layers[0])
+
+        for i, r in enumerate(resumo_layers, start=1):
+            msgs.append({"role": "system", "content": f"[RESUMO-{i}]\n{r}"})
+
+    # Injeta verbatim recente
+    msgs.extend(verbatim)
+
+    # Poda se exceder orçamento (remove do COMEÇO do verbatim → preserva as últimas falas)
+    def _hist_tokens(mm: List[Dict,]) -> int:
+        return sum(toklen(m.get("content","")) for m in mm)
+
+    while _hist_tokens(msgs) > hist_budget and verbatim:
+        if len(verbatim) >= 2:
+            verbatim = verbatim[2:]
+            trimmed_pairs += 1
         else:
             verbatim = []
-            antigos  = pares[:]                    # nada verbatim → tudo "antigo"
+        msgs = [m for m in msgs if m["role"] == "system"] + verbatim
 
-        # 4) Resumo de 'antigos' em UMA camada
-        summarized_pairs = len(antigos)
-        resumo_msg: List[Dict[str, str]] = []
-        if antigos:
-            def _compact_pairs(ps: List[Dict[str, str]], lim: int = 3500) -> str:
-                buff = []
-                total = 0
-                for m in ps:
-                    role = "U" if m.get("role") == "user" else "A"
-                    txt  = (m.get("content", "") or "").strip().replace("\n", " ")
-                    item = f"{role}:{txt}"
-                    total += len(item) + 1
-                    if total > lim:
-                        break
-                    buff.append(item)
-                return " ".join(buff)
+    # Report para aviso visual (mesmo formato da Mary)
+    hist_tokens = _hist_tokens(msgs)
+    st.session_state["_mem_drop_report"] = {
+        "summarized_pairs": summarized_pairs,
+        "trimmed_pairs": trimmed_pairs,
+        "hist_tokens": hist_tokens,
+        "hist_budget": hist_budget,
+    }
 
-            contexto = _compact_pairs(antigos, lim=3500)
-            sys = ("Resuma em um único parágrafo (pt-BR) os eventos e fatos canônicos; "
-                   "preserve nomes e locais; sem listas nem 'Resumo:'. Foque decisões, riscos, objetivos, pendências.")
-            msgs_sum = [{"role": "system", "content": sys}, {"role": "user", "content": contexto}]
-
-            resumo_txt = ""
-            try:
-                data, used_model, provider = _robust_chat_call(
-                    model, msgs_sum, max_tokens=320, temperature=0.2, top_p=0.9
-                )
-                resumo_txt = (data.get("choices", [{}])[0].get("message", {}) or {}).get("content", "") or ""
-            except Exception:
-                resumo_txt = ""
-
-            if not resumo_txt:
-                # fallback determinístico
-                joined = " ".join(m.get("content", "") or "" for m in antigos)
-                resumo_txt = re.sub(r"\s+", " ", joined).strip()[:900]
-
-            resumo_txt = re.sub(r"[\r\n]+", " ", resumo_txt).strip()
-            resumo_msg = [{"role": "system", "content": f"[HISTÓRICO RESUMIDO] {resumo_txt}"}]
-
-        # 5) Monta candidato: boot + resumo + verbatim (mantendo as MENSAGENS MAIS RECENTES)
-        msgs: List[Dict[str, str]] = []
-        if history_boot:
-            msgs.extend(history_boot[:])
-        if resumo_msg:
-            msgs.extend(resumo_msg)
-        if verbatim:
-            msgs.extend(verbatim)
-
-        # 6) Poda para caber no orçamento — SEM perder as últimas mensagens
-        trimmed_pairs = 0
-
-        def _shrink_verbatim_from_oldest(vb: List[Dict[str, str]]) -> None:
-            # remove do começo de 'verbatim' (que são os mais antigos dentro do bloco),
-            # preservando as interações mais recentes.
-            nonlocal trimmed_pairs
-            if vb:
-                vb.pop(0)
-                trimmed_pairs += 1
-
-        # 6a) primeiro vai podando verbatim se estourar
-        while _messages_toklen(msgs) > hist_budget and verbatim:
-            _shrink_verbatim_from_oldest(verbatim)
-            msgs = (history_boot[:] if history_boot else []) + (resumo_msg or []) + verbatim
-
-        # 6b) se ainda exceder, encurta o texto do resumo (10% por iteração)
-        if _messages_toklen(msgs) > hist_budget and resumo_msg:
-            txt = resumo_msg[0]["content"]
-            for _ in range(10):
-                if _messages_toklen(msgs) <= hist_budget:
-                    break
-                txt = txt[: int(len(txt) * 0.9)].rsplit(" ", 1)[0]
-                resumo_msg[0]["content"] = txt
-                msgs = (history_boot[:] if history_boot else []) + resumo_msg + verbatim
-
-        # 6c) se mesmo assim ainda exceder, remove o resumo por completo
-        if _messages_toklen(msgs) > hist_budget and resumo_msg:
-            resumo_msg = []
-            msgs = (history_boot[:] if history_boot else []) + verbatim
-
-        # 7) Report para o aviso visual
-        st.session_state["_mem_drop_report"] = {
-            "summarized_pairs": int(summarized_pairs),
-            "trimmed_pairs": int(trimmed_pairs),
-            "hist_tokens": int(_messages_toklen(msgs)),
-            "hist_budget": int(hist_budget),
-        }
-        return msgs
+    return msgs if msgs else history_boot[:]
