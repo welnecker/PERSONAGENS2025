@@ -214,16 +214,8 @@ TOOLS = [
 # =========================
 
 def _current_user_key() -> str:
-    """
-    Mesma política do service da Mary:
-    - se houver login, usa "<uid>::adelle"
-    - se não houver, usa "anon::adelle"
-    """
     uid = str(st.session_state.get("user_id", "") or "").strip()
-    if not uid:
-        return "anon::adelle"
-    return f"{uid}::adelle"
-
+    return f"{uid}::adelle" if uid else "anon::adelle"
 
 # Preferências do usuário (estilo de missão)
 def _read_prefs(facts: Dict) -> Dict:
@@ -305,39 +297,6 @@ def _mem_drop_warn(report: dict) -> None:
             icon="⚠️",
         )
 
-def _heuristic_summarize(texto: str, max_bullets: int = 10) -> str:
-    """Compacta texto grande em bullets telegráficos (fallback sem LLM)."""
-    texto = re.sub(r"\s+", " ", (texto or "").strip())
-    sent = re.split(r"(?<=[\.\!\?])\s+", texto)
-    sent = [s.strip() for s in sent if s.strip()]
-    return " • " + "\n • ".join(sent[:max_bullets])
-
-def _llm_summarize(model: str, user_chunk: str) -> str:
-    """
-    Usa o mesmo roteador do resto do app para resumir bloco antigo.
-    Espelho do service da Mary. Cai no heurístico se falhar.
-    """
-    seed = (
-        "Resuma em 6–10 frases telegráficas, somente fatos duráveis (decisões, nomes, locais, tempo, "
-        "itens/gestos fixos e rumo da cena). Proibido diálogo literal."
-    )
-    try:
-        data, used_model, provider = route_chat_strict(model, {
-            "model": model,
-            "messages": [
-                {"role": "system", "content": seed},
-                {"role": "user", "content": user_chunk}
-            ],
-            "max_tokens": 220,
-            "temperature": 0.2,
-            "top_p": 0.9
-        })
-        txt = (data.get("choices", [{}])[0].get("message", {}) or {}).get("content", "") or ""
-        return txt.strip() or _heuristic_summarize(user_chunk)
-    except Exception:
-        return _heuristic_summarize(user_chunk)
-
-
 # ===== Bloco de system =====
 
 def _build_system_block(
@@ -389,229 +348,6 @@ def _build_system_block(
 class AdelleService(BaseCharacter):
     id: str = "adelle"
     display_name: str = "Adelle"
-
-        # ===== Rolling Summary (turbinado com proteção de entidades + baixa entropia) =====
-    _ROLLING_KEY = "adelle.mem.rolling"
-
-    # ------------ Helpers de Entidades & Compressão ------------
-    _FILLER_PATTERNS = [
-        r"\b(em\s+tempo\s+presente|no\s+geral|de\s+alguma\s+forma|de\s+certa\s+forma)\b",
-        r"\b(de\s+modo\s+geral|basicamente|literalmente|tipo\s+assim)\b",
-        r"\b(nesse\s+contexto|nesse\s+sentido|de\s+forma\s+geral)\b",
-        r"\b(claramente|obviamente|evidentemente)\b",
-    ]
-    _MULTISPACE = re.compile(r"\s+")
-    _DUP_PUNCT  = re.compile(r"([,.;:!?])\1+")
-    _SPACE_PUNCT= re.compile(r"\s+([,.;:!?])")
-    _PUNCT_SPACE= re.compile(r"([,.;:!?])\s*")
-
-    # Nomes próprios compostos (ex.: "Sophia Roytmann", "Ponto Seguro Icaraí")
-    _NAME_SEQ   = re.compile(r"\b([A-ZÀ-Ü][\wÀ-ÖØ-öø-ÿ'’\-]+(?:\s+[A-ZÀ-Ü][\wÀ-ÖØ-öø-ÿ'’\-]+){0,3})\b")
-    # Locais comuns (puxa tokens após "em", "no", "na", etc.)
-    _LOC_HINT   = re.compile(r"\b(?:em|no|na|nos|nas)\s+([A-ZÀ-Ü][^,.;:\n]{1,48})")
-
-    def _extract_entities_soft(self, fonte: str, max_items: int = 12) -> list[str]:
-        """
-        Coleta entidades (nomes/locais) de uma string usando regex tolerante.
-        """
-        if not fonte:
-            return []
-        cand: list[str] = []
-        for m in self._NAME_SEQ.finditer(fonte):
-            s = m.group(1).strip()
-            if len(s.split()) == 1 and len(s) <= 2:
-                continue  # ignora iniciais soltas
-            cand.append(s)
-        for m in self._LOC_HINT.finditer(fonte):
-            s = m.group(1).strip()
-            cand.append(s)
-        # normaliza e dedup preservando ordem
-        seen = set()
-        out = []
-        for x in cand:
-            k = x.lower()
-            if k not in seen:
-                out.append(x)
-                seen.add(k)
-            if len(out) >= max_items:
-                break
-        return out
-
-    def _entities_from_facts_and_prev(self, usuario_key: str, prev_line: str) -> list[str]:
-        """
-        Junta entidades vindas dos facts canônicos e do resumo anterior.
-        """
-        ents: list[str] = []
-        try:
-            f = cached_get_facts(usuario_key) or {}
-        except Exception:
-            f = {}
-        # Alvos/locais explícitos nos facts
-        for k in list(f.keys()):
-            if isinstance(k, str) and (k.startswith("adelle.entity.") or k in ("local_cena_atual",)):
-                v = str(f.get(k) or "").strip()
-                if v:
-                    ents.extend(self._extract_entities_soft(v, max_items=8))
-        # Puxa do resumo anterior também
-        ents.extend(self._extract_entities_soft(prev_line or "", max_items=8))
-        # Dedup
-        seen = set(); uniq = []
-        for e in ents:
-            lk = e.lower()
-            if lk not in seen:
-                uniq.append(e)
-                seen.add(lk)
-        return uniq[:16]
-
-    def _dedup_ngrams(self, text: str, n: int = 3) -> str:
-        """
-        Remove repetições consecutivas de n-gramas (anti loop).
-        """
-        tokens = text.split()
-        if len(tokens) < n*2:
-            return text
-        out = []
-        i = 0
-        while i < len(tokens):
-            out.extend(tokens[i:i+n])
-            block = tokens[i:i+n]
-            j = i + n
-            # enquanto próximo bloco igual, pula
-            while j + n <= len(tokens) and tokens[j:j+n] == block:
-                j += n
-            i = j
-        return " ".join(out)
-
-    def _low_entropy_cleanup(self, s: str) -> str:
-        """
-        Compacta e reduz entropia (remove muletas, espaços e pontuação duplicada).
-        """
-        if not s:
-            return s
-        # tira fillers
-        for pat in self._FILLER_PATTERNS:
-            s = re.sub(pat, "", s, flags=re.I)
-        # dedup pontuação e espaços
-        s = self._DUP_PUNCT.sub(r"\1", s)
-        s = self._SPACE_PUNCT.sub(r"\1", s)
-        s = self._PUNCT_SPACE.sub(r"\1 ", s)
-        s = self._MULTISPACE.sub(" ", s)
-        s = s.strip(" ;,.\n\t").strip()
-        # dedup n-gramas
-        s = self._dedup_ngrams(s, n=3)
-        s = self._MULTISPACE.sub(" ", s).strip()
-        return s
-
-    def _inject_or_append_entities(self, line: str, entities: list[str]) -> str:
-        """
-        Garante que entidades apareçam na linha final: se sumiram, reanexa bloco curto.
-        """
-        if not entities:
-            return line
-        miss = []
-        low = line.lower()
-        for e in entities:
-            if e and e.lower() not in low:
-                miss.append(e)
-        if not miss:
-            return line
-        # bloco de salvaguarda enxuto (no final, sem quebrar estilo)
-        safeblock = " | ENTIDADES: " + ", ".join(miss[:8])
-        merged = (line + safeblock).strip()
-        # normaliza tamanho após anexar
-        if len(merged) > 900:
-            merged = merged[:900].rsplit(" ", 1)[0]
-        return merged
-
-    # ------------ API pública do rolling ------------
-    def _get_rolling_summary(self, usuario_key: str) -> str:
-        try:
-            s = get_fact(usuario_key, self._ROLLING_KEY, "") or ""
-            if s:
-                return s.strip()
-        except Exception:
-            pass
-        return (st.session_state.get("_adelle_rolling") or "").strip()
-
-    def _update_rolling_summary_v2(self, usuario_key: str, model: str, user_text: str, assistant_text: str) -> None:
-        """
-        Atualiza o resumo canônico garantindo:
-        - linha única (400–900 chars),
-        - preservação de nomes/locais (re-injeção se sumirem),
-        - baixa entropia e sem muletas.
-        """
-        prev = self._get_rolling_summary(usuario_key)
-        u = (user_text or "").strip()
-        a = (assistant_text or "").strip()
-        if not (u or a):
-            return
-
-        # Entidades prioritárias extraídas antes (para checagem pós-geração)
-        ents_prior = self._entities_from_facts_and_prev(usuario_key, prev)
-
-        # Prompt com instrução explícita de proteção de entidades
-        system = (
-            "Resuma **em uma única linha factual (pt-BR)** o estado ATUAL da missão de Adelle (objetivo, relações, "
-            "decisões, locais, riscos e pendências). **Mantenha TODOS os nomes e locais citados** abaixo, sem inventar "
-            "novos. Não use listas, cabeçalhos ou 'Resumo:'. Estilo direto, sem muletas, entre 400 e 900 caracteres."
-        )
-        ents_hint = ", ".join(ents_prior) if ents_prior else "—"
-        context = (
-            f"ENTIDADES-PARA-PRESERVAR: {ents_hint}\n"
-            f"RESUMO_ATUAL: {prev or '—'}\n"
-            f"USUARIO(disse): {u}\n"
-            f"ADELLE(respondeu): {a}\n"
-        )
-
-        messages = [
-            {"role": "system", "content": system},
-            {"role": "user", "content": context},
-        ]
-
-        new_line = ""
-        try:
-            data, used_model, provider = _robust_chat_call(
-                model, messages, max_tokens=640, temperature=0.2, top_p=0.9
-            )
-            new_line = (data.get("choices", [{}])[0].get("message", {}) or {}).get("content", "") or ""
-        except Exception:
-            new_line = ""
-
-        # Fallback determinístico: concat compactada
-        if not new_line:
-            base = " ".join([prev, u, a]).strip()
-            base = re.sub(r"\s+", " ", base)
-            new_line = base or "—"
-
-        # Normalizações: 1 linha, limpeza, recorte de tamanho
-        new_line = re.sub(r"[\r\n]+", " ", new_line).strip()
-        new_line = self._low_entropy_cleanup(new_line)
-        if len(new_line) < 380:
-            # leve “acolchoamento” com trechos essenciais do prev se ficou curto demais
-            pad = (prev or "")
-            pad = self._low_entropy_cleanup(pad)
-            take = max(0, 420 - len(new_line))
-            if take > 0 and pad:
-                new_line = (new_line + " " + pad[:take]).strip()
-                new_line = self._low_entropy_cleanup(new_line)
-        if len(new_line) > 900:
-            new_line = new_line[:900].rsplit(" ", 1)[0]
-
-        # Re-injeção de entidades ausentes (anti-apagão)
-        new_line = self._inject_or_append_entities(new_line, ents_prior)
-
-        # Persistência + cache
-        try:
-            set_fact(usuario_key, self._ROLLING_KEY, new_line, {"fonte": "rolling_v2_turbo"})
-            clear_user_cache(usuario_key)
-        except Exception:
-            pass
-        st.session_state["_adelle_rolling"] = new_line
-
-    # ===== Sugeridor de placeholder (continua no-op seguro) =====
-    def _suggest_placeholder(self, assistant_text: str, local_atual: str) -> str:
-        return ""
-
 
     # ===== API =====
     def reply(self, user: str, model: str) -> str:
@@ -889,170 +625,37 @@ class AdelleService(BaseCharacter):
         )
         return pin
 
-           def _montar_historico(
-    self,
-    usuario_key: str,
-    history_boot: List[Dict[str, str]],
-    model: str,
-    verbatim_ultimos: int = 10,
-) -> List[Dict[str, str]]:
-    """
-    Monta histórico SEM DELETAR interação:
-      - ORDEM: cronológica (antigo → novo).
-      - Antigos → viram [RESUMO-*] em camadas; NUNCA descartamos conteúdo, apenas condensamos.
-      - Verbatim recente: mantém os últimos `verbatim_ultimos` pares (2N mensagens) SEM poda.
-      - Se estourar orçamento: re-sumariza (camadas) e/ou absorve parte do verbatim antigo nos resumos
-        (demover para o bloco resumido), mas sem “sumir” com nada — tudo fica representado.
-      - `trimmed_pairs` = 0 sempre (sem cortes).
-    Grava relatório em st.session_state['_mem_drop_report'].
-    """
-    hist_budget, _, _ = _budget_slices(model)
+    def _montar_historico(
+        self,
+        usuario_key: str,
+        history_boot: List[Dict[str, str]],
+        model: str,
+        verbatim_ultimos: int = 10,
+    ) -> List[Dict[str, str]]:
+        """Últimos N turnos verbatim + resumo em 1 camada; poda até o orçamento."""
+        hist_budget, _, _ = _budget_slices(model)
 
-    # ==== utils
-    def _toklen_msgs(msgs: List[Dict[str, str]]) -> int:
-        try:
-            return sum(toklen(m.get("content", "") or "") for m in msgs)
-        except Exception:
-            return 0
+        docs = cached_get_history(usuario_key)
+        if not docs:
+            st.session_state["_mem_drop_report"] = {}
+            return history_boot[:]
 
-    def _pairs_from_docs(ds: List[Dict]) -> List[Dict[str, str]]:
         pares: List[Dict[str, str]] = []
-        for d in ds:
+        for d in docs:
             u = (d.get("mensagem_usuario") or "").strip()
             a = (d.get("resposta_adelle") or d.get("resposta_mary") or d.get("resposta_laura") or "").strip()
             if u:
                 pares.append({"role": "user", "content": u})
             if a:
                 pares.append({"role": "assistant", "content": a})
-        return pares
 
-    # ==== load history (cronológico)
-    docs = cached_get_history(usuario_key)
-    if not docs:
-        st.session_state["_mem_drop_report"] = {}
-        return history_boot[:]
+        if not pares:
+            st.session_state["_mem_drop_report"] = {}
+            return history_boot[:]
 
-    # Se seu backend já vem cronológico, ok; se vier invertido, reverse mantém estável.
-    # (Opcional: ordenar por timestamp, se existir.)
-    docs = list(docs)[::-1]  # assume repo retorna mais novo → mais antigo; inverter para antigo → novo
+        keep = max(0, verbatim_ultimos * 2)
+        verbatim = pares[-keep:] if keep else []
+        antigos = pares[:-len(verbatim)]
 
-    pares = _pairs_from_docs(docs)
-    if not pares:
-        st.session_state["_mem_drop_report"] = {}
-        return history_boot[:]
-
-    # ==== separa verbatim recente e antigos
-    keep_msgs = max(0, int(verbatim_ultimos) * 2)  # N pares -> 2N mensagens
-    verbatim = pares[-keep_msgs:] if keep_msgs else []
-    antigos  = pares[:len(pares) - len(verbatim)]
-
-    # ==== constrói resumos SEM deletar
-    summarized_pairs = 0
-    trimmed_pairs = 0  # sempre zero (sem cortes)
-
-    resumo_layers: List[str] = []
-    if antigos:
-        summarized_pairs = len(antigos) // 2  # métrica: quantos pares foram “absorvidos” em resumo
-        bloco = "\n\n".join(m["content"] for m in antigos)
-        resumo = _llm_summarize(model, bloco)  # usa helper já existente (espelhado da Mary)
-        resumo_layers = [resumo]
-
-    def _materialize(resumos: List[str], vb: List[Dict[str, str]]) -> List[Dict[str, str]]:
         msgs: List[Dict[str, str]] = []
-        for i, r in enumerate(resumos, start=1):
-            msgs.append({"role": "system", "content": f"[RESUMO-{i}]\n{r}"})
-        msgs.extend(vb)
-        return msgs
-
-    msgs = _materialize(resumo_layers, verbatim)
-
-    # ==== Se exceder orçamento, NUNCA corta: re-sumariza e/ou absorve verbatim velho para o resumo
-    # Estratégia:
-    #   1) Se estourar, re-sumariza a camada 1 em algo mais curto (10% a cada passo).
-    #   2) Se ainda estourar, move o BLOCO MAIS ANTIGO do verbatim para os “antigos” e refaz o resumo da camada 1.
-    #   3) Opcional: criar 2ª/3ª camadas encadeando resumos (cada camada resume a anterior).
-    #   4) Como última proteção, colapsa todos os resumos em uma linha ultra-compacta e mantém apenas o verbatim final.
-    # Nada é perdido: tudo que sai de verbatim vai para o resumo.
-
-    # Parâmetros de proteção
-    MAX_LAYERS = 3
-    MAX_ITER   = 20
-
-    iter_count = 0
-    while _toklen_msgs(msgs) > hist_budget and iter_count < MAX_ITER:
-        iter_count += 1
-
-        # 1) tentar encurtar o último resumo (10%)
-        if resumo_layers:
-            last = resumo_layers[-1]
-            if len(last) > 160:
-                new_last = last[: int(len(last) * 0.9)].rsplit(" ", 1)[0]
-                resumo_layers[-1] = new_last
-                msgs = _materialize(resumo_layers, verbatim)
-                if _toklen_msgs(msgs) <= hist_budget:
-                    break
-            else:
-                # 2) criar nova camada resumindo a anterior (até MAX_LAYERS)
-                if len(resumo_layers) < MAX_LAYERS:
-                    compact_src = resumo_layers[-1]
-                    resumo_layers.append(_llm_summarize(model, compact_src))
-                    msgs = _materialize(resumo_layers, verbatim)
-                    if _toklen_msgs(msgs) <= hist_budget:
-                        break
-                else:
-                    # 3) absorver parte do VERBATIM mais antigo para o resumo
-                    #    (move 1 PAR de verbatim para os 'antigos' e re-resuma)
-                    if len(verbatim) >= 2:
-                        # pega as 2 mensagens mais antigas dentro do verbatim
-                        moved = verbatim[:2]
-                        verbatim = verbatim[2:]
-                        # integra ao bloco antigo e gera novo resumo base (camada 1)
-                        moved_text = " ".join(m["content"] for m in moved)
-                        base_text = (resumo_layers[0] if resumo_layers else "")
-                        # reconstroi camada 1 com moved_text + base_text (sem perder conteudo)
-                        novo_base = _llm_summarize(model, (moved_text + "\n\n" + base_text).strip())
-                        if resumo_layers:
-                            resumo_layers[0] = novo_base
-                            # se houver camadas >1, recalcule-as contra o novo base
-                            for i in range(1, len(resumo_layers)):
-                                resumo_layers[i] = _llm_summarize(model, resumo_layers[i-1])
-                        else:
-                            resumo_layers = [novo_base]
-                        msgs = _materialize(resumo_layers, verbatim)
-                        if _toklen_msgs(msgs) <= hist_budget:
-                            break
-                    else:
-                        # 4) fallback final: colapsa todos os resumos em UMA linha ultra-compacta
-                        everything = " ".join(resumo_layers)
-                        ultra = _llm_summarize(model, everything)
-                        resumo_layers = [ultra]
-                        msgs = _materialize(resumo_layers, verbatim)
-                        break
-        else:
-            # Não havia resumos (histórico curto), mas excedeu — crie um resumo base da parte não-verbatim
-            if antigos:
-                bloco = "\n\n".join(m["content"] for m in antigos)
-                resumo_layers = [_llm_summarize(model, bloco)]
-                msgs = _materialize(resumo_layers, verbatim)
-            else:
-                # Nada a resumir além do verbatim; como a regra é nunca deletar,
-                # fazemos um colapso do verbatim inteiro em um resumo e mantemos o verbatim mínimo (se existir)
-                if verbatim:
-                    tudo = "\n\n".join(m["content"] for m in verbatim)
-                    resumo_layers = [_llm_summarize(model, tudo)]
-                    # mantém só as últimas 2 mensagens verbatim, o resto fica no resumo
-                    verbatim = verbatim[-2:]
-                    msgs = _materialize(resumo_layers, verbatim)
-                break
-
-    # ==== Relatório (sem trims)
-    st.session_state["_mem_drop_report"] = {
-        "summarized_pairs": int(summarized_pairs),
-        "trimmed_pairs": int(trimmed_pairs),  # sempre 0
-        "hist_tokens": int(_toklen_msgs(msgs)),
-        "hist_budget": int(hist_budget),
-    }
-
-    # Preprende boot (se existir), respeitando a mesma política da Mary
-    final_msgs = (history_boot[:] if history_boot else []) + msgs
-    return final_msgs
+        summarized_pairs
