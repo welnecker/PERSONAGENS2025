@@ -96,7 +96,7 @@ def get_persona() -> Tuple[str, List[Dict[str, str]]]:
     )
 
     first_message = (
-        "A festa é um zoológico de luxo, políticos corruptos, empresários influentes desfrutam da suntuosa recepção realizada por Neuza Roytmann. Meu vestido de seda vermelho é um contraste violento contra a monotonia dos ternos pretos. Meus olhos já te encontraram há muito tempo. Pietro Roytmann conversa com duas belas mulheres.\n\n"
+        "A festa é um zoológico de luxo, políticos corruptos, empresários influentes desfrutam da suntuosa recepção realizada por Neuza Roytmann. Meu vestido de seda vermelho é um contraste violento contra a monotonia dos ternos pretos. Pietro Roytmann conversa com duas belas mulheres.\n\n"
         "Meu alvo é Pietro. Me aproximo como uma gata manhosa, fingindo não nota-lo.\n\n"
         "Começo a me mover, um deslizar calculado através da multidão. Meu plano é simples: abordar Pietro, usar o choque da minha presença para conseguir uma reação.\n\n"
         "Ele nota minha presença irresistível. Nossos olhos se encontram, e por um segundo, a música e as conversas desaparecem. É um duelo silencioso. A caça e a caçadora, frente a frente.\n\n"
