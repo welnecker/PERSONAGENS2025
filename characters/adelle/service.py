@@ -848,15 +848,15 @@ class AdelleService(BaseCharacter):
         )
         return pin
 
-        def _montar_historico(
+            def _montar_historico(
         self,
         usuario_key: str,
         history_boot: List[Dict[str, str]],
         model: str,
         verbatim_ultimos: int = 10,
     ) -> List[Dict[str, str]]:
-        """Últimos N turnos verbatim + 1 camada de resumo; respeita orçamento de tokens."""
-        # --- orçamento de histórico ---
+        """Últimos N turnos verbatim + 1 camada de resumo; respeita orçamento e mantém as mensagens mais recentes."""
+
         hist_budget, _, _ = _budget_slices(model)
 
         def _messages_toklen(msgs: List[Dict[str, str]]) -> int:
@@ -865,12 +865,28 @@ class AdelleService(BaseCharacter):
             except Exception:
                 return 0
 
-        # --- carrega docs e transforma em pares user/assistant ---
+        # 1) Carrega docs e força ORDEM CRONOLÓGICA (antigo → novo)
         docs = cached_get_history(usuario_key) or []
+
+        # Se seu backend já entrega cronológico, isso não muda nada.
+        # Se entregar "mais novo → mais antigo", o reversed corrige.
+        # Preferível: ordenar por timestamp se existir.
+        def _chrono_sort(ds: List[Dict]) -> List[Dict]:
+            # tenta chaves comuns; se não houver, assume que veio "mais novo → mais antigo" e dá reverse
+            for k in ("timestamp", "ts", "created_at", "time", "dt"):
+                if ds and k in ds[0]:
+                    try:
+                        return sorted(ds, key=lambda d: d.get(k) or 0)
+                    except Exception:
+                        pass
+            return list(reversed(ds))
+        docs = _chrono_sort(docs)
+
         if not docs:
             st.session_state["_mem_drop_report"] = {}
             return history_boot[:]
 
+        # 2) Constrói pares (U/A) em ordem cronológica
         pares: List[Dict[str, str]] = []
         for d in docs:
             u = (d.get("mensagem_usuario") or "").strip()
@@ -884,35 +900,36 @@ class AdelleService(BaseCharacter):
             st.session_state["_mem_drop_report"] = {}
             return history_boot[:]
 
-        # --- separa verbatim e antigos ---
-        keep = max(0, verbatim_ultimos * 2)
-        verbatim = pares[-keep:] if keep else []
-        antigos = pares[:-len(verbatim)] if keep else pares[:-0]
+        # 3) Separa verbatim (N mais recentes) e 'antigos'
+        keep = max(0, int(verbatim_ultimos) * 2)
+        if keep > 0:
+            verbatim = pares[-keep:]               # estes são os MAIS RECENTES (ok)
+            antigos  = pares[:-keep]               # tudo que vem antes
+        else:
+            verbatim = []
+            antigos  = pares[:]                    # nada verbatim → tudo "antigo"
 
-        # --- sumariza 'antigos' em UMA camada (system) ---
-        summarized_pairs = len(antigos)  # <== AGORA existe e contabiliza o que foi resumido
+        # 4) Resumo de 'antigos' em UMA camada
+        summarized_pairs = len(antigos)
         resumo_msg: List[Dict[str, str]] = []
         if antigos:
-            # Contexto compacto para o sumarizador
             def _compact_pairs(ps: List[Dict[str, str]], lim: int = 3500) -> str:
                 buff = []
+                total = 0
                 for m in ps:
                     role = "U" if m.get("role") == "user" else "A"
-                    txt = (m.get("content", "") or "").strip().replace("\n", " ")
-                    buff.append(f"{role}:{txt}")
-                    if len(" ".join(buff)) > lim:
+                    txt  = (m.get("content", "") or "").strip().replace("\n", " ")
+                    item = f"{role}:{txt}"
+                    total += len(item) + 1
+                    if total > lim:
                         break
+                    buff.append(item)
                 return " ".join(buff)
 
             contexto = _compact_pairs(antigos, lim=3500)
-            sys = (
-                "Resuma em **um único parágrafo** (pt-BR) os eventos e fatos canônicos, "
-                "preservando nomes e locais; sem listas; sem 'Resumo:'. Foque decisões, riscos, objetivos e pendências."
-            )
-            msgs_sum = [
-                {"role": "system", "content": sys},
-                {"role": "user", "content": contexto},
-            ]
+            sys = ("Resuma em um único parágrafo (pt-BR) os eventos e fatos canônicos; "
+                   "preserve nomes e locais; sem listas nem 'Resumo:'. Foque decisões, riscos, objetivos, pendências.")
+            msgs_sum = [{"role": "system", "content": sys}, {"role": "user", "content": contexto}]
 
             resumo_txt = ""
             try:
@@ -924,16 +941,14 @@ class AdelleService(BaseCharacter):
                 resumo_txt = ""
 
             if not resumo_txt:
-                # fallback determinístico (sem rede)
+                # fallback determinístico
                 joined = " ".join(m.get("content", "") or "" for m in antigos)
-                joined = re.sub(r"\s+", " ", joined).strip()
-                resumo_txt = joined[:900]
+                resumo_txt = re.sub(r"\s+", " ", joined).strip()[:900]
 
             resumo_txt = re.sub(r"[\r\n]+", " ", resumo_txt).strip()
-            # empacota como system p/ ficar "leve"
             resumo_msg = [{"role": "system", "content": f"[HISTÓRICO RESUMIDO] {resumo_txt}"}]
 
-        # --- monta histórico candidato: boot + resumo + verbatim ---
+        # 5) Monta candidato: boot + resumo + verbatim (mantendo as MENSAGENS MAIS RECENTES)
         msgs: List[Dict[str, str]] = []
         if history_boot:
             msgs.extend(history_boot[:])
@@ -942,29 +957,38 @@ class AdelleService(BaseCharacter):
         if verbatim:
             msgs.extend(verbatim)
 
-        # --- poda para caber no orçamento ---
+        # 6) Poda para caber no orçamento — SEM perder as últimas mensagens
         trimmed_pairs = 0
-        # tenta primeiro podar verbatim do começo (mais antigos dentro do bloco verbatim)
+
+        def _shrink_verbatim_from_oldest(vb: List[Dict[str, str]]) -> None:
+            # remove do começo de 'verbatim' (que são os mais antigos dentro do bloco),
+            # preservando as interações mais recentes.
+            nonlocal trimmed_pairs
+            if vb:
+                vb.pop(0)
+                trimmed_pairs += 1
+
+        # 6a) primeiro vai podando verbatim se estourar
         while _messages_toklen(msgs) > hist_budget and verbatim:
-            verbatim.pop(0)  # remove a primeira msg verbatim
-            trimmed_pairs += 1
+            _shrink_verbatim_from_oldest(verbatim)
             msgs = (history_boot[:] if history_boot else []) + (resumo_msg or []) + verbatim
-        # se ainda estiver grande, encurta o resumo
+
+        # 6b) se ainda exceder, encurta o texto do resumo (10% por iteração)
         if _messages_toklen(msgs) > hist_budget and resumo_msg:
             txt = resumo_msg[0]["content"]
-            # corta 10% por iteração até caber
             for _ in range(10):
                 if _messages_toklen(msgs) <= hist_budget:
                     break
                 txt = txt[: int(len(txt) * 0.9)].rsplit(" ", 1)[0]
                 resumo_msg[0]["content"] = txt
                 msgs = (history_boot[:] if history_boot else []) + resumo_msg + verbatim
-        # se ainda exceder, remove completamente o resumo
+
+        # 6c) se mesmo assim ainda exceder, remove o resumo por completo
         if _messages_toklen(msgs) > hist_budget and resumo_msg:
             resumo_msg = []
             msgs = (history_boot[:] if history_boot else []) + verbatim
 
-        # relatório visual
+        # 7) Report para o aviso visual
         st.session_state["_mem_drop_report"] = {
             "summarized_pairs": int(summarized_pairs),
             "trimmed_pairs": int(trimmed_pairs),
