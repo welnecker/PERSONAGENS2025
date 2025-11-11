@@ -848,17 +848,25 @@ class AdelleService(BaseCharacter):
         )
         return pin
 
-    def _montar_historico(
+        def _montar_historico(
         self,
         usuario_key: str,
         history_boot: List[Dict[str, str]],
         model: str,
         verbatim_ultimos: int = 10,
     ) -> List[Dict[str, str]]:
-        """Últimos N turnos verbatim + resumo em 1 camada; poda até o orçamento."""
+        """Últimos N turnos verbatim + 1 camada de resumo; respeita orçamento de tokens."""
+        # --- orçamento de histórico ---
         hist_budget, _, _ = _budget_slices(model)
 
-        docs = cached_get_history(usuario_key)
+        def _messages_toklen(msgs: List[Dict[str, str]]) -> int:
+            try:
+                return sum(toklen(m.get("content", "") or "") for m in msgs)
+            except Exception:
+                return 0
+
+        # --- carrega docs e transforma em pares user/assistant ---
+        docs = cached_get_history(usuario_key) or []
         if not docs:
             st.session_state["_mem_drop_report"] = {}
             return history_boot[:]
@@ -876,9 +884,91 @@ class AdelleService(BaseCharacter):
             st.session_state["_mem_drop_report"] = {}
             return history_boot[:]
 
+        # --- separa verbatim e antigos ---
         keep = max(0, verbatim_ultimos * 2)
         verbatim = pares[-keep:] if keep else []
-        antigos = pares[:-len(verbatim)]
+        antigos = pares[:-len(verbatim)] if keep else pares[:-0]
 
+        # --- sumariza 'antigos' em UMA camada (system) ---
+        summarized_pairs = len(antigos)  # <== AGORA existe e contabiliza o que foi resumido
+        resumo_msg: List[Dict[str, str]] = []
+        if antigos:
+            # Contexto compacto para o sumarizador
+            def _compact_pairs(ps: List[Dict[str, str]], lim: int = 3500) -> str:
+                buff = []
+                for m in ps:
+                    role = "U" if m.get("role") == "user" else "A"
+                    txt = (m.get("content", "") or "").strip().replace("\n", " ")
+                    buff.append(f"{role}:{txt}")
+                    if len(" ".join(buff)) > lim:
+                        break
+                return " ".join(buff)
+
+            contexto = _compact_pairs(antigos, lim=3500)
+            sys = (
+                "Resuma em **um único parágrafo** (pt-BR) os eventos e fatos canônicos, "
+                "preservando nomes e locais; sem listas; sem 'Resumo:'. Foque decisões, riscos, objetivos e pendências."
+            )
+            msgs_sum = [
+                {"role": "system", "content": sys},
+                {"role": "user", "content": contexto},
+            ]
+
+            resumo_txt = ""
+            try:
+                data, used_model, provider = _robust_chat_call(
+                    model, msgs_sum, max_tokens=320, temperature=0.2, top_p=0.9
+                )
+                resumo_txt = (data.get("choices", [{}])[0].get("message", {}) or {}).get("content", "") or ""
+            except Exception:
+                resumo_txt = ""
+
+            if not resumo_txt:
+                # fallback determinístico (sem rede)
+                joined = " ".join(m.get("content", "") or "" for m in antigos)
+                joined = re.sub(r"\s+", " ", joined).strip()
+                resumo_txt = joined[:900]
+
+            resumo_txt = re.sub(r"[\r\n]+", " ", resumo_txt).strip()
+            # empacota como system p/ ficar "leve"
+            resumo_msg = [{"role": "system", "content": f"[HISTÓRICO RESUMIDO] {resumo_txt}"}]
+
+        # --- monta histórico candidato: boot + resumo + verbatim ---
         msgs: List[Dict[str, str]] = []
-        summarized_pairs
+        if history_boot:
+            msgs.extend(history_boot[:])
+        if resumo_msg:
+            msgs.extend(resumo_msg)
+        if verbatim:
+            msgs.extend(verbatim)
+
+        # --- poda para caber no orçamento ---
+        trimmed_pairs = 0
+        # tenta primeiro podar verbatim do começo (mais antigos dentro do bloco verbatim)
+        while _messages_toklen(msgs) > hist_budget and verbatim:
+            verbatim.pop(0)  # remove a primeira msg verbatim
+            trimmed_pairs += 1
+            msgs = (history_boot[:] if history_boot else []) + (resumo_msg or []) + verbatim
+        # se ainda estiver grande, encurta o resumo
+        if _messages_toklen(msgs) > hist_budget and resumo_msg:
+            txt = resumo_msg[0]["content"]
+            # corta 10% por iteração até caber
+            for _ in range(10):
+                if _messages_toklen(msgs) <= hist_budget:
+                    break
+                txt = txt[: int(len(txt) * 0.9)].rsplit(" ", 1)[0]
+                resumo_msg[0]["content"] = txt
+                msgs = (history_boot[:] if history_boot else []) + resumo_msg + verbatim
+        # se ainda exceder, remove completamente o resumo
+        if _messages_toklen(msgs) > hist_budget and resumo_msg:
+            resumo_msg = []
+            msgs = (history_boot[:] if history_boot else []) + verbatim
+
+        # relatório visual
+        st.session_state["_mem_drop_report"] = {
+            "summarized_pairs": int(summarized_pairs),
+            "trimmed_pairs": int(trimmed_pairs),
+            "hist_tokens": int(_messages_toklen(msgs)),
+            "hist_budget": int(hist_budget),
+        }
+        return msgs
