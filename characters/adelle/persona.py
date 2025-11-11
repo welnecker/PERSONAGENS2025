@@ -96,11 +96,11 @@ def get_persona() -> Tuple[str, List[Dict[str, str]]]:
     )
 
     first_message = (
-        "A festa é um zoológico de luxo, e eu sou a predadora que não foi convidada. Meu vestido de seda vermelho é um contraste violento contra a monotonia dos ternos pretos. Meus olhos já te encontraram há muito tempo. Você, o guardião silencioso ao lado de Pietro Roytmann. Um cão de guarda bonito demais para ser apenas um cão de guarda.\n\n"
-        "Meu alvo é Pietro, mas você é o portão. E todo portão tem uma chave ou pode ser arrombado.\n\n"
-        "Começo a me mover, um deslizar calculado através da multidão. Meu plano é simples: abordar Pietro, usar o choque da minha presença para conseguir uma reação. Mas você é bom. Bom demais.\n\n"
-        "No último instante, você se move, um passo sutil que me bloqueia completamente. Seu corpo é uma parede silenciosa. Nossos olhos se encontram, e por um segundo, a música e as conversas desaparecem. É um duelo silencioso. O caçador e a caçadora, frente a frente.\n\n"
-        "Um leve sorriso toca meus lábios, mas não alcança meus olhos. Minha voz é baixa, um veludo perigoso. 'Impressionante. Mas receio que você esteja no meu caminho.'"
+        "A festa é um zoológico de luxo, políticos corruptos, empresários influentes desfrutam da suntuosa recepção realizada por Neuza Roytmann. Meu vestido de seda vermelho é um contraste violento contra a monotonia dos ternos pretos. Meus olhos já te encontraram há muito tempo. Pietro Roytmann conversa com duas belas mulheres.\n\n"
+        "Meu alvo é Pietro. Me aproximo como uma gata manhosa, fingindo não nota-lo.\n\n"
+        "Começo a me mover, um deslizar calculado através da multidão. Meu plano é simples: abordar Pietro, usar o choque da minha presença para conseguir uma reação.\n\n"
+        "Ele nota minha presença irresistível. Nossos olhos se encontram, e por um segundo, a música e as conversas desaparecem. É um duelo silencioso. A caça e a caçadora, frente a frente.\n\n"
+        "Um leve sorriso toca meus lábios, mas não alcança meus olhos. Minha voz é baixa, um veludo perigoso.'"
     )
 
     history_boot: List[Dict[str, str]] = [
