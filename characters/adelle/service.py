@@ -539,7 +539,7 @@ class AdelleService(BaseCharacter):
         try:
             if provider == "synthetic-fallback":
                 st.info("⚠️ Provedor instável. Resposta em fallback — pode continuar normalmente.")
-            elif used_model and "together/" in used_model:
+            elif used_model and model not in used_model:
                 st.caption(f"↪️ Failover automático: **{used_model}**.")
         except Exception:
             pass
@@ -633,16 +633,29 @@ class AdelleService(BaseCharacter):
         verbatim_ultimos: int = 10,
     ) -> List[Dict[str, str]]:
         """Últimos N turnos verbatim + resumo em 1 camada; poda até o orçamento."""
-        win = _get_window_for(model)
-        hist_budget, meta_budget, _ = _budget_slices(model)
+        hist_budget, _, _ = _budget_slices(model)
 
         docs = cached_get_history(usuario_key)
         if not docs:
             st.session_state["_mem_drop_report"] = {}
             return history_boot[:]
 
-        # Construir pares user/assistant (ordem cronológica)
         pares: List[Dict[str, str]] = []
         for d in docs:
             u = (d.get("mensagem_usuario") or "").strip()
-            # Compatibilidade para buscar resposta
+            a = (d.get("resposta_adelle") or d.get("resposta_mary") or d.get("resposta_laura") or "").strip()
+            if u:
+                pares.append({"role": "user", "content": u})
+            if a:
+                pares.append({"role": "assistant", "content": a})
+
+        if not pares:
+            st.session_state["_mem_drop_report"] = {}
+            return history_boot[:]
+
+        keep = max(0, verbatim_ultimos * 2)
+        verbatim = pares[-keep:] if keep else []
+        antigos = pares[:-len(verbatim)]
+
+        msgs: List[Dict[str, str]] = []
+        summarized_pairs
