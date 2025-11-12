@@ -625,6 +625,73 @@ class AdelleService(BaseCharacter):
         )
         return pin
 
+    # ===== Métodos de Rolling Summary =====
+    def _get_rolling_summary(self, usuario_key: str) -> str:
+        """
+        Retorna o sumário rolling (resumo contínuo da missão) armazenado em facts.
+        Se não existir, retorna uma string vazia.
+        """
+        try:
+            f = cached_get_facts(usuario_key) or {}
+            rolling = str(f.get("adelle.rolling_summary", "") or "").strip()
+            return rolling
+        except Exception:
+            return ""
+
+    def _update_rolling_summary_v2(self, usuario_key: str, model: str, user_prompt: str, assistant_response: str) -> None:
+        """
+        Atualiza o sumário rolling (resumo contínuo da missão) após cada interação.
+        Usa um modelo de linguagem para gerar um resumo compacto e coerente.
+        """
+        try:
+            # Obter o sumário atual
+            current_summary = self._get_rolling_summary(usuario_key)
+            
+            # Criar prompt para atualização do sumário
+            update_prompt = f"""Você é um assistente que mantém um resumo conciso e atualizado de uma missão de espionagem.
+
+SUMÁRIO ATUAL:
+{current_summary if current_summary else "Nenhum sumário ainda."}
+
+ÚLTIMA INTERAÇÃO:
+USER: {user_prompt[:500]}
+ADELLE: {assistant_response[:500]}
+
+TAREFA: Atualize o sumário da missão com base na última interação. O sumário deve:
+- Ser conciso (máximo 3-4 frases)
+- Focar em fatos importantes da missão (alvos, locais, ações realizadas, decisões tomadas)
+- Manter continuidade com o sumário anterior
+- Ignorar detalhes irrelevantes ou repetitivos
+
+SUMÁRIO ATUALIZADO:"""
+
+            # Chamar o modelo para gerar o novo sumário
+            messages = [{"role": "user", "content": update_prompt}]
+            
+            response, _, _ = _robust_chat_call(
+                model=model,
+                messages=messages,
+                max_tokens=256,
+                temperature=0.3,
+                top_p=0.9,
+            )
+            
+            # Extrair o novo sumário
+            new_summary = ""
+            if response and "choices" in response and len(response["choices"]) > 0:
+                new_summary = response["choices"][0].get("message", {}).get("content", "").strip()
+            
+            # Salvar o novo sumário
+            if new_summary:
+                set_fact(usuario_key, "adelle.rolling_summary", new_summary, {"fonte": "auto_summary"})
+                clear_user_cache(usuario_key)
+        
+        except Exception as e:
+            # Falha silenciosa - não interrompe o fluxo principal
+            pass
+
+
+
     def _montar_historico(
         self,
         usuario_key: str,
