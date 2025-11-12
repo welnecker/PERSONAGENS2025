@@ -478,53 +478,103 @@ class LauraService(BaseCharacter):
         )
         return pin
 
-    def _montar_historico(
+        def _montar_historico(
         self,
         usuario_key: str,
         history_boot: List[Dict[str, str]],
         model: str,
         verbatim_ultimos: int = 10,
     ) -> List[Dict[str, str]]:
-        """Mantém os últimos N turnos verbatim e poda se exceder orçamento por modelo."""
-        win = _get_window_for(model)
-        hist_budget, meta_budget, _ = _budget_slices(model)
+        """
+        Histórico híbrido: resumo do miolo antigo + últimos N turnos verbatim.
+        Preenche st.session_state["_mem_drop_report"] para habilitar o banner ⚠️.
+        """
+        hist_budget, _, _ = _budget_slices(model)
+
         docs = cached_get_history(usuario_key)
         if not docs:
             st.session_state["_mem_drop_report"] = {}
             return history_boot[:]
+
+        # 1) Constrói pares user/assistant a partir de múltiplas chaves
         pares: List[Dict[str, str]] = []
         for d in docs:
             u = (d.get("mensagem_usuario") or "").strip()
-            # >>> ISOLADO PARA LAURA: NÃO ler resposta_mary
-            a = (d.get("resposta_laura") or "").strip()
+            a = (
+                d.get("resposta_adelle")
+                or d.get("resposta")             # genérico, se seu repo usar
+                or d.get("assistant")            # fallback ultra-genérico
+                or d.get("resposta_mary")
+                or d.get("resposta_laura")
+                or ""
+            ).strip()
             if u:
                 pares.append({"role": "user", "content": u})
             if a:
                 pares.append({"role": "assistant", "content": a})
+
         if not pares:
             st.session_state["_mem_drop_report"] = {}
             return history_boot[:]
+
+        # 2) Mantém últimos N turnos verbatim (N user+N assistant ≈ 2N mensagens)
         keep = max(0, verbatim_ultimos * 2)
         verbatim = pares[-keep:] if keep else []
+        antigos = pares[:-len(verbatim)] if keep else pares[:-0]
+
+        # Função util para tokens
+        def _tok(mm: List[Dict[str, str]]) -> int:
+            try:
+                return sum(toklen(m.get("content", "")) for m in mm)
+            except Exception:
+                return len("\n".join(m.get("content","") for m in mm)) // 4  # fallback tosco
+
+        summarized_pairs = 0
+        trimmed_pairs = 0
         msgs: List[Dict[str, str]] = []
+
+        # 3) Se houver parte antiga, gera um RESUMO curto com o modelo
+        resumo_txt = ""
+        if antigos:
+            try:
+                resumo_prompt = (
+                    "Resuma de forma concisa o diálogo anterior entre [USER] e [ADELLE], "
+                    "mantendo apenas fatos de enredo (locais, objetivos, decisões, pistas, nomes). "
+                    "Máximo 4 frases."
+                )
+                resumo_src = "\n".join(f"{m['role'].upper()}: {m['content']}" for m in antigos[-24:])
+                messages_sum = [
+                    {"role": "system", "content": resumo_prompt},
+                    {"role": "user", "content": resumo_src},
+                ]
+                resp, _, _ = _robust_chat_call(
+                    model=model, messages=messages_sum, max_tokens=220, temperature=0.2, top_p=0.9
+                )
+                resumo_txt = (resp.get("choices", [{}])[0].get("message", {}) or {}).get("content", "").strip()
+            except Exception:
+                resumo_txt = ""
+
+        if resumo_txt:
+            msgs.append({"role": "system", "content": "[RESUMO HISTÓRICO]\n" + resumo_txt})
+            summarized_pairs = max(1, len(antigos) // 2)  # número simbólico para o banner
+        else:
+            # se não conseguiu resumir, empilha um pouco de antigos
+            msgs.extend(antigos[-6:])  # pequeno buffer de contexto
+
+        # 4) Acrescenta os últimos turnos verbatim
         msgs.extend(verbatim)
 
-        def _hist_tokens(mm: List[Dict]):
-            return sum(toklen(m.get("content", "")) for m in mm)
+        # 5) Poda se estourar o orçamento de histórico
+        while _tok(msgs) > hist_budget and len(msgs) > 2:
+            # remove do início (sem tocar no final verbatim)
+            msgs.pop(0)
+            trimmed_pairs += 1
 
-        trimmed_pairs = 0
-        while _hist_tokens(msgs) > hist_budget and verbatim:
-            if len(verbatim) >= 2:
-                verbatim = verbatim[2:]
-                trimmed_pairs += 1
-            else:
-                verbatim = []
-            msgs = verbatim[:]
         st.session_state["_mem_drop_report"] = {
-            "summarized_pairs": 0,
+            "summarized_pairs": summarized_pairs,
             "trimmed_pairs": trimmed_pairs,
-            "hist_tokens": _hist_tokens(msgs),
-            "hist_budget": hist_budget
+            "hist_tokens": _tok(msgs),
+            "hist_budget": hist_budget,
         }
         return msgs if msgs else history_boot[:]
 
