@@ -323,23 +323,33 @@ class AdelleService(BaseCharacter):
     id: str = "adelle"
     display_name: str = "Adelle"
 
-    # ===== API =====
+        # ===== API =====
     def reply(self, user: str, model: str) -> str:
         prompt = self._get_user_prompt()
-        if not prompt: return ""
+        if not prompt:
+            return ""
 
         usuario_key = _current_user_key()
         persona_text, history_boot = self._load_persona()
 
         # Memória base
-        try: f_all = cached_get_facts(usuario_key) or {}
-        except Exception: f_all = {}
+        try:
+            f_all = cached_get_facts(usuario_key) or {}
+        except Exception:
+            f_all = {}
         prefs = _read_prefs(f_all)
         local_atual = self._safe_get_local(usuario_key)
         memoria_pin = self._build_memory_pin(usuario_key, user)
 
-        # Foco sensorial rotativo
-        pool = ["olhar (desafio)", "postura (poder)", "voz (controle)", "toque (teste)", "respiração (tensão)", "silêncio (pressão)"]
+        # Foco sensorial rotativo (Adelle — domínio e sutileza)
+        pool = [
+            "olhar (desafio)",
+            "postura (poder)",
+            "voz (controle)",
+            "toque (teste)",
+            "respiração (tensão)",
+            "silêncio (pressão)"
+        ]
         idx = (int(st.session_state.get("adelle_attr_idx", -1)) + 1) % len(pool)
         st.session_state["adelle_attr_idx"] = idx
         foco = pool[idx]
@@ -349,151 +359,98 @@ class AdelleService(BaseCharacter):
         if not nsfw_on:
             nsfw_hint = "NSFW: BLOQUEADO. Foco em tensão psicológica e subtexto. A sedução é uma arma, não um fim."
         else:
-            nsfw_hint = (
-                "NSFW: LIBERADO. Descreva a tensão e o erotismo com maturidade quando solicitado pelo usuário."
-            )
+            nsfw_hint = "NSFW: LIBERADO. Descreva a tensão e o erotismo com maturidade quando solicitado pelo usuário."
 
-        # Sumário/Entidades/Evidência
-        rolling = self._get_rolling_summary(usuario_key)
-        entities_line = _entities_to_line(f_all)
-        try: docs = cached_get_history(usuario_key) or []
-        except Exception: docs = []
-        evidence = _compact_user_evidence(docs, max_chars=320)
-
-        system_block = _build_system_block(
-            persona_text=persona_text,
-            rolling_summary=rolling,
-            sensory_focus=foco,
-            nsfw_hint=nsfw_hint,
-            scene_loc=local_atual or "—",
-            entities_line=entities_line,
-            evidence=evidence,
-            prefs_line=_prefs_line(prefs),
-            scene_time=st.session_state.get("momento_atual", ""),
+        # Contexto de missão
+        missao = f_all.get("missao", {}).get("objetivo", "Destruir a família Roytmann")
+        alvo = f_all.get("entity", {}).get("alvo_principal", "Pietro Roytmann")
+        contexto_missao = (
+            f"MISSÃO ATUAL: {missao}. ALVO: {alvo}. "
+            "Adelle atua com precisão, inteligência e manipulação emocional."
         )
 
-        # LORE (memória longa)
-        lore_msgs: List[Dict[str, str]] = []
-        try:
-            q = (prompt or "") + "\n" + (rolling or "")
-            top = lore_topk(usuario_key, q, k=4, allow_tags=["adelle", "mission"])
-            if top:
-                lore_text = " | ".join(d.get("texto", "") for d in top if d.get("texto"))
-                if lore_text:
-                    lore_msgs.append({"role": "system", "content": f"[LORE]\n{lore_text}"})
-        except Exception:
-            pass
+        # Montagem do bloco de sistema
+        system_block = "\n".join([
+            persona_text,
+            contexto_missao,
+            f"LOCAL_ATUAL: {local_atual or '—'}",
+            f"SENSORIAL_FOCO: {foco}.",
+            nsfw_hint,
+            "ESTILO: Narrativa cinematográfica em 4–7 parágrafos, cada um com 2–4 frases. "
+            "Ritmo tenso e linguagem refinada, sem exageros literais ou metacena.",
+            "CONTINUIDADE: Use MEMÓRIA e o histórico como fonte de verdade. "
+            "Não repita falas; avance a cena mantendo coerência.",
+            f"MEMÓRIA (verbatim):\n{memoria_pin or '—'}",
+        ])
 
-        # Histórico (com orçamento)
-        verbatim_ultimos = int(st.session_state.get("verbatim_ultimos", 10))
-        hist_msgs = self._montar_historico(usuario_key, history_boot, model, verbatim_ultimos=verbatim_ultimos)
+        # Histórico com resumo híbrido (mantém coerência)
+        hist_msgs = self._montar_historico(
+            usuario_key, history_boot, model,
+            verbatim_ultimos=int(st.session_state.get("verbatim_ultimos", 10))
+        )
 
-        # Intel salva (adelle.intel.*)
-        intel_block = ""
-        try:
-            intels = []
-            for k, v in (f_all or {}).items():
-                if isinstance(k, str) and k.startswith("adelle.intel.") and v:
-                    label = k.split("adelle.intel.", 1)[-1]
-                    intels.append(f"- {label}: {str(v).strip()}")
-            if intels:
-                intel_block = ("INTELIGÊNCIA COLETADA (Fonte de Verdade):\n" + "\n".join(intels))[:1200]
-        except Exception:
-            intel_block = ""
-
-        messages: List[Dict] = (
+        # Montagem final das mensagens
+        messages = (
             [{"role": "system", "content": system_block}]
-            + ([{"role": "system", "content": memoria_pin}] if memoria_pin else [])
-            + ([{"role": "system", "content": intel_block}] if intel_block else [])
-            + lore_msgs
-            + [{"role": "system", "content": f"LOCAL_ATUAL: {local_atual or '—'}. Não mude sem pedido explícito."}]
             + hist_msgs
             + [{"role": "user", "content": prompt}]
         )
 
-        # Aviso visual de poda/resumo
-        try: _mem_drop_warn(st.session_state.get("_mem_drop_report", {}))
-        except Exception: pass
-
-        # Orçamento de saída + temp
+        # Cálculo de orçamento
         win = _get_window_for(model)
-        try: prompt_tokens = sum(toklen(m.get("content", "")) for m in messages)
-        except Exception: prompt_tokens = 0
-        base_out = _safe_max_output(win, prompt_tokens)
-        size = prefs.get("tamanho_resposta", "media")
-        mult = 1.0 if size == "media" else (0.75 if size == "curta" else 1.25)
-        max_out = max(512, int(base_out * mult))
-        ritmo = prefs.get("ritmo_trama", "moderado")
-        temperature = 0.6 if ritmo == "lento" else (0.9 if ritmo == "rapido" else 0.7)
+        try:
+            prompt_tokens = sum(toklen(m.get("content", "")) for m in messages)
+        except Exception:
+            prompt_tokens = 0
+        max_out = _safe_max_output(win, prompt_tokens)
+        temperature = 0.7
 
-        tools_to_use = TOOLS if st.session_state.get("tool_calling_on", False) else None
         fallbacks = [
             "together/Qwen/Qwen2.5-72B-Instruct",
             "together/meta-llama/Meta-Llama-3.1-405B-Instruct-Turbo",
             "anthropic/claude-3.5-haiku",
         ]
 
-        max_iterations = 3
-        iteration = 0
-        texto = ""
-        while iteration < max_iterations:
-            iteration += 1
-            data, used_model, provider = _robust_chat_call(
-                model, messages, max_tokens=max_out, temperature=temperature, top_p=0.95,
-                fallback_models=fallbacks, tools=tools_to_use
-            )
-            msg = (data.get("choices", [{}])[0].get("message", {}) or {})
-            texto = (msg.get("content", "") or "").strip()
-            tool_calls = msg.get("tool_calls", [])
-            if not tool_calls or not tools_to_use:
-                break
+        data, used_model, provider = _robust_chat_call(
+            model, messages, max_tokens=max_out,
+            temperature=temperature, top_p=0.95, fallback_models=fallbacks
+        )
 
-            messages.append({"role": "assistant", "content": texto or None, "tool_calls": tool_calls})
-            for tc in tool_calls:
-                tool_id = tc.get("id", f"call_{iteration}")
-                func_name = tc.get("function", {}).get("name", "")
-                func_args_str = tc.get("function", {}).get("arguments", "{}")
-                try:
-                    func_args = json.loads(func_args_str) if func_args_str else {}
-                    result = self._exec_tool_call(func_name, func_args, usuario_key)
-                    messages.append({"role": "tool", "tool_call_id": tool_id, "content": result})
-                except Exception as e:
-                    messages.append({"role": "tool", "tool_call_id": tool_id, "content": f"ERRO: {e}"})
+        texto = (
+            data.get("choices", [{}])[0]
+            .get("message", {})
+            .get("content", "")
+            .strip()
+        )
 
-        # Ultra IA (opcional)
+        # ===== Persistência =====
         try:
-            if bool(st.session_state.get("ultra_ia_on", False)) and texto:
-                critic_model = st.session_state.get("ultra_critic_model", model) or model
-                notes = critic_review(critic_model, system_block, prompt, texto)
-                texto = polish(model, system_block, prompt, texto, notes)
+            # Alguns repositórios aceitam kwargs com 'character', outros não.
+            try:
+                save_interaction(
+                    usuario_key, prompt, texto,
+                    f"{provider}:{used_model}", character="adelle"
+                )
+            except TypeError:
+                # Assinatura antiga (4 args)
+                save_interaction(usuario_key, prompt, texto, f"{provider}:{used_model}")
         except Exception:
             pass
 
-        # Persistência
-        try: save_interaction(usuario_key, prompt, texto, f"{provider}:{used_model}")
-        except Exception: pass
-        try: _extract_and_store_entities(usuario_key, prompt, texto)
-        except Exception: pass
-        try: self._update_rolling_summary_v2(usuario_key, model, prompt, texto)
-        except Exception: pass
-        try: lore_save(usuario_key, f"[USER] {prompt}\n[ADELLE] {texto}", tags=["adelle", "mission"])
-        except Exception: pass
-
+        # Atualiza sessão e avisos
         try:
-            st.session_state["suggestion_placeholder"] = self._suggest_placeholder(texto, local_atual)
             st.session_state["last_assistant_message"] = texto
+            st.session_state["suggestion_placeholder"] = self._suggest_placeholder(texto, local_atual)
         except Exception:
             pass
 
         try:
-            if provider == "synthetic-fallback":
-                st.info("⚠️ Provedor instável. Resposta em fallback — pode continuar normalmente.")
-            elif used_model and model not in used_model:
-                st.caption(f"↪️ Failover automático: **{used_model}**.")
+            _mem_drop_warn(st.session_state.get("_mem_drop_report", {}))
         except Exception:
             pass
 
         return texto
+
 
     # ===== Tools =====
     def _exec_tool_call(self, name: str, args: dict, usuario_key: str) -> str:
@@ -591,14 +548,17 @@ SUMÁRIO ATUALIZADO:"""
         except Exception:
             pass
 
-    def _montar_historico(
+        def _montar_historico(
         self,
         usuario_key: str,
         history_boot: List[Dict[str, str]],
         model: str,
         verbatim_ultimos: int = 10,
     ) -> List[Dict[str, str]]:
-        """Últimos N turnos verbatim + resumo em 1 camada; poda até o orçamento."""
+        """
+        Histórico híbrido: resumo do miolo antigo + últimos N turnos verbatim.
+        Preenche st.session_state["_mem_drop_report"] para habilitar o banner ⚠️.
+        """
         hist_budget, _, _ = _budget_slices(model)
 
         docs = cached_get_history(usuario_key)
@@ -606,78 +566,84 @@ SUMÁRIO ATUALIZADO:"""
             st.session_state["_mem_drop_report"] = {}
             return history_boot[:]
 
-        # ⚠️ ISOLAMENTO: só respostas da ADELLE
+        # 1) Constrói pares user/assistant a partir de múltiplas chaves
         pares: List[Dict[str, str]] = []
         for d in docs:
             u = (d.get("mensagem_usuario") or "").strip()
-            a = (d.get("resposta_adelle") or "").strip()
-            if u: pares.append({"role": "user", "content": u})
-            if a: pares.append({"role": "assistant", "content": a})
+            a = (
+                d.get("resposta_adelle")
+                or d.get("resposta")             # genérico, se seu repo usar
+                or d.get("assistant")            # fallback ultra-genérico
+                or d.get("resposta_mary")
+                or d.get("resposta_laura")
+                or ""
+            ).strip()
+            if u:
+                pares.append({"role": "user", "content": u})
+            if a:
+                pares.append({"role": "assistant", "content": a})
 
         if not pares:
             st.session_state["_mem_drop_report"] = {}
             return history_boot[:]
 
+        # 2) Mantém últimos N turnos verbatim (N user+N assistant ≈ 2N mensagens)
         keep = max(0, verbatim_ultimos * 2)
         verbatim = pares[-keep:] if keep else []
-        antigos = pares[:-len(verbatim)] if keep else pares[:0]
+        antigos = pares[:-len(verbatim)] if keep else pares[:-0]
 
-        # Se não precisa resumir
-        total_tokens = sum(toklen(m["content"]) for m in (history_boot + antigos + verbatim))
-        if total_tokens <= hist_budget:
-            st.session_state["_mem_drop_report"] = {"summarized_pairs": 0, "trimmed_pairs": 0,
-                                                    "hist_tokens": total_tokens, "hist_budget": hist_budget}
-            return history_boot + antigos + verbatim
-
-        # Resumo de 'antigos' em uma mensagem
-        resumo = ""
-        if antigos:
-            # Uma passada de resumo simples
-            chunk_text = "\n".join(
-                f"U: {antigos[i]['content']}\nA: {antigos[i+1]['content']}"
-                for i in range(0, len(antigos)-1, 2)
-            )[:4000]
-            prompt_sum = (
-                "Resuma telegraficamente os fatos relevantes da missão (alvos, locais, decisões, eventos) "
-                "a partir dos pares abaixo. Sem diálogos literais.\n\n" + chunk_text
-            )
+        # Função util para tokens
+        def _tok(mm: List[Dict[str, str]]) -> int:
             try:
-                resp, _, _ = _robust_chat_call(
-                    model=model,
-                    messages=[{"role":"user","content":prompt_sum}],
-                    max_tokens=384, temperature=0.2, top_p=0.9
-                )
-                resumo = (resp.get("choices",[{}])[0].get("message",{}) or {}).get("content","").strip()
+                return sum(toklen(m.get("content", "")) for m in mm)
             except Exception:
-                resumo = ""
+                return len("\n".join(m.get("content","") for m in mm)) // 4  # fallback tosco
 
-        summarized_msg = [{"role":"system", "content": ("RESUMO HISTÓRICO (missão): " + resumo)[:2000]}] if resumo else []
-
-        final_msgs = history_boot + summarized_msg + verbatim
-        total_tokens = sum(toklen(m["content"]) for m in final_msgs)
-
+        summarized_pairs = 0
         trimmed_pairs = 0
-        # Se ainda excede, poda pares verbatim mais antigos
-        while total_tokens > hist_budget and len(verbatim) > 2:
-            verbatim = verbatim[2:]  # remove um par U/A
+        msgs: List[Dict[str, str]] = []
+
+        # 3) Se houver parte antiga, gera um RESUMO curto com o modelo
+        resumo_txt = ""
+        if antigos:
+            try:
+                resumo_prompt = (
+                    "Resuma de forma concisa o diálogo anterior entre [USER] e [ADELLE], "
+                    "mantendo apenas fatos de enredo (locais, objetivos, decisões, pistas, nomes). "
+                    "Máximo 4 frases."
+                )
+                resumo_src = "\n".join(f"{m['role'].upper()}: {m['content']}" for m in antigos[-24:])
+                messages_sum = [
+                    {"role": "system", "content": resumo_prompt},
+                    {"role": "user", "content": resumo_src},
+                ]
+                resp, _, _ = _robust_chat_call(
+                    model=model, messages=messages_sum, max_tokens=220, temperature=0.2, top_p=0.9
+                )
+                resumo_txt = (resp.get("choices", [{}])[0].get("message", {}) or {}).get("content", "").strip()
+            except Exception:
+                resumo_txt = ""
+
+        if resumo_txt:
+            msgs.append({"role": "system", "content": "[RESUMO HISTÓRICO]\n" + resumo_txt})
+            summarized_pairs = max(1, len(antigos) // 2)  # número simbólico para o banner
+        else:
+            # se não conseguiu resumir, empilha um pouco de antigos
+            msgs.extend(antigos[-6:])  # pequeno buffer de contexto
+
+        # 4) Acrescenta os últimos turnos verbatim
+        msgs.extend(verbatim)
+
+        # 5) Poda se estourar o orçamento de histórico
+        while _tok(msgs) > hist_budget and len(msgs) > 2:
+            # remove do início (sem tocar no final verbatim)
+            msgs.pop(0)
             trimmed_pairs += 1
-            final_msgs = history_boot + summarized_msg + verbatim
-            total_tokens = sum(toklen(m["content"]) for m in final_msgs)
 
         st.session_state["_mem_drop_report"] = {
-            "summarized_pairs": 1 if resumo else 0,
+            "summarized_pairs": summarized_pairs,
             "trimmed_pairs": trimmed_pairs,
-            "hist_tokens": total_tokens,
+            "hist_tokens": _tok(msgs),
             "hist_budget": hist_budget,
         }
-        return final_msgs
-
-    def _suggest_placeholder(self, last_text: str, local_atual: str) -> str:
-        if not last_text: return ""
-        tips = [
-            "Checar movimentos de Pietro.",
-            "Trocar disfarce e infiltrar na recepção.",
-            f"Fixar ponto seguro em {local_atual or 'local atual'}.",
-            "Coagir o contato do governo a abrir os arquivos.",
-        ]
-        return random.choice(tips)
+        return msgs if msgs else history_boot[:]
