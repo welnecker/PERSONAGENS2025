@@ -577,11 +577,12 @@ except Exception as e:
 # ========== Troca de thread ==========
 _current_active = f"{st.session_state['user_id']}::{str(st.session_state['character']).lower()}"
 if st.session_state["_active_key"] != _current_active:
+    from characters.registry import clear_service_cache
+    clear_service_cache(st.session_state.get("character", ""))  # limpa só a atual
     st.session_state["_active_key"] = _current_active
     st.session_state["history"] = []
     st.session_state["history_loaded_for"] = ""
     _reload_history(force=True)
-
 # ========== Auto-seed: Mary ==========
 try:
     _user = str(st.session_state.get("user_id", "")).strip()
@@ -627,6 +628,9 @@ try:
             _reload_history(force=True)
 except Exception as _e:
     _safe_error("Auto-seed Adelle falhou.", _e)
+
+from characters.registry import clear_service_cache
+clear_service_cache(st.session_state.get("character", ""))
 
 # ========== Instancia serviço ==========
 try:
