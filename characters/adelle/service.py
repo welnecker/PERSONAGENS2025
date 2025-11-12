@@ -436,9 +436,15 @@ class AdelleService(BaseCharacter):
         except Exception:
             pass
 
-        # Histórico (com orçamento)
+                # Histórico (com orçamento)
         verbatim_ultimos = int(st.session_state.get("verbatim_ultimos", 10))
         hist_msgs = self._montar_historico(usuario_key, history_boot, model, verbatim_ultimos=verbatim_ultimos)
+
+        # ⚠️ Aviso visual de poda/resumo após montar histórico
+        try:
+            _mem_drop_warn(st.session_state.get("_mem_drop_report", {}))
+        except Exception:
+            pass
 
         # Intel salva (adelle.intel.*)
         intel_block = ""
@@ -464,11 +470,7 @@ class AdelleService(BaseCharacter):
             + [{"role": "user", "content": prompt}]
         )
 
-        # Aviso visual de poda/resumo
-        try:
-            _mem_drop_warn(st.session_state.get("_mem_drop_report", {}))
-        except Exception:
-            pass
+        # (Aviso antigo removido daqui)
 
         # Orçamento de saída + temp
         win = _get_window_for(model)
@@ -482,6 +484,7 @@ class AdelleService(BaseCharacter):
         max_out = max(512, int(base_out * mult))
         ritmo = prefs.get("ritmo_trama", "moderado")
         temperature = 0.6 if ritmo == "lento" else (0.9 if ritmo == "rapido" else 0.7)
+
 
         # Tool-calling
         tools_to_use = TOOLS if st.session_state.get("tool_calling_on", False) else None
