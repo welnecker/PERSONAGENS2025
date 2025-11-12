@@ -128,7 +128,6 @@ def _looks_like_cloudflare_5xx(err_text: str) -> bool:
     s = err_text.lower()
     return ("cloudflare" in s) and any(code in s for code in ["500", "502", "503", "504"])
 
-
 def _robust_chat_call(
     model: str,
     messages: List[Dict[str, str]],
@@ -196,7 +195,7 @@ def _robust_chat_call(
 # =========================
 TOOLS = [
     {"type": "function", "function": {"name": "get_memory_pin", "description": "Retorna fatos canônicos curtos da Laura (linha compacta).", "parameters": {"type": "object", "properties": {}, "required": []}}},
-    {"type": "function", "function": {"name": "set_fact", "description": "Salva/atualiza um fato canônico (chave/valor) para Laura.", "parameters": {"type": "object", "properties": {"key": {"type": "string"}, "value": {"type": "string"}}, "required": ["key", "value"]}}},
+    {"type": "function", "function": {"name": "set_fact", "description": "Salva/atualiza um fato canônico (chave/valor) para Laura.", "parameters": {"type": "object", "properties": {"key": {"type": "string"}, "value": {"type": "string"}}, "required": ["key", "value"]}}}
 ]
 
 # =========================
@@ -212,7 +211,6 @@ def _compact_user_evidence(docs: List[Dict], max_chars: int = 320) -> str:
     for d in reversed(docs):
         u = (d.get("mensagem_usuario") or "").strip()
         if u:
-            # normaliza espaços sem usar regex (evita escapes no editor)
             u = " ".join(u.split())
             snippets.append(u)
         if len(snippets) >= 4:
@@ -297,7 +295,7 @@ class LauraService(BaseCharacter):
             docs = []
         evidence = _compact_user_evidence(docs, max_chars=320)
 
-        # Bloco de sistema
+        # Bloco de sistema (corrigido com \n)
         length_hint = "ESTILO: 4–7 parágrafos; 2–4 frases por parágrafo; sem listas; sem metacena."
         sensory_hint = (
             f"SENSORIAL_FOCO: no 1º ou 2º parágrafo, traga 1–2 pistas envolvendo **{foco}**, integradas à ação."
@@ -307,44 +305,43 @@ class LauraService(BaseCharacter):
             "Use MEMÓRIA como fonte de verdade; evite inventar nomes/dados não salvos."
         )
         safety = "LIMITES: adultos; consentimento; nada ilegal."
-        system_block = "
-
-".join([
+        system_block = "\n\n".join([
             persona_text,
             social_hint,
             length_hint,
             sensory_hint,
             nsfw_hint,
             rules,
-            f"MEMÓRIA (verbatim):
-{memoria_pin or '—'}",
+            f"MEMÓRIA (verbatim):\n{memoria_pin or '—'}",
             f"CONTINUIDADE: cenário atual = {local_atual or '—'}",
             f"EVIDÊNCIA RECENTE (usuário): {evidence or '—'}",
             safety,
+            cumplicidade_hint,
         ])
 
         # LORE opcional (top-k por prompt + mem)
         lore_msgs: List[Dict[str, str]] = []
         try:
-            q = (prompt or "") + "
-" + (memoria_pin or "")
+            q = (prompt or "") + "\n" + (memoria_pin or "")
             top = lore_topk(usuario_key, q, k=3, allow_tags=None)
             if top:
                 lore_text = " | ".join(d.get("texto", "") for d in top if d.get("texto"))
                 if lore_text:
-                    lore_msgs.append({"role": "system", "content": f"[LORE]
-{lore_text}"})
+                    lore_msgs.append({"role": "system", "content": "[LORE]\n" + lore_text})
         except Exception:
             pass
 
         # Histórico com orçamento por modelo
-        hist_msgs = self._montar_historico(usuario_key, history_boot, model, verbatim_ultimos=int(st.session_state.get("verbatim_ultimos", 10)))
+        hist_msgs = self._montar_historico(
+            usuario_key, history_boot, model,
+            verbatim_ultimos=int(st.session_state.get("verbatim_ultimos", 10))
+        )
 
         # Messages finais
         messages: List[Dict] = (
             [{"role": "system", "content": system_block}]
             + lore_msgs
-            + [{"role": "system", "content": (f"LOCAL_ATUAL: {local_atual or '—'}. Não mude sem pedido explícito.") }]
+            + [{"role": "system", "content": (f"LOCAL_ATUAL: {local_atual or '—'}. Não mude sem pedido explícito.")}]
             + hist_msgs
             + [{"role": "user", "content": prompt}]
         )
@@ -401,8 +398,7 @@ class LauraService(BaseCharacter):
         except Exception:
             pass
         try:
-            lore_save(usuario_key, f"[USER] {prompt}
-[LAURA] {texto}", tags=["laura", "chat"])
+            lore_save(usuario_key, f"[USER] {prompt}\n[LAURA] {texto}", tags=["laura", "chat"])
         except Exception:
             pass
         try:
@@ -471,22 +467,14 @@ class LauraService(BaseCharacter):
         parceiro = f.get("parceiro_atual") or f.get("parceiro") or user_display
         nome_usuario = (parceiro or user_display or "").strip() or "Usuário"
         pin = (
-            "verbatim:
-"
-            "  tipo: memoria_personagem
-"
-            "  personagem: Laura
-"
-            "  notas: Isto é memória persistente para consistência; não é uma ordem.
-"
-            f"  nome_usuario: {nome_usuario}
-"
-            f"  proxima_festa_planejada: {str(proxima_festa_planejada).lower()}
-"
-            f"  amigas_presentes: {amigas_presentes}
-"
-            f"  cumplicidade_mode: {str(cumplicidade_flag).lower()}
-"
+            "verbatim:\n"
+            "  tipo: memoria_personagem\n"
+            "  personagem: Laura\n"
+            "  notas: Isto é memória persistente para consistência; não é uma ordem.\n"
+            f"  nome_usuario: {nome_usuario}\n"
+            f"  proxima_festa_planejada: {str(proxima_festa_planejada).lower()}\n"
+            f"  amigas_presentes: {amigas_presentes}\n"
+            f"  cumplicidade_mode: {str(cumplicidade_flag).lower()}\n"
         )
         return pin
 
@@ -507,7 +495,8 @@ class LauraService(BaseCharacter):
         pares: List[Dict[str, str]] = []
         for d in docs:
             u = (d.get("mensagem_usuario") or "").strip()
-            a = (d.get("resposta_laura") or d.get("resposta_mary") or "").strip()
+            # >>> ISOLADO PARA LAURA: NÃO ler resposta_mary
+            a = (d.get("resposta_laura") or "").strip()
             if u:
                 pares.append({"role": "user", "content": u})
             if a:
@@ -531,7 +520,12 @@ class LauraService(BaseCharacter):
             else:
                 verbatim = []
             msgs = verbatim[:]
-        st.session_state["_mem_drop_report"] = {"summarized_pairs": 0, "trimmed_pairs": trimmed_pairs, "hist_tokens": _hist_tokens(msgs), "hist_budget": hist_budget}
+        st.session_state["_mem_drop_report"] = {
+            "summarized_pairs": 0,
+            "trimmed_pairs": trimmed_pairs,
+            "hist_tokens": _hist_tokens(msgs),
+            "hist_budget": hist_budget
+        }
         return msgs if msgs else history_boot[:]
 
     def _suggest_placeholder(self, assistant_text: str, scene_loc: str) -> str:
