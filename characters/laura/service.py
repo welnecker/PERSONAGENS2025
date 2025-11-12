@@ -193,10 +193,38 @@ def _robust_chat_call(
 # =========================
 # Tool-Calling básico (opcional)
 # =========================
-TOOLS = [
-    {"type": "function", "function": {"name": "get_memory_pin", "description": "Retorna fatos canônicos curtos da Laura (linha compacta).", "parameters": {"type": "object", "properties": {}, "required": []}}},
-    {"type": "function", "function": {"name": "set_fact", "description": "Salva/atualiza um fato canônico (chave/valor) para Laura.", "parameters": {"type": "object", "properties": {"key": {"type": "string"}, "value": {"type": "string"}}, "required": ["key", "value"]}}}
+from typing import Any  # se ainda não estiver no topo
+
+TOOLS: List[Dict[str, Any]] = [
+    {
+        "type": "function",
+        "function": {
+            "name": "get_memory_pin",
+            "description": "Retorna fatos canônicos curtos da Laura (linha compacta).",
+            "parameters": {
+                "type": "object",
+                "properties": {},
+                "required": []
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "set_fact",
+            "description": "Salva/atualiza um fato canônico (chave/valor) para Laura.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "key": {"type": "string"},
+                    "value": {"type": "string"}
+                },
+                "required": ["key", "value"]
+            }
+        }
+    },
 ]
+
 
 # =========================
 # Helpers diversos
