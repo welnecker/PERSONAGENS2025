@@ -15,6 +15,7 @@ import re
 from pymongo import MongoClient
 from datetime import datetime
 import html
+import importlib
 
 import streamlit as st
 from characters.registry import list_models_for_character
@@ -640,6 +641,21 @@ except Exception as e:
     st.stop()
 
 st.sidebar.caption(f"⚙️ Service ativo: {service.__class__.__name__} @ {getattr(service, '__module__', '?')}")
+
+_char = str(st.session_state.get("character","")).strip().lower()
+mod_name = f"characters.{_char}.service"
+cls_name = f"{_char.capitalize()}Service"
+try:
+    mod = importlib.import_module(mod_name)
+    ok_cls = hasattr(mod, cls_name)
+    st.sidebar.write(f"🔎 import {mod_name}: OK")
+    st.sidebar.write(f"🔎 classe {cls_name}: {'OK' if ok_cls else 'NÃO ENCONTRADA'}")
+    if not ok_cls:
+        st.sidebar.code(dir(mod))
+except Exception as e:
+    st.sidebar.error(f"Falhou ao importar {mod_name}: {e}")
+    st.sidebar.code(traceback.format_exc())
+
 
 # ========== Sidebar específico da personagem ==========
 with st.sidebar:
