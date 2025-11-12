@@ -1,241 +1,97 @@
 # characters/registry.py
 from __future__ import annotations
 from importlib import import_module
-from typing import Dict, Tuple, Type, List, Optional, Any, Callable, Iterable
+from typing import Dict, Tuple, List, Type
 import inspect
 
 from core.common.base_service import BaseCharacter
 
-# Catálogo: nome visível -> (módulo, classe)
+# Catálogo (sempre chaves minúsculas!)
 _CATALOG: Dict[str, Tuple[str, str]] = {
-    "Mary":   ("characters.mary.service", "MaryService"),
-    "Laura":  ("characters.laura.service", "LauraService"),
-    "Nerith": ("characters.nerith.service", "NerithService"),
-    # ⬇️ Nova personagem
-    "Adelle": ("characters.adelle.service", "AdelleService"),
+    "mary":   ("characters.mary.service",   "MaryService"),
+    "laura":  ("characters.laura.service",  "LauraService"),
+    "adelle": ("characters.adelle.service", "AdelleService"),
+    "nerith": ("characters.nerith.service", "NerithService"),
 }
 
-# Cache de serviços para não recriar instâncias a cada chamada
+# Cache por personagem (chave = nome minúsculo)
 _SERVICE_CACHE: Dict[str, BaseCharacter] = {}
 
+def clear_service_cache(name: str | None = None) -> None:
+    """Limpa o cache de um personagem específico ou todo cache."""
+    if name is None:
+        _SERVICE_CACHE.clear()
+    else:
+        _SERVICE_CACHE.pop(name.strip().lower(), None)
 
 def list_characters() -> List[str]:
-    # Mantém a ordem declarada no _CATALOG
-    return list(_CATALOG.keys())
+    # Mostra com a primeira letra maiúscula
+    return [k.capitalize() for k in _CATALOG.keys()]
 
+def _load_class(module_name: str, class_name: str) -> Type[BaseCharacter]:
+    mod = import_module(module_name)
+    cls = getattr(mod, class_name)
+    if not inspect.isclass(cls) or not issubclass(cls, BaseCharacter):
+        raise TypeError(f"{class_name} não é subclass de BaseCharacter")
+    return cls
 
-# ==== utilidades para modelos por personagem ====
+def _resolve_by_catalog(key: str) -> BaseCharacter:
+    module_name, class_name = _CATALOG[key]
+    cls = _load_class(module_name, class_name)
+    return cls()
 
-def _coerce_models(x: Any) -> List[str]:
+def _resolve_by_convention(name_lc: str) -> BaseCharacter:
+    # Ex.: characters.laura.service / LauraService
+    module_name = f"characters.{name_lc}.service"
+    class_name  = f"{name_lc.capitalize()}Service"
+    cls = _load_class(module_name, class_name)
+    return cls()
+
+def get_service(name: str) -> BaseCharacter:
     """
-    Converte entradas variadas em lista de strings únicas, preservando ordem.
-    Aceita: list/tuple/set/Iterable; se vier dict, usa as chaves.
-    Ignora valores vazios.
+    Resolve serviço por:
+    1) Catálogo (case-insensitive)
+    2) Convenção (módulo + classe)
+    Cacheia por nome minúsculo.
     """
-    seen = set()
-    out: List[str] = []
-    if x is None:
-        return out
+    key = (name or "").strip().lower()
+    if not key:
+        key = "mary"
 
-    # Se for dict, usamos as chaves (modelo -> meta)
-    if isinstance(x, dict):
-        iterable: Iterable = list(x.keys())
-    elif isinstance(x, (list, tuple, set)):
-        iterable = x
-    else:
-        # Tenta tratar como Iterable genérico (sem quebrar strings)
-        if hasattr(x, "__iter__") and not isinstance(x, (str, bytes)):
-            iterable = x  # type: ignore
-        else:
-            return out
-
-    for it in iterable:
-        s = str(it).strip()
-        if s and s not in seen:
-            seen.add(s)
-            out.append(s)
-    return out
-
-
-def _load_subregistry_models(pkg_path: str) -> List[str]:
-    """
-    Tenta carregar modelos extras do submódulo registry de cada personagem.
-    Ex.: para 'characters.nerith.service', procura 'characters.nerith.registry'
-    e tenta ler:
-      - função list_models() -> Iterable[str]
-      - ou constante MODELS -> Iterable[str]
-    """
-    try:
-        pkg = pkg_path.rsplit(".", 1)[0]  # ex.: 'characters.nerith'
-        sub = import_module(f"{pkg}.registry")
-    except Exception:
-        return []
-
-    # Prioridade: função list_models() > constante MODELS
-    try:
-        fn = getattr(sub, "list_models", None)
-        if callable(fn):
-            return _coerce_models(fn())
-    except Exception:
-        pass
-
-    try:
-        models = getattr(sub, "MODELS", None)
-        return _coerce_models(models)
-    except Exception:
-        return []
-
-
-def _merge_available_models(impl: Any, module_name: str) -> List[str]:
-    """
-    Mescla modelos do service (se houver) com os do sub-registry opcional.
-    Remove duplicatas preservando a ordem de aparição.
-    """
-    merged: List[str] = []
-    seen = set()
-
-    # 1) modelos vindos do próprio service
-    fn: Optional[Callable] = getattr(impl, "available_models", None)
-    if callable(fn):
-        try:
-            svc_models = _coerce_models(fn())
-            for m in svc_models:
-                if m and m not in seen:
-                    seen.add(m)
-                    merged.append(m)
-        except Exception:
-            pass
-
-    # 2) modelos extras do sub-registry (ex.: characters.nerith.registry)
-    extra = _load_subregistry_models(module_name)
-    for m in extra:
-        if m and m not in seen:
-            seen.add(m)
-            merged.append(m)
-
-    return merged
-
-
-# ==== Adapter que mantém comportamento anterior e adiciona robustez ====
-
-class _ServiceAdapter(BaseCharacter):
-    """Adapta objetos sem interface completa, preenchendo métodos faltantes."""
-    def __init__(self, impl: Any, module_name: str, fallback_title: str = "Personagem"):
-        self._impl = impl
-        self._module_name = module_name
-        self.title = getattr(impl, "title", fallback_title)
-
-    def render_sidebar(self, sb) -> None:
-        fn: Optional[Callable] = getattr(self._impl, "render_sidebar", None)
-        if callable(fn):
-            try:
-                fn(sb)
-                return
-            except Exception:
-                pass
-        # default
-        super().render_sidebar(sb)
-
-    def available_models(self) -> List[str]:
-        models = _merge_available_models(self._impl, self._module_name)
-        if models:
-            return models
-        return super().available_models()
-
-    def reply(self, user: str, model: str) -> str:
-        # 1) se a implementação tiver reply() útil, use-a
-        fn: Optional[Callable] = getattr(self._impl, "reply", None)
-        if callable(fn):
-            try:
-                # Evita recair no NotImplemented da BaseCharacter
-                if not (inspect.ismethod(fn) and getattr(fn, "__func__", None) is BaseCharacter.reply):
-                    return fn(user=user, model=model)
-            except Exception:
-                # se a implementação própria falhar, cai para o core
-                pass
-        # 2) fallback genérico: usa core.service.gerar_resposta
-        from core.service import gerar_resposta
-        character_name = (getattr(self._impl, "title", None) or self.title or "Mary").strip()
-        return gerar_resposta(usuario="GLOBAL", prompt_usuario=user, model=model, character=character_name)
-
-
-# ==== API principal ====
-
-def get_service(name: Optional[str]) -> BaseCharacter:
-    key = (name or "").strip().title()
-    if key not in _CATALOG:
-        key = "Mary"
-
-    # cache
     if key in _SERVICE_CACHE:
         return _SERVICE_CACHE[key]
 
-    module_name, cls_name = _CATALOG[key]
+    inst: BaseCharacter | None = None
+    # Tenta catálogo
+    if key in _CATALOG:
+        try:
+            inst = _resolve_by_catalog(key)
+        except Exception:
+            inst = None
 
-    # tenta importar a classe solicitada; em caso de erro, cai para Mary
+    # Tenta convenção se catálogo falhar/não existir
+    if inst is None:
+        try:
+            inst = _resolve_by_convention(key)
+        except Exception:
+            inst = None
+
+    # Fallback final seguro: Mary
+    if inst is None:
+        inst = _resolve_by_catalog("mary")
+
+    _SERVICE_CACHE[key] = inst
+    return inst
+
+def list_models_for_character(name: str) -> List[str]:
+    """
+    (Opcional) Se cada service expõe 'supported_models()', devolve;
+    caso contrário retorna lista vazia para a UI não quebrar.
+    """
     try:
-        mod = import_module(module_name)
-        cls: Type[Any] = getattr(mod, cls_name)
+        svc = get_service(name)
+        if hasattr(svc, "supported_models") and callable(getattr(svc, "supported_models")):
+            return list(getattr(svc, "supported_models")() or [])
     except Exception:
-        if key != "Mary":
-            mod = import_module(_CATALOG["Mary"][0])
-            cls = getattr(mod, _CATALOG["Mary"][1])
-            key = "Mary"
-        else:
-            raise  # se até Mary falhar, deixe a exceção subir
-
-    impl = cls()
-
-    # Se já é BaseCharacter e override de reply() existe, retorna direto
-    if isinstance(impl, BaseCharacter):
-        impl_reply = getattr(impl, "reply", None)
-        if callable(impl_reply) and not (
-            inspect.ismethod(impl_reply) and getattr(impl_reply, "__func__", None) is BaseCharacter.reply
-        ):
-            _SERVICE_CACHE[key] = impl
-            return impl
-
-    # Em qualquer outra situação, adaptamos.
-    wrapped = _ServiceAdapter(impl, module_name=module_name, fallback_title=key)
-    _SERVICE_CACHE[key] = wrapped
-    return wrapped
-
-
-# ==== Conveniências para UI / debug ====
-
-def list_models_for_character(name: Optional[str]) -> List[str]:
-    """
-    Lista os modelos efetivos para uma personagem,
-    aplicando merge entre service.available_models() e sub-registry.
-    """
-    key = (name or "").strip().title()
-    if key not in _CATALOG:
-        key = "Mary"
-    module_name, _ = _CATALOG[key]
-    try:
-        svc = get_service(key)  # vem do cache nas chamadas seguintes
-        return _coerce_models(svc.available_models())
-    except Exception:
-        # fallback só com sub-registry (se existir)
-        return _load_subregistry_models(module_name)
-
-
-def clear_service_cache() -> None:
-    """Limpa o cache de serviços (use após editar sub-registries)."""
-    _SERVICE_CACHE.clear()
-
-
-def refresh_models_for_character(name: Optional[str]) -> List[str]:
-    """
-    Força reload da personagem informada, limpando-a do cache
-    e retornando os modelos detectados após o reload.
-    """
-    key = (name or "").strip().title()
-    if key not in _CATALOG:
-        key = "Mary"
-    # remove só essa chave do cache
-    if key in _SERVICE_CACHE:
-        _SERVICE_CACHE.pop(key, None)
-    # força a reinstanciação
-    _ = get_service(key)
-    return list_models_for_character(key)
+        pass
+    return []
