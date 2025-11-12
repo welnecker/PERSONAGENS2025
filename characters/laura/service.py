@@ -483,7 +483,7 @@ class LauraService(BaseCharacter):
         except Exception:
             return ""
 
-        def _build_memory_pin(self, usuario_key: str, user_display: str) -> str:
+    def _build_memory_pin(self, usuario_key: str, user_display: str) -> str:
         """Memória persistente da Laura (formato VERBATIM). **Não é instrução**."""
         try:
             f = cached_get_facts(usuario_key) or {}
@@ -494,6 +494,7 @@ class LauraService(BaseCharacter):
         cumplicidade_flag = bool(f.get("cumplicidade_mode", True))
         parceiro = f.get("parceiro_atual") or f.get("parceiro") or user_display
         nome_usuario = (parceiro or user_display or "").strip() or "Usuário"
+
         pin = (
             "verbatim:\n"
             "  tipo: memoria_personagem\n"
@@ -505,6 +506,7 @@ class LauraService(BaseCharacter):
             f"  cumplicidade_mode: {str(cumplicidade_flag).lower()}\n"
         )
         return pin
+
 
     def _montar_historico(
         self,
@@ -530,8 +532,8 @@ class LauraService(BaseCharacter):
             u = (d.get("mensagem_usuario") or "").strip()
             a = (
                 d.get("resposta_adelle")
-                or d.get("resposta")             # genérico
-                or d.get("assistant")            # fallback ultra-genérico
+                or d.get("resposta")
+                or d.get("assistant")
                 or d.get("resposta_mary")
                 or d.get("resposta_laura")
                 or ""
@@ -603,75 +605,3 @@ class LauraService(BaseCharacter):
             "hist_budget": hist_budget,
         }
         return msgs if msgs else history_boot[:]
-
-
-    def _suggest_placeholder(self, assistant_text: str, scene_loc: str) -> str:
-        s = (assistant_text or "").lower()
-        if "?" in s:
-            return "Continua do ponto exato… me conduz."
-        if any(k in s for k in ["vamos", "topa", "que tal", "prefere", "quer"]):
-            return "Quero — descreve devagar o próximo passo."
-        if scene_loc:
-            return f"No {scene_loc} mesmo — fala baixinho no meu ouvido."
-        return "Mantém o cenário e dá o próximo passo com calma."
-
-    # ===== Sidebar =====
-    def render_sidebar(self, container) -> None:
-        container.markdown(
-            "**Laura — Amante Cúmplice** • Respostas sensoriais, 4–7 parágrafos. "
-            "Memória persistente verbatim; robustez ativa."
-        )
-
-        usuario_key = _current_user_key()
-        try:
-            fatos = cached_get_facts(usuario_key) or {}
-        except Exception:
-            fatos = {}
-
-        # Toggles globais
-        json_on = container.checkbox("JSON Mode", value=bool(st.session_state.get("json_mode_on", False)))
-        tool_on = container.checkbox("Tool-Calling", value=bool(st.session_state.get("tool_calling_on", False)))
-        st.session_state["json_mode_on"], st.session_state["tool_calling_on"] = json_on, tool_on
-        lora = container.text_input("Adapter ID (Together LoRA) — opcional", value=st.session_state.get("together_lora_id", ""))
-        st.session_state["together_lora_id"] = lora
-
-        with container.expander("💃 Preferências", expanded=False):
-            cumplicidade_val = bool(fatos.get("cumplicidade_mode", True))
-            k_cumplicidade = f"ui_laura_cumplicidade_{usuario_key}"
-            ui_cumplicidade = container.checkbox("Modo Cúmplice/Amante", value=cumplicidade_val, key=k_cumplicidade)
-            if ui_cumplicidade != cumplicidade_val:
-                try:
-                    set_fact(usuario_key, "cumplicidade_mode", bool(ui_cumplicidade), {"fonte": "sidebar"})
-                    st.toast("Preferência de cumplicidade salva.", icon="✅")
-                    clear_user_cache(usuario_key)
-                    st.rerun()
-                except Exception as e:
-                    container.warning(f"Falha ao salvar preferência: {e}")
-
-        with container.expander("🍾 Festa Secreta (Laura)", expanded=False):
-            festa_val = bool(fatos.get("proxima_festa_planejada", False))
-            amigas_val = fatos.get("amigas_presentes", []) or []
-            ui_festa = container.checkbox("Planejando próxima festa", value=festa_val)
-            amigas_opts = ["Alana Rúbia", "Carolina Ferraz"]
-            ui_amigas = container.multiselect("Amigas confirmadas", options=amigas_opts, default=amigas_val)
-            if (bool(ui_festa) != festa_val) or (set(ui_amigas) != set(amigas_val)):
-                try:
-                    set_fact(usuario_key, "proxima_festa_planejada", bool(ui_festa), {"fonte": "sidebar"})
-                    set_fact(usuario_key, "amigas_presentes", ui_amigas, {"fonte": "sidebar"})
-                    st.toast("Detalhes da festa atualizados.", icon="✅")
-                    clear_user_cache(usuario_key)
-                    st.rerun()
-                except Exception as e:
-                    container.error(f"Falha ao salvar: {e}")
-
-        with container.expander("🔎 DEBUG – facts brutos", expanded=False):
-            if not fatos:
-                st.caption("⚠️ Nenhum fact retornado para esta chave de usuário.")
-                st.code(usuario_key)
-            else:
-                st.caption(f"User key: `{usuario_key}`")
-                for k, v in fatos.items():
-                    vs = str(v)
-                    if len(vs) > 120:
-                        vs = vs[:120] + "..."
-                    st.write(f"- **{k}** = {vs}")
