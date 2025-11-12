@@ -483,7 +483,7 @@ class LauraService(BaseCharacter):
         except Exception:
             return ""
 
-    def _build_memory_pin(self, usuario_key: str, user_display: str) -> str:
+        def _build_memory_pin(self, usuario_key: str, user_display: str) -> str:
         """Memória persistente da Laura (formato VERBATIM). **Não é instrução**."""
         try:
             f = cached_get_facts(usuario_key) or {}
@@ -506,7 +506,7 @@ class LauraService(BaseCharacter):
         )
         return pin
 
-        def _montar_historico(
+    def _montar_historico(
         self,
         usuario_key: str,
         history_boot: List[Dict[str, str]],
@@ -530,7 +530,7 @@ class LauraService(BaseCharacter):
             u = (d.get("mensagem_usuario") or "").strip()
             a = (
                 d.get("resposta_adelle")
-                or d.get("resposta")             # genérico, se seu repo usar
+                or d.get("resposta")             # genérico
                 or d.get("assistant")            # fallback ultra-genérico
                 or d.get("resposta_mary")
                 or d.get("resposta_laura")
@@ -545,28 +545,28 @@ class LauraService(BaseCharacter):
             st.session_state["_mem_drop_report"] = {}
             return history_boot[:]
 
-        # 2) Mantém últimos N turnos verbatim (N user+N assistant ≈ 2N mensagens)
+        # 2) Mantém últimos N turnos verbatim (≈ 2N mensagens)
         keep = max(0, verbatim_ultimos * 2)
         verbatim = pares[-keep:] if keep else []
         antigos = pares[:-len(verbatim)] if keep else pares[:-0]
 
-        # Função util para tokens
+        # util p/ tokens
         def _tok(mm: List[Dict[str, str]]) -> int:
             try:
                 return sum(toklen(m.get("content", "")) for m in mm)
             except Exception:
-                return len("\n".join(m.get("content","") for m in mm)) // 4  # fallback tosco
+                return len("\n".join(m.get("content","") for m in mm)) // 4
 
         summarized_pairs = 0
         trimmed_pairs = 0
         msgs: List[Dict[str, str]] = []
 
-        # 3) Se houver parte antiga, gera um RESUMO curto com o modelo
+        # 3) Resumo curto do miolo antigo
         resumo_txt = ""
         if antigos:
             try:
                 resumo_prompt = (
-                    "Resuma de forma concisa o diálogo anterior entre [USER] e [ADELLE], "
+                    "Resuma de forma concisa o diálogo anterior entre [USER] e [LAURA], "
                     "mantendo apenas fatos de enredo (locais, objetivos, decisões, pistas, nomes). "
                     "Máximo 4 frases."
                 )
@@ -584,17 +584,15 @@ class LauraService(BaseCharacter):
 
         if resumo_txt:
             msgs.append({"role": "system", "content": "[RESUMO HISTÓRICO]\n" + resumo_txt})
-            summarized_pairs = max(1, len(antigos) // 2)  # número simbólico para o banner
+            summarized_pairs = max(1, len(antigos) // 2)
         else:
-            # se não conseguiu resumir, empilha um pouco de antigos
-            msgs.extend(antigos[-6:])  # pequeno buffer de contexto
+            msgs.extend(antigos[-6:])  # pequeno buffer
 
         # 4) Acrescenta os últimos turnos verbatim
         msgs.extend(verbatim)
 
         # 5) Poda se estourar o orçamento de histórico
         while _tok(msgs) > hist_budget and len(msgs) > 2:
-            # remove do início (sem tocar no final verbatim)
             msgs.pop(0)
             trimmed_pairs += 1
 
@@ -605,6 +603,7 @@ class LauraService(BaseCharacter):
             "hist_budget": hist_budget,
         }
         return msgs if msgs else history_boot[:]
+
 
     def _suggest_placeholder(self, assistant_text: str, scene_loc: str) -> str:
         s = (assistant_text or "").lower()
