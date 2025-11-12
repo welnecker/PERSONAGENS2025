@@ -635,6 +635,8 @@ except Exception as e:
     _safe_error("Falha ao instanciar serviço da personagem.", e)
     st.stop()
 
+st.sidebar.caption(f"⚙️ Service ativo: {service.__class__.__name__} @ {getattr(service, '__module__', '?')}")
+
 # ========== Sidebar específico da personagem ==========
 with st.sidebar:
     st.caption("◻️ Sidebar base do app ativo")
