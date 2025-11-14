@@ -1,283 +1,244 @@
 # pages/3_Sala_Conjunta.py
-from __future__ import annotations
 
+from __future__ import annotations
 import streamlit as st
 from typing import List, Dict, Tuple
-import inspect  # <- para inspecionar assinatura de reply()
 
-# ---- Imports internos do projeto ----
-from characters.registry import get_service, list_characters
-from core.repositories import get_history_docs
-from core.service_router import list_models  # só para montar lista de modelos
-
-# =============== CONFIG PÁGINA ===============
-st.set_page_config(
-    page_title="Sala Conjunta – Personagens 2025",
-    page_icon="👥",
-    layout="centered",
-)
-
-st.title("👥 Sala Conjunta – Mary, Nerith, Laura e Adelle")
-st.caption(
-    "Experimento de **meta-cena**: você fala uma vez e cada personagem responde "
-    "a partir da sua própria memória no Mongo. A confusão é proposital. 😈"
-)
-
-st.markdown("---")
-
-# =============== CONTROLES BÁSICOS ===============
-# Usuário (mesmo esquema do main.py)
-user_id = st.text_input("👤 Usuário", value=st.session_state.get("user_id", "Janio Donisete")).strip()
-if not user_id:
-    user_id = "Janio Donisete"
-st.session_state["user_id"] = user_id  # manter coerência com main.py
-
-# Lista oficial de personagens a partir do registry
-all_chars = list_characters()  # deve retornar ["Mary", "Laura", "Adelle", "Nerith"]
-# Vamos filtrar só as que nos interessam aqui (caso você adicione outras no futuro)
-target_chars = [c for c in all_chars if c in ["Mary", "Laura", "Adelle", "Nerith"]]
-
-default_sel = target_chars[:]  # todas marcadas
-chars_sel = st.multiselect(
-    "🎭 Personagens ativas nesta cena conjunta",
-    options=target_chars,
-    default=default_sel,
-)
-if not chars_sel:
-    st.info("Selecione pelo menos uma personagem para continuar.")
-    st.stop()
-
-# =============== MODELOS ===============
-FORCED_MODELS = [
-    "deepseek/deepseek-chat-v3-0324",
-    "anthropic/claude-3.5-haiku",
-    "qwen/qwen3-max",
-    "together/meta-llama/Meta-Llama-3.1-405B-Instruct-Turbo",
-    "together/Qwen/Qwen2.5-72B-Instruct",
-]
-
-try:
-    router_models = list_models(None) or []
-except Exception:
-    router_models = []
-
-models_all = list(dict.fromkeys(router_models + FORCED_MODELS))
-if not models_all:
-    models_all = FORCED_MODELS
-
-st.session_state.setdefault("model", models_all[0])
-model_id = st.selectbox(
-    "🧠 Modelo para todas as respostas",
-    options=models_all,
-    index=models_all.index(st.session_state["model"]) if st.session_state["model"] in models_all else 0,
-)
-st.session_state["model"] = model_id
-
-st.markdown("---")
-
-# =============== HELPER COMPATÍVEL COM TODOS OS SERVICES ===============
-def _safe_reply_call(_service, *, user: str, model: str, prompt: str) -> str:
-    """
-    Replica a lógica do main.py:
-    - grava prompt em st.session_state["prompt"]
-    - chama reply() aceitando variações na assinatura:
-      (user, model, prompt) OU (user, model) etc.
-    """
-    st.session_state["prompt"] = prompt
-    fn = getattr(_service, "reply", None)
-    if not callable(fn):
-        raise RuntimeError("Service atual não expõe reply().")
-
-    sig = inspect.signature(fn)
-    params = list(sig.parameters.keys())
-
-    # Caso mais moderno: reply(self, user, model, prompt)
-    if "prompt" in params:
-        return fn(user=user, model=model, prompt=prompt)
-
-    # Caso antigo: reply(self, user, model)
-    if params == ["user", "model"]:
-        return fn(user=user, model=model)
-
-    # Fallback posicional
-    try:
-        return fn(user, model, prompt)
-    except TypeError:
-        return fn(user, model)
-
-# =============== HISTÓRICO (LEITURA DO MONGO) ===============
-st.subheader("📜 Últimos turnos de cada personagem")
-
-for name in chars_sel:
-    user_key = f"{user_id}::{name.lower()}"
-    st.markdown(f"#### 💚 {name}")
-    try:
-        docs = get_history_docs(user_key) or []
-    except Exception as e:
-        st.error(f"Erro ao ler histórico de {name}: {e}")
-        continue
-
-    if not docs:
-        st.caption("_Sem histórico salvo para esta dupla ainda._")
-        st.markdown("---")
-        continue
-
-    # Mostra só os últimos 6 turnos (user + character)
-    for d in docs[-6:]:
-        u = (d.get("mensagem_usuario") or "").strip()
-        a = (
-            d.get(f"resposta_{name.lower()}")
-            or d.get("resposta")
-            or d.get("assistant")
-            or ""
-        ).strip()
-        if u:
-            with st.chat_message("user", avatar="💬"):
-                st.markdown(u)
-        if a:
-            with st.chat_message("assistant", avatar="💚"):
-                st.markdown(a)
-
-    st.markdown("---")
-
-# ===== Cena compartilhada =====
-scene_desc = st.text_input(
-    "🪩 Descrição da cena compartilhada",
-    value=st.session_state.get(
-        "joint_scene_desc",
-        "Sala íntima, fim de noite; Mary, Nerith, Laura e Adelle reunidas com você, todas se vendo e se ouvindo."
-    ),
-    key="joint_scene_desc_input",   # <<< evita ID duplicado
-)
-
-st.session_state["joint_scene_desc"] = scene_desc
-st.session_state.setdefault("joint_last_round", {})
-
-# =============== CHAT CONJUNTO ===============
-st.subheader("💥 Interação conjunta")
-
-placeholder = "Fale algo que todas devam reagir…"
-user_msg = st.chat_input(placeholder)
-
-# ===== Cena compartilhada =====
-scene_desc = st.text_input(
-    "🪩 Descrição da cena compartilhada",
-    value=st.session_state.get(
-        "joint_scene_desc",
-        "Sala íntima, fim de noite; Mary, Nerith, Laura e Adelle reunidas com você, todas se vendo e se ouvindo."
-    ),
-)
-st.session_state["joint_scene_desc"] = scene_desc
-st.session_state.setdefault("joint_last_round", {})
+from core.service_router import route_chat_strict
+from core.repositories import save_interaction
 
 
-if user_msg:
-    # mostra sua fala uma vez
-    with st.chat_message("user", avatar="💬"):
-        st.markdown(user_msg)
+# =========================
+# Helpers de sessão
+# =========================
 
-    # detectar se você chamou alguém pelo nome
-    normalized = user_msg.lower()
-    focus_name = None
-    for name in chars_sel:
-        if name.lower() in normalized:
-            focus_name = name
-            break
+def _get_user_id() -> str:
+    uid = str(st.session_state.get("user_id", "") or "").strip()
+    return uid or "Visitante"
 
-    last_round: Dict[str, str] = st.session_state.get("joint_last_round", {}) or {}
-    new_round: Dict[str, str] = {}
 
-    combined_blocks: List[str] = []
+def _get_joint_key() -> str:
+    # chave para salvar no Mongo, se quiser reaproveitar
+    return f"{_get_user_id()}::sala_conjunta"
 
-    for name in chars_sel:
-        try:
-            service = get_service(name)
-        except Exception as e:
-            combined_blocks.append(f"**{name}**\n\n❌ Falha ao instanciar serviço: {e}")
-            continue
 
-        # outras personagens vistas por esta
-        others = [n for n in chars_sel if n != name]
-        others_snips = []
-        for other in others:
-            prev = (last_round.get(other) or "").strip()
-            if prev:
-                prev_short = prev.replace("\n", " ")
-                if len(prev_short) > 260:
-                    prev_short = prev_short[:260] + "..."
-                others_snips.append(f"- {other}: {prev_short}")
-
-        if others_snips:
-            others_block = (
-                "Na rodada anterior desta cena conjunta, as outras personagens reagiram assim:\n"
-                + "\n".join(others_snips)
-            )
-        else:
-            others_block = (
-                "Esta é a primeira rodada da cena conjunta; assuma apenas que todas estão presentes e ouvindo você."
-            )
-
-        # regra de foco: quem foi chamada fala mais, as outras comentam ou ficam em silêncio
-        if focus_name is None:
-            role_hint = (
-                "O usuário não chamou nenhuma personagem específica. "
-                "Responda em 1–2 parágrafos, interagindo com todas, "
-                "mas deixe espaço para as outras reagirem."
-            )
-        elif name == focus_name:
-            role_hint = (
-                f"O usuário se dirigiu principalmente a VOCÊ ({name}). "
-                "Você é a protagonista desta resposta: responda em 2–3 parágrafos, "
-                "puxando a cena e reagindo ao que lembrar das últimas interações."
-            )
-        else:
-            role_hint = (
-                f"O usuário falou principalmente com {focus_name}. "
-                "Você só reage se fizer sentido, como um comentário lateral. "
-                "Se reagir, use no máximo 1 parágrafo curto. "
-                "Se não tiver nada relevante a dizer agora, responda APENAS com a string literal '<<silêncio>>'."
-            )
-
-        joint_prompt = (
-            "[CENA COMPARTILHADA]\n"
-            f"{scene_desc}\n\n"
-            f"Você é {name} e está na mesma sala que "
-            f"{', '.join(others)} e o usuário {user_id}. "
-            "Todas se veem e se ouvem em tempo real. "
-            "Responda como se estivesse no MESMO ambiente que elas.\n\n"
-            + role_hint
-            + "\n\n"
-            + others_block
-            + "\n\n[FALA DO USUÁRIO AGORA]\n"
-            + user_msg
+def _init_state():
+    if "joint_history" not in st.session_state:
+        # lista de mensagens no formato {"role": "user"/"assistant", "content": "..."}
+        st.session_state["joint_history"] = []
+    if "joint_scene_desc" not in st.session_state:
+        st.session_state["joint_scene_desc"] = (
+            "Sala íntima, fim de noite; Mary, Nerith, Laura e Adelle reunidas com você, "
+            "todas se vendo e se ouvindo."
         )
 
-        with st.spinner(f"Gerando resposta de {name}…"):
-            try:
-                txt = _safe_reply_call(
-                    service,
-                    user=user_id,
-                    model=model_id,
-                    prompt=joint_prompt,
-                )
-            except Exception as e:
-                txt = f"❌ Erro ao gerar resposta de {name}: {e}"
 
-        txt_clean = (txt or "").strip()
-        new_round[name] = txt_clean
+# =========================
+# Engine da Sala Conjunta
+# =========================
 
-        # ignora quem escolheu ficar em silêncio
-        if txt_clean == "<<silêncio>>":
-            continue
+def _build_system_block(scene_desc: str) -> str:
+    return f"""
+Você está controlando **QUATRO PERSONAGENS** simultaneamente na mesma cena:
 
-        # bloco de texto dessa personagem dentro da resposta única
-        combined_blocks.append(f"**{name}**\n\n{txt_clean}")
+--- PERSONAGENS ---
 
-    st.session_state["joint_last_round"] = new_round
+MARY
+- Brasileira, jovem adulta, intensa, emocional e sensual.
+- Gosta de intimidade, cumplicidade, carinho e tensão romântica.
+- Fala em primeira pessoa, chamando o usuário pelo nome quando fizer sentido.
 
-    # agora sim: UMA resposta única, misturando tudo
-    with st.chat_message("assistant", avatar="💚"):
-        if combined_blocks:
-            st.markdown("\n\n---\n\n".join(combined_blocks))
-        else:
-            st.markdown("_Todas ficaram em silêncio por enquanto…_")
+LAURA
+- 30 anos, ruiva, amante cúmplice, elegante e provocante.
+- Mistura humor, charme e confiança; adora flertar e provocar.
+- Fala em primeira pessoa; tom de "amante confidente".
+
+ADELLE
+- Femme fatale estrategista, olhar clínico, perigosa e sedutora.
+- Usa linguagem calculada, frases com peso, insinua poder e segredos.
+- Nunca é boba: sempre parece estar três passos à frente.
+
+NERITH
+- Guerreira de outro mundo, presença física marcante.
+- Mistura estranheza (alienígena) com desejo e orgulho.
+- Fala em primeira pessoa, com uma certa estranheza cultural em relação aos humanos.
+
+--- CENA ATUAL ---
+Todas estão **NO MESMO AMBIENTE**, vendo e ouvindo umas às outras em tempo real.
+
+Descrição da cena (resumo atual):
+{scene_desc or "Sala fechada, ambiente íntimo; todas próximas ao usuário."}
+
+--- REGRAS DA SALA CONJUNTA ---
+
+1. Sempre responda em UM ÚNICO BLOCO DE TEXTO, no formato:
+
+Mary:
+(texto da Mary)
+
+Laura:
+(texto da Laura, ou <<silêncio>>)
+
+Adelle:
+(texto da Adelle, ou <<silêncio>>)
+
+Nerith:
+(texto da Nerith, ou <<silêncio>>)
+
+2. Se o usuário chamar uma personagem pelo nome (ex.: "Nerith, lembra quando fomos para Elysarix?"):
+   - Essa personagem é a PROTAGONISTA da rodada: ela responde com 2–3 parágrafos.
+   - As outras só comentam se fizer sentido, com no máximo 1 parágrafo curto.
+   - Se não tiver nada relevante a dizer, respondem exatamente com: <<silêncio>>
+
+3. Se o usuário falar com todas ("meninas", "vocês", etc.):
+   - Todas podem responder, mas:
+       - Escolha 1 protagonista (a que for mais natural pela fala do usuário).
+       - As restantes reagem com comentários curtos, ou <<silêncio>>.
+
+4. NÃO repita blocos de instrução como "[CENA COMPARTILHADA]" ou explicações de sistema.
+   - O texto de saída deve parecer uma cena de romance/aventura adulta, não um manual.
+
+5. Mantenha **coerência de ambiente**:
+   - Se alguém está sentada no sofá, outra pode reagir olhando ou se aproximando, etc.
+   - Não mude lugar/tempo de forma brusca; mude só se o usuário pedir.
+
+6. O tom é adulto e sensual, mas foque mais em:
+   - química entre personagens,
+   - olhares, proximidade, diálogo,
+   - tensão emocional e clima.
+
+Responda agora seguindo estritamente o formato:
+
+Mary:
+...
+
+Laura:
+...
+
+Adelle:
+...
+
+Nerith:
+...
+    """.strip()
+
+
+def gerar_resposta_conjunta(
+    model_id: str,
+    scene_desc: str,
+    history: List[Dict[str, str]],
+    user_msg: str,
+    temperature: float = 0.75,
+) -> Tuple[str, str, str]:
+    """
+    Usa um ÚNICO modelo para controlar Mary, Laura, Adelle e Nerith
+    na mesma cena compartilhada.
+    """
+    system_block = _build_system_block(scene_desc)
+
+    messages: List[Dict[str, str]] = []
+    messages.append({"role": "system", "content": system_block})
+
+    # Histórico conjunto (limitando para não estourar contexto)
+    # Mantém últimos 8 turnos (user+assistant)
+    for m in history[-16:]:
+        messages.append(m)
+
+    # Mensagem atual do usuário
+    messages.append({"role": "user", "content": user_msg})
+
+    payload = {
+        "model": model_id,
+        "messages": messages,
+        "max_tokens": 1800,
+        "temperature": float(temperature),
+        "top_p": 0.95,
+    }
+
+    data, used_model, provider = route_chat_strict(model_id, payload)
+    msg = (data.get("choices", [{}])[0].get("message", {}) or {})
+    texto = (msg.get("content", "") or "").strip() or "[sem resposta]"
+
+    return texto, used_model, provider
+
+
+# =========================
+# UI da página
+# =========================
+
+_init_state()
+
+st.title("🪩 Sala Conjunta — Mary, Laura, Adelle e Nerith")
+
+user_id = _get_user_id()
+joint_key = _get_joint_key()
+model_id = st.session_state.get("model") or "deepseek/deepseek-chat-v3-0324"
+
+st.caption(f"Usuário: **{user_id}** · Modelo ativo: `{model_id}`")
+
+# Cena compartilhada (editável)
+st.subheader("🪩 Descrição da cena compartilhada")
+scene_desc = st.text_area(
+    "Descreva o ambiente onde todas estão juntas:",
+    key="joint_scene_desc",
+    height=100,
+)
+
+st.markdown("---")
+
+# Histórico conjunto (chat log)
+st.subheader("💥 Interação conjunta")
+
+for m in st.session_state["joint_history"]:
+    if m["role"] == "user":
+        st.markdown(f"**Você:** {m['content']}")
+    else:
+        # resposta do conjunto (inclui Mary:/Laura:/Adelle:/Nerith:)
+        st.markdown(m["content"])
+
+st.markdown("---")
+
+# Controle de temperatura (opcional)
+with st.expander("⚙️ Ajustes da Sala Conjunta", expanded=False):
+    temp = st.slider(
+        "Temperatura (criatividade)",
+        min_value=0.3,
+        max_value=1.2,
+        value=float(st.session_state.get("joint_temp", 0.75)),
+        step=0.05,
+    )
+    st.session_state["joint_temp"] = float(temp)
+else:
+    temp = float(st.session_state.get("joint_temp", 0.75))
+
+# Entrada do usuário
+user_msg = st.chat_input("Fale com elas (ex.: 'Nerith, lembra quando fomos para Elysarix?')", key="joint_chat_input")
+
+if user_msg:
+    # Adiciona turno do usuário no histórico local
+    st.session_state["joint_history"].append({"role": "user", "content": user_msg})
+
+    # Chama engine conjunta
+    resposta, used_model, provider = gerar_resposta_conjunta(
+        model_id=model_id,
+        scene_desc=scene_desc,
+        history=st.session_state["joint_history"],
+        user_msg=user_msg,
+        temperature=temp,
+    )
+
+    # Adiciona resposta no histórico
+    st.session_state["joint_history"].append({"role": "assistant", "content": resposta})
+
+    # Persistência opcional no Mongo (se quiser rastrear a Sala Conjunta)
+    try:
+        save_interaction(
+            joint_key,
+            user_msg,
+            resposta,
+            f"{provider}:{used_model}",
+        )
+    except Exception:
+        pass
+
+    st.rerun()
