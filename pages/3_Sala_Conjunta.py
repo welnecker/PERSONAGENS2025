@@ -147,12 +147,11 @@ scene_desc = st.text_input(
         "joint_scene_desc",
         "Sala íntima, fim de noite; Mary, Nerith, Laura e Adelle reunidas com você, todas se vendo e se ouvindo."
     ),
+    key="joint_scene_desc_input",   # <<< evita ID duplicado
 )
+
 st.session_state["joint_scene_desc"] = scene_desc
-
-# guarda o que cada uma respondeu no turno anterior
 st.session_state.setdefault("joint_last_round", {})
-
 
 # =============== CHAT CONJUNTO ===============
 st.subheader("💥 Interação conjunta")
