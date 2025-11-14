@@ -140,6 +140,20 @@ for name in chars_sel:
 
     st.markdown("---")
 
+# ===== Cena compartilhada =====
+scene_desc = st.text_input(
+    "🪩 Descrição da cena compartilhada",
+    value=st.session_state.get(
+        "joint_scene_desc",
+        "Sala íntima, fim de noite; Mary, Nerith, Laura e Adelle reunidas com você, todas se vendo e se ouvindo."
+    ),
+)
+st.session_state["joint_scene_desc"] = scene_desc
+
+# guarda o que cada uma respondeu no turno anterior
+st.session_state.setdefault("joint_last_round", {})
+
+
 # =============== CHAT CONJUNTO ===============
 st.subheader("💥 Interação conjunta")
 
@@ -147,11 +161,14 @@ placeholder = "Fale algo que todas devam reagir…"
 user_msg = st.chat_input(placeholder)
 
 if user_msg:
-    # Mostra sua fala uma vez
+    # mostra sua fala uma vez
     with st.chat_message("user", avatar="💬"):
         st.markdown(user_msg)
 
-    # Para cada personagem selecionada, chamamos o service.reply()
+    # resgatar respostas do turno anterior para “eco” de grupo
+    last_round: Dict[str, str] = st.session_state.get("joint_last_round", {}) or {}
+    new_round: Dict[str, str] = {}
+
     for name in chars_sel:
         try:
             service = get_service(name)
@@ -160,18 +177,59 @@ if user_msg:
                 st.markdown(f"Falha ao instanciar serviço de **{name}**: {e}")
             continue
 
+        # outras personagens vistas por esta
+        others = [n for n in chars_sel if n != name]
+        others_snips = []
+        for other in others:
+            prev = (last_round.get(other) or "").strip()
+            if prev:
+                prev_short = prev.replace("\n", " ")
+                if len(prev_short) > 260:
+                    prev_short = prev_short[:260] + "..."
+                others_snips.append(f"- {other}: {prev_short}")
+
+        if others_snips:
+            others_block = (
+                "Na rodada anterior desta cena conjunta, as outras personagens reagiram assim:\n"
+                + "\n".join(others_snips)
+            )
+        else:
+            others_block = (
+                "Esta é a primeira rodada da cena conjunta; assuma apenas que todas estão presentes e ouvindo você."
+            )
+
+        # prompt específico para cada personagem, mas compartilhando o mesmo “mundo”
+        joint_prompt = (
+            "[CENA COMPARTILHADA]\n"
+            f"{scene_desc}\n\n"
+            f"Você é {name} e está na mesma sala que "
+            f"{', '.join(others)} e o usuário {user_id}. "
+            "Todas se veem e se ouvem em tempo real. "
+            "Responda como se estivesse no MESMO ambiente que elas, "
+            "podendo notar expressões, gestos e reações físicas das outras, "
+            "mas sem controlar as ações delas.\n\n"
+            + others_block
+            + "\n\n[FALA DO USUÁRIO AGORA]\n"
+            + user_msg
+        )
+
         with st.spinner(f"Gerando resposta de {name}…"):
             try:
                 txt = _safe_reply_call(
                     service,
                     user=user_id,
                     model=model_id,
-                    prompt=user_msg,
+                    prompt=joint_prompt,
                 )
             except Exception as e:
                 txt = f"❌ Erro ao gerar resposta de {name}: {e}"
+
+        new_round[name] = txt
 
         avatar = "💚"
         label = f"**{name}**"
         with st.chat_message("assistant", avatar=avatar):
             st.markdown(f"{label}\n\n{txt}")
+
+    # guarda este turno para ser usado como “eco” na próxima rodada
+    st.session_state["joint_last_round"] = new_round
