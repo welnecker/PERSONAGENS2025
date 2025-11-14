@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import streamlit as st
 from typing import List, Dict, Tuple
+import inspect  # <- para inspecionar assinatura de reply()
 
 # ---- Imports internos do projeto ----
 from characters.registry import get_service, list_characters
@@ -74,6 +75,36 @@ st.session_state["model"] = model_id
 
 st.markdown("---")
 
+# =============== HELPER COMPATÍVEL COM TODOS OS SERVICES ===============
+def _safe_reply_call(_service, *, user: str, model: str, prompt: str) -> str:
+    """
+    Replica a lógica do main.py:
+    - grava prompt em st.session_state["prompt"]
+    - chama reply() aceitando variações na assinatura:
+      (user, model, prompt) OU (user, model) etc.
+    """
+    st.session_state["prompt"] = prompt
+    fn = getattr(_service, "reply", None)
+    if not callable(fn):
+        raise RuntimeError("Service atual não expõe reply().")
+
+    sig = inspect.signature(fn)
+    params = list(sig.parameters.keys())
+
+    # Caso mais moderno: reply(self, user, model, prompt)
+    if "prompt" in params:
+        return fn(user=user, model=model, prompt=prompt)
+
+    # Caso antigo: reply(self, user, model)
+    if params == ["user", "model"]:
+        return fn(user=user, model=model)
+
+    # Fallback posicional
+    try:
+        return fn(user, model, prompt)
+    except TypeError:
+        return fn(user, model)
+
 # =============== HISTÓRICO (LEITURA DO MONGO) ===============
 st.subheader("📜 Últimos turnos de cada personagem")
 
@@ -131,11 +162,12 @@ if user_msg:
 
         with st.spinner(f"Gerando resposta de {name}…"):
             try:
-                # Cada service cuida de salvar no Mongo com sua chave própria
-                txt = service.reply(user=user_id, model=model_id, prompt=user_msg)
-            except TypeError:
-                # fallback ultra simples se a assinatura for diferente
-                txt = service.reply(user_id, model_id, user_msg)
+                txt = _safe_reply_call(
+                    service,
+                    user=user_id,
+                    model=model_id,
+                    prompt=user_msg,
+                )
             except Exception as e:
                 txt = f"❌ Erro ao gerar resposta de {name}: {e}"
 
