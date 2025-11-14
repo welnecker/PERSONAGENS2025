@@ -160,21 +160,41 @@ st.subheader("💥 Interação conjunta")
 placeholder = "Fale algo que todas devam reagir…"
 user_msg = st.chat_input(placeholder)
 
+# ===== Cena compartilhada =====
+scene_desc = st.text_input(
+    "🪩 Descrição da cena compartilhada",
+    value=st.session_state.get(
+        "joint_scene_desc",
+        "Sala íntima, fim de noite; Mary, Nerith, Laura e Adelle reunidas com você, todas se vendo e se ouvindo."
+    ),
+)
+st.session_state["joint_scene_desc"] = scene_desc
+st.session_state.setdefault("joint_last_round", {})
+
+
 if user_msg:
     # mostra sua fala uma vez
     with st.chat_message("user", avatar="💬"):
         st.markdown(user_msg)
 
-    # resgatar respostas do turno anterior para “eco” de grupo
+    # detectar se você chamou alguém pelo nome
+    normalized = user_msg.lower()
+    focus_name = None
+    for name in chars_sel:
+        if name.lower() in normalized:
+            focus_name = name
+            break
+
     last_round: Dict[str, str] = st.session_state.get("joint_last_round", {}) or {}
     new_round: Dict[str, str] = {}
+
+    combined_blocks: List[str] = []
 
     for name in chars_sel:
         try:
             service = get_service(name)
         except Exception as e:
-            with st.chat_message("assistant", avatar="⚠️"):
-                st.markdown(f"Falha ao instanciar serviço de **{name}**: {e}")
+            combined_blocks.append(f"**{name}**\n\n❌ Falha ao instanciar serviço: {e}")
             continue
 
         # outras personagens vistas por esta
@@ -198,16 +218,36 @@ if user_msg:
                 "Esta é a primeira rodada da cena conjunta; assuma apenas que todas estão presentes e ouvindo você."
             )
 
-        # prompt específico para cada personagem, mas compartilhando o mesmo “mundo”
+        # regra de foco: quem foi chamada fala mais, as outras comentam ou ficam em silêncio
+        if focus_name is None:
+            role_hint = (
+                "O usuário não chamou nenhuma personagem específica. "
+                "Responda em 1–2 parágrafos, interagindo com todas, "
+                "mas deixe espaço para as outras reagirem."
+            )
+        elif name == focus_name:
+            role_hint = (
+                f"O usuário se dirigiu principalmente a VOCÊ ({name}). "
+                "Você é a protagonista desta resposta: responda em 2–3 parágrafos, "
+                "puxando a cena e reagindo ao que lembrar das últimas interações."
+            )
+        else:
+            role_hint = (
+                f"O usuário falou principalmente com {focus_name}. "
+                "Você só reage se fizer sentido, como um comentário lateral. "
+                "Se reagir, use no máximo 1 parágrafo curto. "
+                "Se não tiver nada relevante a dizer agora, responda APENAS com a string literal '<<silêncio>>'."
+            )
+
         joint_prompt = (
             "[CENA COMPARTILHADA]\n"
             f"{scene_desc}\n\n"
             f"Você é {name} e está na mesma sala que "
             f"{', '.join(others)} e o usuário {user_id}. "
             "Todas se veem e se ouvem em tempo real. "
-            "Responda como se estivesse no MESMO ambiente que elas, "
-            "podendo notar expressões, gestos e reações físicas das outras, "
-            "mas sem controlar as ações delas.\n\n"
+            "Responda como se estivesse no MESMO ambiente que elas.\n\n"
+            + role_hint
+            + "\n\n"
             + others_block
             + "\n\n[FALA DO USUÁRIO AGORA]\n"
             + user_msg
@@ -224,12 +264,21 @@ if user_msg:
             except Exception as e:
                 txt = f"❌ Erro ao gerar resposta de {name}: {e}"
 
-        new_round[name] = txt
+        txt_clean = (txt or "").strip()
+        new_round[name] = txt_clean
 
-        avatar = "💚"
-        label = f"**{name}**"
-        with st.chat_message("assistant", avatar=avatar):
-            st.markdown(f"{label}\n\n{txt}")
+        # ignora quem escolheu ficar em silêncio
+        if txt_clean == "<<silêncio>>":
+            continue
 
-    # guarda este turno para ser usado como “eco” na próxima rodada
+        # bloco de texto dessa personagem dentro da resposta única
+        combined_blocks.append(f"**{name}**\n\n{txt_clean}")
+
     st.session_state["joint_last_round"] = new_round
+
+    # agora sim: UMA resposta única, misturando tudo
+    with st.chat_message("assistant", avatar="💚"):
+        if combined_blocks:
+            st.markdown("\n\n---\n\n".join(combined_blocks))
+        else:
+            st.markdown("_Todas ficaram em silêncio por enquanto…_")
