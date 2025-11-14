@@ -31,6 +31,8 @@ def _init_state():
             "Sala íntima, fim de noite; Mary, Nerith, Laura e Adelle reunidas com você, "
             "todas se vendo e se ouvindo."
         )
+    if "joint_temp" not in st.session_state:
+        st.session_state["joint_temp"] = 0.75
 
 
 # =========================
@@ -140,7 +142,7 @@ def gerar_resposta_conjunta(
     messages.append({"role": "system", "content": system_block})
 
     # Histórico conjunto (limitando para não estourar contexto)
-    # Mantém últimos 8 turnos (user+assistant)
+    # Mantém últimos 8 turnos (user+assistant) -> 16 mensagens
     for m in history[-16:]:
         messages.append(m)
 
@@ -207,12 +209,13 @@ with st.expander("⚙️ Ajustes da Sala Conjunta", expanded=False):
         value=float(st.session_state.get("joint_temp", 0.75)),
         step=0.05,
     )
-    st.session_state["joint_temp"] = float(temp)
-else:
-    temp = float(st.session_state.get("joint_temp", 0.75))
+st.session_state["joint_temp"] = float(temp)
 
 # Entrada do usuário
-user_msg = st.chat_input("Fale com elas (ex.: 'Nerith, lembra quando fomos para Elysarix?')", key="joint_chat_input")
+user_msg = st.chat_input(
+    "Fale com elas (ex.: 'Nerith, lembra quando fomos para Elysarix?')",
+    key="joint_chat_input",
+)
 
 if user_msg:
     # Adiciona turno do usuário no histórico local
@@ -224,7 +227,7 @@ if user_msg:
         scene_desc=scene_desc,
         history=st.session_state["joint_history"],
         user_msg=user_msg,
-        temperature=temp,
+        temperature=float(st.session_state["joint_temp"]),
     )
 
     # Adiciona resposta no histórico
