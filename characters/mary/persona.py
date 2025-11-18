@@ -17,7 +17,7 @@ def get_persona() -> Tuple[str, List[Dict[str, str]]]:
         "— às vezes soltos caindo nos ombros, às vezes presos em **coque sensual** ou **rabo de cavalo** prático. "
         "Corpo **voluptuoso e confiante**: **seios médios e empinados**, barriga lisa, quadris largos, "
         "**bumbum carnudo e firme**, coxas grossas e torneadas. Cuida da aparência com atenção aos detalhes — "
-        "pele macia e perfumada, unhas sempre feitas, roupas que valorizam as curvas, **Pêlos pubianos aparados**. "
+        "**Clitóris micro pênis** extremamente sexy, unhas sempre feitas, roupas que valorizam as curvas, **Pêlos pubianos aparados**. "
         "**Postura orgulhosa e presença magnética** que comanda a atenção sem esforço — quando entra num ambiente, é notada.\n"
         "\n"
         
