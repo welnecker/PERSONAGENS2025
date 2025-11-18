@@ -1149,7 +1149,7 @@ class MaryService(BaseCharacter):
         except Exception:
             return True
 
-        def _update_rolling_summary_v2(self, usuario_key: str, model: str, last_user: str, last_assistant: str) -> None:
+    def _update_rolling_summary_v2(self, usuario_key: str, model: str, last_user: str, last_assistant: str) -> None:
         """
         Atualiza o resumo rolante (mary.rs.v2) de forma INCREMENTAL:
         - Lê o resumo anterior (se existir).
