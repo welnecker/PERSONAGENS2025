@@ -696,7 +696,7 @@ class MaryService(BaseCharacter):
             pass
 
         # === Histórico com orçamento por modelo + relatório de memória ===
-        verbatim_ultimos = int(st.session_state.get("verbatim_ultimos", 10))  # << configurável via UI
+        verbatim_ultimos = int(st.session_state.get("verbatim_ultimos", 20))  # << configurável via UI
         hist_msgs = self._montar_historico(
             usuario_key,
             history_boot,
@@ -1149,32 +1149,63 @@ class MaryService(BaseCharacter):
         except Exception:
             return True
 
-    def _update_rolling_summary_v2(self, usuario_key: str, model: str, last_user: str, last_assistant: str) -> None:
+        def _update_rolling_summary_v2(self, usuario_key: str, model: str, last_user: str, last_assistant: str) -> None:
+        """
+        Atualiza o resumo rolante (mary.rs.v2) de forma INCREMENTAL:
+        - Lê o resumo anterior (se existir).
+        - Pede ao modelo para atualizar esse resumo adicionando só o que for novo.
+        - Mantém fatos antigos válidos; não apaga nada à toa.
+        """
         if not self._should_update_summary(usuario_key, last_user, last_assistant):
             return
+
+        # Carrega resumo anterior
+        try:
+            f = cached_get_facts(usuario_key) or {}
+            resumo_anterior = str(f.get("mary.rs.v2", "") or "")
+            ts_anterior = float(f.get("mary.rs.v2.ts", 0) or 0)
+        except Exception:
+            resumo_anterior = ""
+            ts_anterior = 0.0
+
         seed = (
-            "Resuma a conversa recente em ATÉ 8–10 frases, apenas fatos duráveis: "
-            "nomes próprios, endereços/links, relação (casados), local/tempo atual, "
-            "itens/gestos fixos e rumo do enredo. Proíba diálogos literais."
+            "Você mantém um RESUMO CONTÍNUO da história entre Mary e o usuário.\n\n"
+            "TAREFA:\n"
+            "- Atualize o RESUMO_ANTERIOR com as NOVAS INFORMAÇÕES da última interação.\n"
+            "- Mantenha fatos antigos se ainda forem verdadeiros (nomes, relação, locais, clima, segredos, decisões).\n"
+            "- Se algo for claramente desmentido, ajuste ou remova.\n"
+            "- Foque em fatos duráveis: relação (casados / cúmplices), locais importantes, eventos marcantes, "
+            "acordos, limites, fantasias recorrentes.\n"
+            "- Não repita diálogo literal.\n"
+            "- Entregue um resumo único, em 8–14 frases telegráficas (pode usar '•' se quiser, mas não é obrigatório)."
         )
+
+        corpo = (
+            f"RESUMO_ANTERIOR:\n{resumo_anterior or '(sem resumo anterior ainda)'}\n\n"
+            "ULTIMA_INTERACAO:\n"
+            f"USER:\n{last_user}\n\n"
+            f"MARY:\n{last_assistant}"
+        )
+
         try:
             data, used_model, provider = route_chat_strict(model, {
                 "model": model,
                 "messages": [
                     {"role": "system", "content": seed},
-                    {"role": "user", "content": f"USER:\n{last_user}\n\nMARY:\n{last_assistant}"}
+                    {"role": "user", "content": corpo}
                 ],
-                "max_tokens": 180,
+                "max_tokens": 260,
                 "temperature": 0.2,
                 "top_p": 0.9,
             })
-            resumo = (data.get("choices", [{}])[0].get("message", {}) or {}).get("content", "").strip()
-            if resumo:
-                set_fact(usuario_key, "mary.rs.v2", resumo, {"fonte": "auto_summary"})
+            resumo_novo = (data.get("choices", [{}])[0].get("message", {}) or {}).get("content", "").strip()
+            if resumo_novo:
+                set_fact(usuario_key, "mary.rs.v2", resumo_novo, {"fonte": "auto_summary"})
                 set_fact(usuario_key, "mary.rs.v2.ts", time.time(), {"fonte": "auto_summary"})
                 clear_user_cache(usuario_key)
         except Exception:
-            pass
+            # Fallback: se der erro, não apaga o resumo antigo
+            return
 
     # ===== Placeholder leve =====
     def _suggest_placeholder(self, assistant_text: str, scene_loc: str) -> str:
