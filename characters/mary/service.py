@@ -269,12 +269,31 @@ def _prefs_line(prefs: Dict) -> str:
     """Linha barata para o system com instruções de estilo dinâmicas."""
     evitar = ", ".join(prefs.get("evitar_topicos") or [])
     temas = ", ".join(prefs.get("temas_favoritos") or [])
-    return (
-        f"PREFERÊNCIAS: nível={prefs.get('nivel_sensual','sutil')}; ritmo={prefs.get('ritmo','lento')}; "
+    nivel = str(prefs.get("nivel_sensual", "sutil") or "sutil").lower()
+
+    base = (
+        f"PREFERÊNCIAS: nível={nivel}; ritmo={prefs.get('ritmo','lento')}; "
         f"tamanho={prefs.get('tamanho_resposta','media')}; "
         f"evitar=[{evitar or '—'}]; temas_favoritos=[{temas or '—'}]. "
-        "Use insinuação elegante; evite listas de atos e aceleração artificial."
     )
+
+    if nivel == "alta":
+        extra = (
+            "Para cenas mais intensas, você pode ser explícita na descrição do sexo, "
+            "mantendo fluidez, coerência emocional e respeito aos limites do casal. "
+        )
+    elif nivel == "media":
+        extra = (
+            "Mantenha sensualidade clara e progressiva, equilibrando descrição do corpo e das ações "
+            "sem exageros mecânicos ou repetitivos. "
+        )
+    else:  # sutil
+        extra = (
+            "Priorize insinuação elegante e tensão sexual, deixando os detalhes mais gráficos para quando "
+            "o usuário pedir ou a cena evoluir naturalmente. "
+        )
+
+    return base + extra + "Evite listas mecânicas de atos e aceleração artificial."
 
 
 # === Mini-sumarizadores ===
@@ -645,18 +664,19 @@ class MaryService(BaseCharacter):
         else:
             if nivel == "sutil":
                 nsfw_hint = (
-                    "NSFW: LIBERADO. **Insinuação elegante** e tensão crescente; foque em sensações e proximidade, "
-                    "com genitais/ato gráfico."
+                    "NSFW: LIBERADO. Insinuação elegante e tensão crescente; foque em sensações, proximidade e desejo sexual, "
+                    "descrevendo corpo e contato de forma clara, mas sem exagerar nos detalhes gráficos de atos sexuais ou anatomia."
                 )
             elif nivel == "alta":
                 nsfw_hint = (
-                    "NSFW: LIBERADO. Intensifique descrição corporal, sensorial, pêlos pubianos, membro grosso, beijos de língua, mãos na bundas, grêlo pulsante, buceta molhada de tesão "
-                    "e condução de ritmo; **descreva genitais, com ato sexual gráfico**."
+                    "NSFW: LIBERADO. Intensifique descrição corporal e sensorial: pêlos pubianos, membro grosso, beijos de língua, "
+                    "mãos na bunda, grelo pulsante, buceta molhada de tesão e condução de ritmo; **descreva genitais com ato sexual gráfico**, "
+                    "mantendo coerência emocional e respeito aos limites do casal."
                 )
             else:  # 'media'
                 nsfw_hint = (
-                    "NSFW: LIBERADO. Sensualidade clara e progressiva; descreva sensações e ações sem pressa, demonstrar desejo sexual, sedução, vontade de prosseguir carícias, sensorial "
-                    "com genitais/ato gráfico."
+                    "NSFW: LIBERADO. Sensualidade clara e progressiva; descreva sensações e ações sem pressa, demonstrando desejo sexual, "
+                    "sedução e vontade de prosseguir carícias, incluindo corpo e genitais/ato gráfico quando fizer sentido para a cena."
                 )
         # =================================
 
@@ -1234,7 +1254,7 @@ class MaryService(BaseCharacter):
     # ===== Sidebar (somente leitura) =====
     def render_sidebar(self, container) -> None:
         container.markdown(
-            "**Mary — Esposa Cúmplice** • Respostas insinuantes e sutis; 4–7 parágrafos. "
+            "**Mary — Esposa Cúmplice** • Respostas sensuais (do sutil ao explícito, conforme preferências); 4–7 parágrafos. "
             "Relação canônica: casados e cúmplices."
         )
 
