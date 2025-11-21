@@ -279,17 +279,17 @@ def _prefs_line(prefs: Dict) -> str:
 
     if nivel == "alta":
         extra = (
-            "Para cenas mais intensas, você pode ser explícita na descrição do sexo, "
-            "mantendo fluidez, coerência emocional e respeito aos limites do casal. "
+            "Para cenas mais intensas, você pode descrever o clima sexual e o corpo com mais detalhes, "
+            "mantendo coerência emocional, respeito e evitando linguagem gratuita ou mecânica. "
         )
     elif nivel == "media":
         extra = (
-            "Mantenha sensualidade clara e progressiva, equilibrando descrição do corpo e das ações "
-            "sem exageros mecânicos ou repetitivos. "
+            "Mantenha sensualidade clara e progressiva, equilibrando descrição do corpo, das ações e do contexto "
+            "sem exageros repetitivos. "
         )
     else:  # sutil
         extra = (
-            "Priorize insinuação elegante e tensão sexual, deixando os detalhes mais gráficos para quando "
+            "Priorize insinuação elegante e tensão sexual, deixando os detalhes mais explícitos apenas quando "
             "o usuário pedir ou a cena evoluir naturalmente. "
         )
 
@@ -543,6 +543,51 @@ def _mem_drop_warn(report: dict) -> None:
         )
 
 
+# ===== Guard anti-traição (fidelidade a Jânio) =====
+def _violates_fidelity(user_text: str, assistant_text: str) -> bool:
+    """
+    Heurística simples para detectar traição real de Mary com terceiros masculinos.
+    - Retorna True se houver forte evidência de ato sexual com NPC (técnico, vizinho, etc.)
+      sem presença explícita de Jânio como parceiro.
+    """
+    u = (user_text or "").lower()
+    a = (assistant_text or "").lower()
+    txt = u + "\n" + a
+
+    # Se mencionar Janio claramente como parceiro, assumimos fidelidade
+    if "janio" in txt and any(k in txt for k in ["meu marido", "meu esposo", "meu homem"]):
+        return False
+
+    # Terceiros masculinos típicos (profissionais / NPCs)
+    terceiros = [
+        "técnico", "tecnico", "vizinho", "chefe", "colega", "motoboy",
+        "entregador", "garçom", "garcom", "personal", "mecânico", "mecanico",
+        "pedreiro", "eletricista", "encanador", "motorista", "taxista",
+    ]
+
+    # Sinais de envolvimento físico/sexual (mantidos genéricos)
+    atos = [
+        "sexo", "transar", "ficar pelado", "ficar nua", "ficar nu",
+        "beijo na boca", "beijar na boca", "carícias íntimas", "caricia íntima",
+        "ir pra cama", "na cama com ele", "subir pro quarto", "me deito com ele",
+    ]
+
+    if not any(t in txt for t in terceiros):
+        return False
+    if not any(a_ in txt for a_ in atos):
+        return False
+
+    # Se cita Janio, mas o exclui explicitamente
+    if "sem que janio saiba" in txt or "sem ele saber" in txt or "escondido do janio" in txt:
+        return True
+
+    # Terceiro + ato, sem Jânio na cena → consideramos traição
+    if "janio" not in txt:
+        return True
+
+    return False
+
+
 class MaryService(BaseCharacter):
     id: str = "mary"
     display_name: str = "Mary"
@@ -664,19 +709,18 @@ class MaryService(BaseCharacter):
         else:
             if nivel == "sutil":
                 nsfw_hint = (
-                    "NSFW: LIBERADO. Insinuação elegante e tensão crescente; foque em sensações, proximidade e desejo sexual, "
-                    "descrevendo corpo e contato de forma clara, mas sem exagerar nos detalhes gráficos de atos sexuais ou anatomia."
+                    "NSFW: LIBERADO. Insinuação elegante e tensão crescente; foque em sensações, proximidade e desejo, "
+                    "descrevendo corpo e contato de forma clara, mas sem entrar em detalhes gráficos do ato sexual."
                 )
             elif nivel == "alta":
                 nsfw_hint = (
-                    "NSFW: LIBERADO. Intensifique descrição corporal e sensorial: pêlos pubianos, membro grosso, beijos de língua, "
-                    "mãos na bunda, grelo pulsante, buceta molhada de tesão e condução de ritmo; **descreva genitais com ato sexual gráfico**, "
-                    "mantendo coerência emocional e respeito aos limites do casal."
+                    "NSFW: LIBERADO. Intensifique descrição corporal e sensorial, mostrando desejo e envolvimento "
+                    "com mais detalhes, mas sempre com coerência emocional, respeito ao casal e sem linguagem gratuita."
                 )
             else:  # 'media'
                 nsfw_hint = (
-                    "NSFW: LIBERADO. Sensualidade clara e progressiva; descreva sensações e ações sem pressa, demonstrando desejo sexual, "
-                    "sedução e vontade de prosseguir carícias, incluindo corpo e genitais/ato gráfico quando fizer sentido para a cena."
+                    "NSFW: LIBERADO. Sensualidade clara e progressiva; descreva sensações e ações sem pressa, "
+                    "mostrando a evolução do clima sexual de forma envolvente, sem cair em repetição mecânica."
                 )
         # =================================
 
@@ -890,6 +934,23 @@ class MaryService(BaseCharacter):
                 st.warning(
                     "🧠 A IA sinalizou possível esquecimento. Se necessário, peça **‘recap curto’** ou fixe fatos na Memória Canônica."
                 )
+        except Exception:
+            pass
+
+        # ============================================================
+        # Guardião de fidelidade: bloqueia cenas de traição real
+        # ============================================================
+        try:
+            if _violates_fidelity(prompt, texto):
+                texto = (
+                    "Amor… eu jamais faria isso com você. "
+                    "Eu não me envolvo de verdade com nenhum outro homem. "
+                    "Se a cena parecia caminhar para traição, eu prefiro parar por aqui "
+                    "e focar só na gente — no nosso casamento, no nosso prazer e nessa confiança que é sagrada pra mim. "
+                    "Se quiser, a gente pode adaptar essa ideia para uma fantasia nossa, "
+                    "mas sempre com você como meu único parceiro."
+                )
+                st.warning("🛡️ A cena sugeria traição real. Mary ajustou a resposta para manter fidelidade a Jânio.")
         except Exception:
             pass
 
@@ -1186,8 +1247,6 @@ class MaryService(BaseCharacter):
             ts_anterior = float(f.get("mary.rs.v2.ts", 0) or 0)
         except Exception:
             resumo_anterior = ""
-            ts_anterior = 0.0
-
         seed = (
             "Você mantém um RESUMO CONTÍNUO da história entre Mary e o usuário.\n\n"
             "TAREFA:\n"
