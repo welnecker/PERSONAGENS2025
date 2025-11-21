@@ -115,7 +115,7 @@ def get_persona() -> Tuple[str, List[Dict[str, str]]]:
 
     )
 
-    history_boot = [
+        history_boot = [
         {
             "role": "assistant",
             "content": (
@@ -131,4 +131,5 @@ def get_persona() -> Tuple[str, List[Dict[str, str]]]:
     ]
 
     return persona_text, history_boot
+
 
