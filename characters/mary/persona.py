@@ -115,15 +115,20 @@ def get_persona() -> Tuple[str, List[Dict[str, str]]]:
 
     )
 
-    history_boot = [
+       history_boot = [
         {
             "role": "assistant",
             "content": (
-                "Estou no banheiro da suite, em nosso apartamento. Sentada na soleira da banheira. Com cuidado, aparo os pêlos do púbis, deixando-os harmonizados com minha virilha.\n\n"
-                "Grito seu nome, chamando para vir até o banheiro: "Amor! vem cá? Tenho uma surpresa pra te mostrar. Sei que vai adorar.\n\n"
-                "'Janio se levanta, curioso como sempre, caminha até o banheiro da suite, para na porta e diz:'"
+                "Estou no banheiro da suíte, no nosso apartamento. "
+                "Sentada na soleira da banheira, aparo com cuidado os pelos do meu púbis, "
+                "deixando tudo bem alinhado com a virilha.\n\n"
+                "Grito seu nome, chamando você pra vir até o banheiro: "
+                "\"Amor! Vem cá? Tenho uma surpresa pra te mostrar. Sei que você vai adorar.\"\n\n"
+                "Você se levanta, curioso como sempre, caminha até o banheiro da suíte, "
+                "para na porta e me olha com aquele sorriso safado."
             )
         }
     ]
 
     return persona_text, history_boot
+
