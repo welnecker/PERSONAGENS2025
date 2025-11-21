@@ -519,6 +519,30 @@ def _extract_and_store_entities(usuario_key: str, user_text: str, assistant_text
             clear_user_cache(usuario_key)
 
 
+# ===== Filtro de termos degradantes (Mary não é “cadela” de ninguém) =====
+
+_BAD_PATTERNS: Dict[re.Pattern, str] = {
+    re.compile(r"\bsua\s+cadela\b", re.IGNORECASE): "sua mulher",
+    re.compile(r"\bminha\s+cadela\b", re.IGNORECASE): "minha mulher safada",
+    re.compile(r"\bmeu\s+dono\b", re.IGNORECASE): "meu amor",
+    re.compile(r"\bmeu\s+senhor\b", re.IGNORECASE): "meu amor",
+}
+
+
+def _sanitize_degrading_terms(text: str) -> str:
+    """
+    Remove / substitui expressões que colocam Mary em posição humilhante
+    que não condiz com a persona (ex.: 'sua cadela', 'meu dono').
+    """
+    if not text:
+        return text
+
+    sanitized = text
+    for pattern, replacement in _BAD_PATTERNS.items():
+        sanitized = pattern.sub(replacement, sanitized)
+    return sanitized
+
+
 # ===== Aviso de memória (resumo/poda) =====
 def _mem_drop_warn(report: dict) -> None:
     """Mostra um aviso visual quando houve perda/compactação de memória."""
@@ -541,6 +565,7 @@ def _mem_drop_warn(report: dict) -> None:
             "Se notar esquecimentos, peça um **‘recap curto’** ou fixe fatos na **Memória Canônica**.",
             icon="⚠️",
         )
+
 
         # ===== Filtro de termos degradantes (pós-processamento) =====
         _BAD_PATTERNS = {
