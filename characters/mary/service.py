@@ -542,6 +542,25 @@ def _mem_drop_warn(report: dict) -> None:
             icon="⚠️",
         )
 
+        # ===== Filtro de termos degradantes (pós-processamento) =====
+        _BAD_PATTERNS = {
+            re.compile(r"\bsua cadela\b", re.IGNORECASE): "sua mulher",
+            re.compile(r"\bmeu dono\b", re.IGNORECASE): "meu amor",
+}
+
+
+def _sanitize_degrading_terms(text: str) -> str:
+    """
+    Remove / substitui expressões que colocam Mary em posição humilhante
+    que não condiz com a persona (ex.: 'sua cadela', 'meu dono').
+    """
+    if not text:
+        return text
+    sanitized = text
+    for pattern, replacement in _BAD_PATTERNS.items():
+        sanitized = pattern.sub(replacement, sanitized)
+    return sanitized
+
 
 class MaryService(BaseCharacter):
     id: str = "mary"
@@ -879,6 +898,10 @@ class MaryService(BaseCharacter):
                 texto = polish(model, system_block, prompt, texto, notes)
         except Exception:
             pass
+
+         # Sanitização final: remove termos degradantes que não combinam com Mary
+        texto = _sanitize_degrading_terms(texto)
+
 
         # Sentinela: detectar sinais de esquecimento explícito na resposta
         try:
