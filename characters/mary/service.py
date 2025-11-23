@@ -679,6 +679,65 @@ class MaryService(BaseCharacter):
                     "sedução e vontade de prosseguir carícias, incluindo corpo e genitais/ato gráfico quando fizer sentido para a cena."
                 )
         # =================================
+                # ===== Brecha rara de conflito moral (tentação) =====
+        plow = prompt.lower()
+        brecha_on = prefs.get("brecha_conflito", "off") == "on"
+
+        # Heurística simples: Mary sozinha + terceiro + Janio ausente
+        sozinha = any(
+            s in plow
+            for s in [
+                "mary está sozinha",
+                "mary fica sozinha",
+                "sozinha em casa",
+                "sozinha no apartamento",
+                "sozinha na praia",
+                "sozinha no shopping",
+            ]
+        )
+
+        terceiro = any(
+            s in plow
+            for s in [
+                "técnico",
+                "tecnico",
+                "salva-vidas",
+                "salva vidas",
+                "colega",
+                "colega de faculdade",
+                "vizinho",
+                "garçom",
+                "personal",
+            ]
+        )
+
+        janio_ausente = any(
+            s in plow
+            for s in [
+                "enquanto janio trabalha",
+                "janio está em casa",
+                "janio tá em casa",
+                "janio nao está",
+                "janio não está",
+                "janio não está aqui",
+                "janio não tá aqui",
+            ]
+        )
+
+        contexto_tentacao = brecha_on and sozinha and terceiro and janio_ausente
+
+        if contexto_tentacao:
+            tentacao_line = (
+                "CENARIO_TENTACAO: Mary está sozinha com outra pessoa e Janio está ausente. "
+                "Ela sente o peso da escolha e pode viver um conflito moral, com culpa real e necessidade de reconciliação. "
+                "Trate isso como algo raro e doloroso, nunca como rotina nem motivo de orgulho."
+            )
+        else:
+            tentacao_line = (
+                "CENARIO_TENTACAO: desativado. Mesmo sozinha com terceiros, Mary continua fiel; "
+                "no máximo se sente lisonjeada ou curiosa, mas não ultrapassa limites concretos nem esconde nada de Janio."
+            )
+
 
         # ===== SUMÁRIO + ENTIDADES + EVIDÊNCIA =====
         rolling = self._get_rolling_summary(usuario_key)  # v2
@@ -743,9 +802,20 @@ class MaryService(BaseCharacter):
         except Exception:
             eventos_block = ""
 
-        # --- 3.b) montar messages final
+                # --- 3.b) montar messages final
+
+        # 1) Começa com o system principal
+        base_system_msgs: List[Dict[str, str]] = [
+            {"role": "system", "content": system_block}
+        ]
+
+        # 2) Injeta a linha de tentação / fidelidade, se existir
+        if tentacao_line:
+            base_system_msgs.append({"role": "system", "content": tentacao_line})
+
+        # 3) Monta o restante normalmente
         messages: List[Dict, ] = (
-            [{"role": "system", "content": system_block}]
+            base_system_msgs
             + ([{"role": "system", "content": memoria_pin}] if memoria_pin else [])
             + ([{"role": "system", "content": f"MEMÓRIA_TEMÁTICA:\n{thematic_block}"}]
                if thematic_block else [])
@@ -761,6 +831,7 @@ class MaryService(BaseCharacter):
             + hist_msgs
             + [{"role": "user", "content": prompt}]
         )
+
 
         # Aviso visual se houve resumo/poda neste turno
         try:
