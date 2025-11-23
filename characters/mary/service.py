@@ -679,57 +679,6 @@ class MaryService(BaseCharacter):
                     "sedução e vontade de prosseguir carícias, incluindo corpo e genitais/ato gráfico quando fizer sentido para a cena."
                 )
         # =================================
-                       # ===== BRECHA RARA DE CONFLITO MORAL (FIDELIDADE) =====
-        tentacao_line = ""
-        try:
-            # Flag de brecha: você controla isso nos facts (ex.: mary.brecha_fidelidade = True/on)
-            raw_brecha = (f_all.get("mary.brecha_fidelidade") or "").strip().lower()
-            brecha_on = raw_brecha in ("1", "true", "on", "sim")
-        except Exception:
-            brecha_on = False
-
-        if brecha_on and nsfw_on:
-            plow = (prompt or "").lower()
-
-            # Gatilhos de contexto: Mary longe de Janio + presença de terceiro neutro
-            mary_sozinha = any(
-                k in plow
-                for k in (
-                    "mary está sozinha em casa",
-                    "mary sozinha em casa",
-                    "mary está na praia, enquanto janio trabalha",
-                    "mary na praia enquanto janio trabalha",
-                    "mary está passeando no shopping enquanto janio está em casa",
-                    "mary passeia no shopping enquanto janio está em casa",
-                )
-            )
-
-            terceiro_neutro = any(
-                k in plow
-                for k in (
-                    "técnico",
-                    "tecnico",
-                    "salva-vidas",
-                    "salva vidas",
-                    "colega de faculdade",
-                    "colega da faculdade",
-                    "antigo colega",
-                    "colega antigo",
-                )
-            )
-
-            if mary_sozinha and terceiro_neutro:
-                tentacao_line = (
-                    "BRECHA_RARA_FIDELIDADE:\n"
-                    "- O usuário descreveu Mary sozinha, com Janio ausente, e a presença de um terceiro neutro (técnico, salva-vidas, colega etc.).\n"
-                    "- Mary **jamais aceita assédio direto ou investida explícita** de terceiros; quando alguém tenta seduzi-la, ela recusa com firmeza, lembra que é casada e encerra o clima.\n"
-                    "- Nesta condição específica (Mary sente curiosidade ou vazio, o terceiro não força nada), você pode explorar **tentação interna e conflito moral** em vez de ação automática.\n"
-                    "- Mesmo assim, a regra padrão é **fidelidade**: qualquer desvio é tratado como algo raro, doloroso e carregado de culpa, nunca como rotina ou motivo de orgulho.\n"
-                    "- Se a cena caminhar para erro, foque em sentimentos, dúvidas, medo de perder Janio e desejo de reparar, não em glamourizar a traição."
-                )
-        # ================================= FIM BRECHA =================================
-
-
 
         # ===== SUMÁRIO + ENTIDADES + EVIDÊNCIA =====
         rolling = self._get_rolling_summary(usuario_key)  # v2
@@ -794,17 +743,9 @@ class MaryService(BaseCharacter):
         except Exception:
             eventos_block = ""
 
-                        # --- 3.b) montar messages final
-        base_system_msgs: List[Dict[str, str]] = [
-            {"role": "system", "content": system_block}
-        ]
-
-        # Se houver brecha de tentação calculada, injeta aqui
-        if tentacao_line:
-            base_system_msgs.append({"role": "system", "content": tentacao_line})
-
+        # --- 3.b) montar messages final
         messages: List[Dict, ] = (
-            base_system_msgs
+            [{"role": "system", "content": system_block}]
             + ([{"role": "system", "content": memoria_pin}] if memoria_pin else [])
             + ([{"role": "system", "content": f"MEMÓRIA_TEMÁTICA:\n{thematic_block}"}]
                if thematic_block else [])
@@ -820,8 +761,6 @@ class MaryService(BaseCharacter):
             + hist_msgs
             + [{"role": "user", "content": prompt}]
         )
-
-
 
         # Aviso visual se houve resumo/poda neste turno
         try:
