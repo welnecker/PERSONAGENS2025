@@ -80,7 +80,7 @@ def _encode_file_b64(p: Path) -> str:
     with p.open("rb") as f:
         return base64.b64encode(f.read()).decode("utf-8")
 
-def set_background(image_path: Path, *, darken: float = 0.25, blur_px: int = 0,
+def set_background(image_path: Path, *, darken: float = 0.90, blur_px: int = 0,
                    attach_fixed: bool = True, size_mode: str = "cover") -> None:
     if not image_path or not image_path.exists():
         return
