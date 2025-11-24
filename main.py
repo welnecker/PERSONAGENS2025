@@ -1055,7 +1055,7 @@ bg_files = sorted({p.name: p for p in bg_files}.values(), key=lambda p: p.name)
 
 choices = ["(nenhuma)"] + [p.name for p in bg_files]
 st.session_state.setdefault("bg_file", choices[1] if len(choices) > 1 else "(nenhuma)")
-st.session_state.setdefault("bg_darken", 25)
+st.session_state.setdefault("bg_darken", 90)
 st.session_state.setdefault("bg_blur", 0)
 st.session_state.setdefault("bg_fixed", True)
 st.session_state.setdefault("bg_size", "cover")
