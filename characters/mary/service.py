@@ -177,15 +177,15 @@ def _budget_slices(model: str) -> tuple[int, int, int]:
     - garante piso razoável para histórico.
     """
     win = _get_window_for(model)
-    hist = max(8_000, int(win * 0.60))
+    hist = max(8_000, int(win * 0.55))
     meta = int(win * 0.20)
-    outb = int(win * 0.20)
+    outb = int(win * 0.25)
     return hist, meta, outb
 
 
 def _safe_max_output(win: int, prompt_tokens: int) -> int:
     """Reserva espaço de saída sem estourar a janela (mínimo 512)."""
-    alvo = int(win * 0.20)
+    alvo = int(win * 0.30)
     sobra = max(0, win - prompt_tokens - 256)
     return max(512, min(alvo, sobra))
 
@@ -776,7 +776,7 @@ class MaryService(BaseCharacter):
             prompt_tokens = 0
         base_out = _safe_max_output(win, prompt_tokens)
         size = prefs.get("tamanho_resposta", "media")
-        mult = 1.0 if size == "media" else (0.75 if size == "curta" else 1.25)
+        mult = 1.0 if size == "media" else (0.75 if size == "curta" else 1.4)
         max_out = max(512, int(base_out * mult))
 
         # Temperatura conforme ritmo
