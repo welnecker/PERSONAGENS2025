@@ -321,6 +321,7 @@ FORCED_MODELS = [
     "together/Qwen/QwQ-32B",
     "inclusionai/ling-1t",
     "z-ai/glm-4.6",
+    "zai-org/GLM-4.6",
     "thedrummer/cydonia-24b-v4.1",
     "x-ai/grok-4-fast",
     "moonshotai/Kimi-K2-Instruct-0905",
@@ -341,7 +342,7 @@ def _merge_models() -> List[str]:
 
 def _provider_for(model_id: str) -> str:
     m = (model_id or "").lower()
-    if any(m.startswith(x) for x in ("together/", "moonshotai/kimi-k2-instruct-0905",
+    if any(m.startswith(x) for x in ("together/", "zai-org/", "moonshotai/kimi-k2-instruct-0905",
                                      "google/gemma-3-27b-it", "google/gemini-2.5-flash")):
         return "Together"
     if any(m.startswith(x) for x in ("anthropic/","qwen/","nousresearch/","deepseek/","inclusionai/",
