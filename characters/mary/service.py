@@ -727,7 +727,7 @@ class MaryService(BaseCharacter):
 
         # ==== COMANDOS DE DEBUG SIMPLES (chat) ====
         plow = prompt.strip().lower()
-                if plow.startswith("/debug eventos"):
+        if plow.startswith("/debug eventos"):
             try:
                 f_all = cached_get_facts(usuario_key) or {}
             except Exception:
@@ -1150,7 +1150,7 @@ class MaryService(BaseCharacter):
         except Exception:
             return ""
 
-        def _build_memory_pin(self, usuario_key: str, user_display: str) -> str:
+    def _build_memory_pin(self, usuario_key: str, user_display: str) -> str:
         """Memória canônica curta + pistas fortes (não exceder)."""
         try:
             f = cached_get_facts(usuario_key) or {}
