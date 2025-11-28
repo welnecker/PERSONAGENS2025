@@ -529,55 +529,128 @@ def _collect_mary_events_from_facts(f_all: Dict) -> Dict[str, str]:
 
 def _derive_pregnancy_from_events(eventos: Dict[str, str]) -> Dict[str, str]:
     """
-    Lê eventos narrativos (ex.: 'MEMÓRIA_PIN: GRAVIDEZ_2T=positivo; semanas=4; ...')
+    Lê eventos narrativos (ex.: 'MEMÓRIA_PIN: GRAVIDEZ=ativa; semanas=4; data_confirma=26/11/2025; ...')
     e extrai um conjunto mínimo de fatos canônicos de gravidez.
-    Não grava nada no banco: apenas devolve um dicionário com chaves
-    ('gravida', 'gravidez.semanas', 'gravidez.data_confirma', 'gravidez.meses').
+
+    - Considera múltiplos eventos (mary.evento.*)
+    - Escolhe o evento MAIS RECENTE (por data no rótulo ou no texto)
+    - Retorna:
+        {
+          "gravida": "True",
+          "gravidez.semanas": "...",
+          "gravidez.meses": "...",
+          "gravidez.data_confirma": "..."
+        }
+      ou {} se não encontrar nada confiável.
     """
-    result: Dict[str, str] = {}
+
+    def _parse_date(label: str, texto: str) -> tuple[int, int, int]:
+        """
+        Extrai uma data (ano, mês, dia) de:
+        - rótulo: ..._2025-11-28
+        - texto: 28/11/2025 ou 28-11-2025
+        Se não achar, devolve (0, 0, 0).
+        """
+        # 1) tenta padrão AAAA-MM-DD no label
+        m = re.search(r"(\d{4})-(\d{2})-(\d{2})", label or "")
+        if m:
+            y, mth, d = m.groups()
+            return int(y), int(mth), int(d)
+
+        # 2) tenta DD/MM/AAAA ou DD-MM-AAAA no texto
+        m = re.search(r"(\d{1,2})[/-](\d{1,2})[/-](\d{4})", texto or "")
+        if m:
+            d, mth, y = m.groups()
+            return int(y), int(mth), int(d)
+
+        return (0, 0, 0)
+
+    best: Dict[str, str] = {}
+    best_date: tuple[int, int, int] = (0, 0, 0)
 
     for label, texto in (eventos or {}).items():
         t = str(texto or "")
         t_low = t.lower()
 
-        # Só nos interessa evento com gravidez confirmada
-        if "gravidez" not in t_low and "gravidez_2t" not in t_low:
-            continue
-        if "negativ" in t_low:
-            # evita "teste negativo"
-            continue
-        if "positivo" not in t_low and "confirm" not in t_low:
-            # se não tem nada indicando positivo/confirmado, pula
+        # --- filtro grosseiro: só mantém eventos que claramente falam de gravidez positiva
+        # palavras-chave de gravidez
+        if not any(
+            kw in t_low
+            for kw in ("gravidez", "gravida", "grávida", "gravidez_2t")
+        ):
             continue
 
-        # Achamos um candidato
-        result["gravida"] = "True"
+        # descarta coisas explicitamente negativas
+        if "negativ" in t_low or "não grávida" in t_low:
+            continue
 
+        # precisa ter algum indicativo de confirmação/positivo
+        if not any(
+            kw in t_low
+            for kw in ("teste=positivo", "positivo", "confirmado", "grávida de", "gravida de")
+        ):
+            continue
+
+        # --- extrai data deste evento
+        evt_date = _parse_date(label, t)
+
+        # se a data deste evento é mais recente que a melhor até agora, ele vira o novo "melhor"
+        if evt_date <= best_date:
+            # já temos algo mais recente
+            continue
+
+        # ---- a partir daqui, este evento passa a ser o candidato principal ----
+        cand: Dict[str, str] = {"gravida": "True"}
+
+        # semanas (ex.: "semanas=4")
         m_sem = re.search(r"semanas?\s*=\s*(\d+)", t, re.IGNORECASE)
+        if not m_sem:
+            # também aceita "4 semanas" solto
+            m_sem = re.search(r"\b(\d{1,2})\s*semanas?", t, re.IGNORECASE)
         if m_sem:
-            result["gravidez.semanas"] = m_sem.group(1)
+            cand["gravidez.semanas"] = m_sem.group(1)
 
+        # meses (ex.: "Grávida de 2 meses", "2 meses de gestação")
+        m_mes = re.search(
+            r"(\d{1,2})\s*mes(?:es)?",
+            t,
+            re.IGNORECASE,
+        )
+        if m_mes:
+            cand["gravidez.meses"] = m_mes.group(1)
+
+        # data de confirmação (ex.: "data_confirma=26/11/2025")
         m_data = re.search(
             r"data[_ ]?confirma\s*=\s*([0-9]{1,2}[/\-\.][0-9]{1,2}[/\-\.][0-9]{2,4})",
             t,
             re.IGNORECASE,
         )
         if m_data:
-            result["gravidez.data_confirma"] = m_data.group(1)
+            cand["gravidez.data_confirma"] = m_data.group(1)
 
-        sem_val = result.get("gravidez.semanas")
-        if sem_val:
+        # se não veio meses mas veio semanas -> aproxima meses = semanas // 4
+        if "gravidez.meses" not in cand and "gravidez.semanas" in cand:
             try:
-                w = int(sem_val)
-                m_val = max(1, w // 4)
-                result["gravidez.meses"] = str(m_val)
+                w = int(cand["gravidez.semanas"])
+                if w > 0:
+                    cand["gravidez.meses"] = str(max(1, w // 4))
             except Exception:
                 pass
 
-        # Por enquanto usamos só o primeiro evento que bater
-        break
+        # se não veio semanas mas veio meses -> aproxima semanas = meses * 4
+        if "gravidez.semanas" not in cand and "gravidez.meses" in cand:
+            try:
+                mval = int(cand["gravidez.meses"])
+                if mval > 0:
+                    cand["gravidez.semanas"] = str(mval * 4)
+            except Exception:
+                pass
 
-    return result
+        # Atualiza "melhor evento" (mais recente)
+        best = cand
+        best_date = evt_date
+
+    return best
 
 
 
