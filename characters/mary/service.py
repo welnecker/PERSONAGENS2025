@@ -1150,12 +1150,20 @@ class MaryService(BaseCharacter):
         except Exception:
             return ""
 
-    def _build_memory_pin(self, usuario_key: str, user_display: str) -> str:
+        def _build_memory_pin(self, usuario_key: str, user_display: str) -> str:
         """Memória canônica curta + pistas fortes (não exceder)."""
         try:
             f = cached_get_facts(usuario_key) or {}
         except Exception:
             f = {}
+
+        # Integra eventos narrativos (ex.: gravidez) como fonte auxiliar de fatos
+        try:
+            eventos = _collect_mary_events_from_facts(f)
+            preg_from_events = _derive_pregnancy_from_events(eventos)
+        except Exception:
+            preg_from_events = {}
+
         blocos: List[str] = []
 
         parceiro = f.get("parceiro_atual") or f.get("parceiro") or ""
@@ -1166,8 +1174,8 @@ class MaryService(BaseCharacter):
         casados = bool(f.get("casados", True))
         blocos.append(f"casados={casados}")
 
-        # 🔴 GRAVIDEZ COMO FATO CANÔNICO (se existir)
-        raw_gravida = f.get("gravida", False)
+        # 🔴 GRAVIDEZ COMO FATO CANÔNICO (canônico + derivado de eventos)
+        raw_gravida = f.get("gravida", preg_from_events.get("gravida", False))
         gravida = False
         if isinstance(raw_gravida, bool):
             gravida = raw_gravida
@@ -1175,9 +1183,18 @@ class MaryService(BaseCharacter):
             gravida = str(raw_gravida).strip().lower() in ("1", "true", "sim", "grávida", "gravida")
 
         if gravida:
-            meses = f.get("gravidez.meses") or f.get("gravidez.meses_atual") or ""
-            semanas = f.get("gravidez.semanas") or ""
-            data_conf = f.get("gravidez.data_confirma") or ""
+            meses = (
+                f.get("gravidez.meses")
+                or f.get("gravidez.meses_atual")
+                or preg_from_events.get("gravidez.meses")
+                or ""
+            )
+            semanas = f.get("gravidez.semanas") or preg_from_events.get("gravidez.semanas") or ""
+            data_conf = (
+                f.get("gravidez.data_confirma")
+                or preg_from_events.get("gravidez.data_confirma")
+                or ""
+            )
 
             detalhes = ["gravida=True"]
             if meses not in ("", None):
@@ -1188,6 +1205,7 @@ class MaryService(BaseCharacter):
                 detalhes.append(f"desde={data_conf}")
 
             blocos.append("; ".join(detalhes))
+
 
         ent_line = _entities_to_line(f)
         if ent_line and ent_line != "—":
