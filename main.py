@@ -322,6 +322,7 @@ FORCED_MODELS = [
     "inclusionai/ling-1t",
     "z-ai/glm-4.6",
     "zai-org/GLM-4.6",
+    "prime-intellect/intellect-3", 
     "thedrummer/cydonia-24b-v4.1",
     "x-ai/grok-4-fast",
     "moonshotai/Kimi-K2-Instruct-0905",
@@ -346,7 +347,7 @@ def _provider_for(model_id: str) -> str:
                                      "google/gemma-3-27b-it", "google/gemini-2.5-flash")):
         return "Together"
     if any(m.startswith(x) for x in ("anthropic/","qwen/","nousresearch/","deepseek/","inclusionai/",
-                                     "z-ai/","thedrummer/","x-ai/","openai/")):
+                                     "z-ai/","thedrummer/","x-ai/","openai/", "prime-intellect/")):
         return "OpenRouter"
     return "OpenRouter"
 
