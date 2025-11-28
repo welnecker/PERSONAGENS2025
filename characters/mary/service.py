@@ -279,7 +279,7 @@ def _prefs_line(prefs: Dict) -> str:
 
     if nivel == "alta":
         extra = (
-            "Para cenas mais intensas, você pode ser explícita na descrição do sexo, "
+            "Para cenas mais intensas, você pode ser mais explícita na descrição do sexo, "
             "mantendo fluidez, coerência emocional e respeito aos limites do casal. "
         )
     elif nivel == "media":
@@ -624,6 +624,41 @@ class MaryService(BaseCharacter):
             return ""
 
         usuario_key = _current_user_key()   # << primeiro
+
+        # ==== COMANDOS DE DEBUG SIMPLES (chat) ====
+        plow = prompt.strip().lower()
+        if plow.startswith("/debug eventos"):
+            try:
+                f_all = cached_get_facts(usuario_key) or {}
+            except Exception:
+                f_all = {}
+
+            eventos = {}
+            for k, v in (f_all or {}).items():
+                if isinstance(k, str) and k.lower().startswith("mary.evento.") and v:
+                    eventos[k] = v
+
+            if not eventos:
+                return (
+                    "🔎 DEBUG EVENTOS\n"
+                    f"- user_key: {usuario_key}\n"
+                    "- Nenhum fact encontrado com prefixo 'mary.evento.'."
+                )
+
+            linhas = [
+                "🔎 DEBUG EVENTOS",
+                f"- user_key: {usuario_key}",
+                f"- total encontrados: {len(eventos)}",
+                "",
+            ]
+            for k, v in eventos.items():
+                vs = str(v)
+                if len(vs) > 220:
+                    vs = vs[:220] + "..."
+                linhas.append(f"• {k} = {vs}")
+
+            return "\n".join(linhas)
+
         persona_text, history_boot = self._load_persona()
 
         # Memória/continuidade base
@@ -669,14 +704,13 @@ class MaryService(BaseCharacter):
                 )
             elif nivel == "alta":
                 nsfw_hint = (
-                    "NSFW: LIBERADO. Intensifique descrição corporal e sensorial: pêlos pubianos, membro grosso, beijos de língua, "
-                    "mãos na bunda, grelo pulsante, buceta molhada de tesão e condução de ritmo; **descreva genitais com ato sexual gráfico**, "
+                    "NSFW: LIBERADO. Intensifique descrição corporal e sensorial, "
                     "mantendo coerência emocional e respeito aos limites do casal."
                 )
             else:  # 'media'
                 nsfw_hint = (
-                    "NSFW: LIBERADO. Sensualidade clara e progressiva; descreva sensações e ações sem pressa, demonstrando desejo sexual, "
-                    "sedução e vontade de prosseguir carícias, incluindo corpo e genitais/ato gráfico quando fizer sentido para a cena."
+                    "NSFW: LIBERADO. Sensualidade clara e progressiva; descreva sensações e ações sem pressa, "
+                    "demonstrando desejo sexual e sedução sem repetição mecânica."
                 )
         # =================================
 
@@ -1035,6 +1069,29 @@ class MaryService(BaseCharacter):
         casados = bool(f.get("casados", True))
         blocos.append(f"casados={casados}")
 
+        # 🔴 GRAVIDEZ COMO FATO CANÔNICO (se existir)
+        raw_gravida = f.get("gravida", False)
+        gravida = False
+        if isinstance(raw_gravida, bool):
+            gravida = raw_gravida
+        else:
+            gravida = str(raw_gravida).strip().lower() in ("1", "true", "sim", "grávida", "gravida")
+
+        if gravida:
+            meses = f.get("gravidez.meses") or f.get("gravidez.meses_atual") or ""
+            semanas = f.get("gravidez.semanas") or ""
+            data_conf = f.get("gravidez.data_confirma") or ""
+
+            detalhes = ["gravida=True"]
+            if meses not in ("", None):
+                detalhes.append(f"meses={meses}")
+            if semanas not in ("", None):
+                detalhes.append(f"semanas={semanas}")
+            if data_conf not in ("", None):
+                detalhes.append(f"desde={data_conf}")
+
+            blocos.append("; ".join(detalhes))
+
         ent_line = _entities_to_line(f)
         if ent_line and ent_line != "—":
             blocos.append(f"entidades=({ent_line})")
@@ -1186,8 +1243,6 @@ class MaryService(BaseCharacter):
             ts_anterior = float(f.get("mary.rs.v2.ts", 0) or 0)
         except Exception:
             resumo_anterior = ""
-            ts_anterior = 0.0
-
         seed = (
             "Você mantém um RESUMO CONTÍNUO da história entre Mary e o usuário.\n\n"
             "TAREFA:\n"
@@ -1386,4 +1441,3 @@ class MaryService(BaseCharacter):
                             st.experimental_rerun()
                     with col2:
                         container.caption(f"mary.evento.{label}")
-###service
