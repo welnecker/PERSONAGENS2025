@@ -480,6 +480,106 @@ def _entities_to_line(f: Dict) -> str:
             parts.append(f"{k}={v}")
     return "; ".join(parts) if parts else "—"
 
+def _collect_mary_events_from_facts(f_all: Dict) -> Dict[str, str]:
+    """
+    Normaliza todas as memórias de evento da Mary a partir dos facts.
+
+    Suporta:
+    - formato plano:  'mary.evento.foo' = '...'
+    - formato aninhado: 'mary': {'evento': {'foo': '...'}, 'eventos': {...}}
+    - cache da sessão: last_saved_mary_event_key/val (para aparecer imediatamente)
+    """
+    eventos: Dict[str, str] = {}
+
+    # --- formato 1: plano (mary.evento.*)
+    try:
+        items = (f_all or {}).items()
+    except Exception:
+        items = []
+    for k, v in items:
+        if not isinstance(k, str) or not v:
+            continue
+        if k.startswith("mary.evento."):
+            label = k.replace("mary.evento.", "", 1)
+            eventos.setdefault(label, str(v))
+
+    # --- formato 2: aninhado em f_all["mary"]["evento"/"eventos"]
+    mary_obj = (f_all or {}).get("mary", {})
+    if isinstance(mary_obj, dict):
+        evt_block = mary_obj.get("evento") or mary_obj.get("eventos") or {}
+        if isinstance(evt_block, dict):
+            for label, val in evt_block.items():
+                if not val:
+                    continue
+                if label not in eventos:
+                    eventos[label] = str(val)
+
+    # --- formato 3: cache da sessão (acabou de salvar nesta sessão)
+    last_key = st.session_state.get("last_saved_mary_event_key", "")
+    last_val = st.session_state.get("last_saved_mary_event_val", "")
+    if last_key and last_val:
+        if isinstance(last_key, str):
+            label = last_key.replace("mary.evento.", "", 1)
+        else:
+            label = str(last_key)
+        eventos.setdefault(label, str(last_val))
+
+    return eventos
+
+
+def _derive_pregnancy_from_events(eventos: Dict[str, str]) -> Dict[str, str]:
+    """
+    Lê eventos narrativos (ex.: 'MEMÓRIA_PIN: GRAVIDEZ_2T=positivo; semanas=4; ...')
+    e extrai um conjunto mínimo de fatos canônicos de gravidez.
+    Não grava nada no banco: apenas devolve um dicionário com chaves
+    ('gravida', 'gravidez.semanas', 'gravidez.data_confirma', 'gravidez.meses').
+    """
+    result: Dict[str, str] = {}
+
+    for label, texto in (eventos or {}).items():
+        t = str(texto or "")
+        t_low = t.lower()
+
+        # Só nos interessa evento com gravidez confirmada
+        if "gravidez" not in t_low and "gravidez_2t" not in t_low:
+            continue
+        if "negativ" in t_low:
+            # evita "teste negativo"
+            continue
+        if "positivo" not in t_low and "confirm" not in t_low:
+            # se não tem nada indicando positivo/confirmado, pula
+            continue
+
+        # Achamos um candidato
+        result["gravida"] = "True"
+
+        m_sem = re.search(r"semanas?\s*=\s*(\d+)", t, re.IGNORECASE)
+        if m_sem:
+            result["gravidez.semanas"] = m_sem.group(1)
+
+        m_data = re.search(
+            r"data[_ ]?confirma\s*=\s*([0-9]{1,2}[/\-\.][0-9]{1,2}[/\-\.][0-9]{2,4})",
+            t,
+            re.IGNORECASE,
+        )
+        if m_data:
+            result["gravidez.data_confirma"] = m_data.group(1)
+
+        sem_val = result.get("gravidez.semanas")
+        if sem_val:
+            try:
+                w = int(sem_val)
+                m_val = max(1, w // 4)
+                result["gravidez.meses"] = str(m_val)
+            except Exception:
+                pass
+
+        # Por enquanto usamos só o primeiro evento que bater
+        break
+
+    return result
+
+
 
 _CLUB_PAT = re.compile(r"\b(clube|club|casa)\s+([A-ZÀ-Üa-zà-ü0-9][\wÀ-ÖØ-öø-ÿ'’\- ]{1,40})\b", re.I)
 _ADDR_PAT = re.compile(r"\b(rua|av\.?|avenida|al\.?|alameda|rod\.?|rodovia)\s+[^,]{1,50},?\s*\d{1,5}\b", re.I)
@@ -627,22 +727,19 @@ class MaryService(BaseCharacter):
 
         # ==== COMANDOS DE DEBUG SIMPLES (chat) ====
         plow = prompt.strip().lower()
-        if plow.startswith("/debug eventos"):
+                if plow.startswith("/debug eventos"):
             try:
                 f_all = cached_get_facts(usuario_key) or {}
             except Exception:
                 f_all = {}
 
-            eventos = {}
-            for k, v in (f_all or {}).items():
-                if isinstance(k, str) and k.lower().startswith("mary.evento.") and v:
-                    eventos[k] = v
+            eventos = _collect_mary_events_from_facts(f_all)
 
             if not eventos:
                 return (
                     "🔎 DEBUG EVENTOS\n"
                     f"- user_key: {usuario_key}\n"
-                    "- Nenhum fact encontrado com prefixo 'mary.evento.'."
+                    "- Nenhuma memória de evento encontrada para Mary."
                 )
 
             linhas = [
@@ -651,11 +748,12 @@ class MaryService(BaseCharacter):
                 f"- total encontrados: {len(eventos)}",
                 "",
             ]
-            for k, v in eventos.items():
+            for label, v in sorted(eventos.items()):
                 vs = str(v)
                 if len(vs) > 220:
                     vs = vs[:220] + "..."
-                linhas.append(f"• {k} = {vs}")
+                k_fmt = f"mary.evento.{label}"
+                linhas.append(f"• {k_fmt} = {vs}")
 
             return "\n".join(linhas)
 
@@ -758,20 +856,19 @@ class MaryService(BaseCharacter):
             verbatim_ultimos=verbatim_ultimos,
         )
 
-        # --- 3.a) coletar eventos salvos (mary.evento.*)
+                # --- 3.a) coletar eventos salvos (formato unificado)
         eventos_block = ""
         try:
-            eventos = []
-            for k, v in (f_all or {}).items():
-                if k.startswith("mary.evento.") and v:
-                    label = k.split("mary.evento.", 1)[-1]
-                    eventos.append(f"- {label}: {str(v).strip()}")
-            if eventos:
-                joined = "\n".join(eventos)[:1000]
+            eventos_dict = _collect_mary_events_from_facts(f_all)
+            if eventos_dict:
+                linhas_evt = []
+                for label, val in sorted(eventos_dict.items()):
+                    linhas_evt.append(f"- {label}: {str(val).strip()}")
+                joined = "\n".join(linhas_evt)[:1200]
                 eventos_block = (
                     "EVENTOS_FIXOS_MARY:\n"
-                    "Use estes registros como FONTE DE VERDADE para perguntas futuras do usuário.\n"
-                    "Se o usuário disser 'lembra do encontro com Carlos e Beatriz?', recupere o evento correspondente.\n"
+                    "Use estes registros como FONTE DE VERDADE. "
+                    "Eles são eventos já vividos pelo casal (ex.: gravidez confirmada, encontros marcantes, etc.).\n"
                     + joined
                 )
         except Exception:
