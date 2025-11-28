@@ -691,6 +691,34 @@ def _extract_and_store_entities(usuario_key: str, user_text: str, assistant_text
             set_fact(usuario_key, "mary.entity.club_ig", "@" + handle, {"fonte": "extracted"})
             clear_user_cache(usuario_key)
 
+    def _collect_pregnancy_events_from_facts(f: Dict) -> Dict[str, str]:
+    """
+    Coleta todos os eventos de Mary relacionados a gravidez a partir dos facts:
+    - chaves planas: "mary.evento.*"
+    - formato aninhado: "mary": { "evento": { ... } }
+    """
+    eventos: Dict[str, str] = {}
+
+    # formato plano
+    for k, v in (f or {}).items():
+        if isinstance(k, str) and k.startswith("mary.evento.") and v:
+            eventos[k] = str(v)
+
+    # formato aninhado
+    mary_obj = f.get("mary", {})
+    if isinstance(mary_obj, dict):
+        evt_block = mary_obj.get("evento") or mary_obj.get("eventos") or {}
+        if isinstance(evt_block, dict):
+            for label, val in evt_block.items():
+                if not val:
+                    continue
+                key_full = f"mary.evento.{label}"
+                if key_full not in eventos:
+                    eventos[key_full] = str(val)
+
+    return eventos
+
+
 
 # ===== Aviso de memória (resumo/poda) =====
 def _mem_drop_warn(report: dict) -> None:
@@ -1244,12 +1272,55 @@ class MaryService(BaseCharacter):
         if parceiro:
             blocos.append(f"parceiro_atual={parceiro}")
 
-        casados = bool(f.get("casados", True))
+                casados = bool(f.get("casados", True))
         blocos.append(f"casados={casados}")
 
-        # 🔴 GRAVIDEZ COMO FATO CANÔNICO (canônico + derivado de eventos)
-        raw_gravida = f.get("gravida", preg_from_events.get("gravida", False))
+        # 🔴 GRAVIDEZ COMO FATO CANÔNICO (se existir),
+        #     COM OVERRIDE vindo dos eventos mary.evento.*
+        preg_events = _collect_pregnancy_events_from_facts(f)
+        preg_from_events = _derive_pregnancy_from_events(preg_events)
+
+        # prioridade: eventos mais recentes > facts simples
+        raw_gravida = (
+            preg_from_events.get("gravida")
+            if "gravida" in preg_from_events
+            else f.get("gravida", False)
+        )
+
         gravida = False
+        if isinstance(raw_gravida, bool):
+            gravida = raw_gravida
+        else:
+            gravida = str(raw_gravida).strip().lower() in ("1", "true", "sim", "grávida", "gravida")
+
+        if gravida:
+            meses = (
+                preg_from_events.get("gravidez.meses")
+                or f.get("gravidez.meses")
+                or f.get("gravidez.meses_atual")
+                or ""
+            )
+            semanas = (
+                preg_from_events.get("gravidez.semanas")
+                or f.get("gravidez.semanas")
+                or ""
+            )
+            data_conf = (
+                preg_from_events.get("gravidez.data_confirma")
+                or f.get("gravidez.data_confirma")
+                or ""
+            )
+
+            detalhes = ["gravida=True"]
+            if meses not in ("", None):
+                detalhes.append(f"meses={meses}")
+            if semanas not in ("", None):
+                detalhes.append(f"semanas={semanas}")
+            if data_conf not in ("", None):
+                detalhes.append(f"desde={data_conf}")
+
+            blocos.append("; ".join(detalhes))
+
         if isinstance(raw_gravida, bool):
             gravida = raw_gravida
         else:
