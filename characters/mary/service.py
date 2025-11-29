@@ -691,7 +691,7 @@ def _extract_and_store_entities(usuario_key: str, user_text: str, assistant_text
             set_fact(usuario_key, "mary.entity.club_ig", "@" + handle, {"fonte": "extracted"})
             clear_user_cache(usuario_key)
 
-    def _collect_pregnancy_events_from_facts(f: Dict) -> Dict[str, str]:
+def _collect_pregnancy_events_from_facts(f: Dict) -> Dict[str, str]:
     """
     Coleta todos os eventos de Mary relacionados a gravidez a partir dos facts:
     - chaves planas: "mary.evento.*"
@@ -1272,7 +1272,7 @@ class MaryService(BaseCharacter):
         if parceiro:
             blocos.append(f"parceiro_atual={parceiro}")
 
-                casados = bool(f.get("casados", True))
+        casados = bool(f.get("casados", True))
         blocos.append(f"casados={casados}")
 
         # 🔴 GRAVIDEZ COMO FATO CANÔNICO (se existir),
