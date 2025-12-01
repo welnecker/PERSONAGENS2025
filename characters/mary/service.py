@@ -162,6 +162,10 @@ MODEL_WINDOWS = {
     "together/Qwen/Qwen2.5-72B-Instruct": 32_000,
     "deepseek/deepseek-chat-v3-0324": 32_000,
     "inclusionai/ling-1t": 64_000,  # ajuste se o provedor publicar outro contexto
+
+     # 🆕 Modelos novos:
+    "x-ai/grok-4.1-fast:free": 2_000_000,        # 2M de contexto
+    "tngtech/tng-r1t-chimera:free": 163_840,     # ~163k de contexto
 }
 DEFAULT_WINDOW = 32_000
 
