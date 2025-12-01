@@ -6,15 +6,16 @@ from typing import Any, Dict, List, Tuple
 from .openrouter import chat as openrouter_chat, DEFAULT_MODELS as OR_MODELS
 from .together import chat as together_chat, DEFAULT_MODELS as TG_MODELS
 
-# Modelo seguro de fallback (um que você já usa)
+# Modelo seguro de fallback
 SAFE_FALLBACK_MODEL = "deepseek/deepseek-chat-v3-0324"
 
-# Alias opcionais (mantive, mas agora não vamos forçar pro OpenRouter)
-MODEL_ALIASES: Dict[str, str] = {
-    # se um dia você quiser renomear algum modelo, põe aqui
-}
+# Alias opcionais
+MODEL_ALIASES: Dict[str, str] = {}
 
 
+# -------------------------
+# DETECÇÃO DE PROVIDER
+# -------------------------
 def available_providers() -> List[Tuple[str, bool, str]]:
     have_or = bool(os.getenv("OPENROUTER_API_KEY") or os.getenv("OPENROUTER_TOKEN"))
     have_tg = bool(os.getenv("TOGETHER_API_KEY"))
@@ -32,29 +33,31 @@ def list_models(provider: str | None = None) -> List[str]:
     return OR_MODELS[:] + TG_MODELS[:]
 
 
-# -------------------------------
-# helper para decidir o provedor
-# -------------------------------
+# -----------------------------------------
+# Identificação correta do provedor
+# -----------------------------------------
 def _provider_for(model_id: str) -> str:
     m = (model_id or "").lower().strip()
 
-    # 1) modelos do Together por prefixo
+    # Together
     if m.startswith("together/"):
         return "Together"
-
-    # 2) 👉 teu caso: deepseek-ai/... está vindo do Together
     if m.startswith("deepseek-ai/"):
         return "Together"
-
-    # 3) moonshotai também pode estar vindo do Together no teu setup
     if m.startswith("moonshotai/"):
         return "Together"
-
-    # 4) modelos google que você pôs
     if m.startswith("google/"):
         return "Together"
 
-    # padrão: OpenRouter
+    # OpenRouter — inclui:
+    # x-ai/grok-4.1-fast:free
+    # tngtech/tng-r1t-chimera:free
+    # e todos os outros modelos OpenRouter
+    if m.startswith("x-ai/"):
+        return "OpenRouter"
+    if m.startswith("tngtech/"):
+        return "OpenRouter"
+
     return "OpenRouter"
 
 
@@ -67,26 +70,38 @@ def _normalize_model_id(raw: str) -> str:
     return raw
 
 
+# -----------------------------------------
+# CHAMADA GERAL (SEM reasoning especial)
+# -----------------------------------------
 def chat(model: str, messages: List[Dict[str, str]], **kwargs: Any):
     norm_model = _normalize_model_id(model)
     provider = _provider_for(norm_model)
 
     if provider == "Together":
-        # manda direto pro Together
         return together_chat(norm_model, messages, **kwargs)
 
-    # senão, OpenRouter
     try:
         return openrouter_chat(norm_model, messages, **kwargs)
     except RuntimeError as e:
         msg = str(e).lower()
         if "not a valid model id" in msg or "model_not_found" in msg:
-            # tenta com fallback
             return openrouter_chat(SAFE_FALLBACK_MODEL, messages, **kwargs)
         raise
 
 
+# ============================================================
+# CHAMADA STRICT (ONDE VAI O REASONING DINÂMICO DA MARY)
+# ============================================================
 def route_chat_strict(model: str, payload: Dict[str, Any]):
+    """
+    payload deve conter:
+        messages: [...]
+        max_tokens: int
+        temperature: float
+        top_p: float
+        extra: dict (opcional)  <-- agora é suportado!
+    """
+
     norm_model = _normalize_model_id(model)
     provider = _provider_for(norm_model)
 
@@ -97,9 +112,16 @@ def route_chat_strict(model: str, payload: Dict[str, Any]):
         "top_p": payload.get("top_p", 0.95),
     }
 
+    # EXTRA: reasoning, tool_choice, etc
+    extra = payload.get("extra", None)
+    if extra:
+        kwargs["extra"] = extra
+
+    # --- TOGETHER ---
     if provider == "Together":
         return together_chat(norm_model, msgs, **kwargs)
 
+    # --- OPENROUTER ---
     try:
         return openrouter_chat(norm_model, msgs, **kwargs)
     except RuntimeError as e:
