@@ -1,19 +1,21 @@
-# characters/mary/service.py
 from __future__ import annotations
 
-import re, time, random, json
+import re
+import time
+import random
 from typing import List, Dict, Tuple
 import streamlit as st
 
 from core.memoria_longa import topk as lore_topk, save_fragment as lore_save
 from core.ultra import critic_review, polish
 from core.common.base_service import BaseCharacter
-from core.service_router import route_chat_strict
+from core.service_router import route_chat_strict, list_models, available_providers
 from core.repositories import (
     save_interaction, get_history_docs,
     get_facts, get_fact, last_event, set_fact
 )
 from core.tokens import toklen
+import json
 
 # === Tool Calling: definição de ferramentas disponíveis para a Mary ===
 # Você pode ampliar livremente esta lista conforme precisar.
@@ -22,126 +24,626 @@ TOOLS = [
         "type": "function",
         "function": {
             "name": "get_memory_pin",
-            "description": "Retorna fatos canônicos curtos do casal e entidades salvas (linha compacta).",
-            "parameters": {"type": "object", "properties": {}, "required": []}
+            "description": "Retorna fatos canônicos da relação de Mary com o usuário, incluindo estado civil, gravidez e entidades relevantes.",
+            "parameters": {
+                "type": "object",
+                "properties": {}
+            }
         }
     },
     {
         "type": "function",
         "function": {
             "name": "set_fact",
-            "description": "Salva ou atualiza um fato canônico (chave/valor) para Mary.",
+            "description": "Grava um fato simples na memória canônica da Mary para este usuário.",
             "parameters": {
                 "type": "object",
-                "properties": {"key": {"type": "string"}, "value": {"type": "string"}},
+                "properties": {
+                    "key": {
+                        "type": "string",
+                        "description": "Chave do fato (por exemplo: 'gravida', 'parceiro_atual', 'local_cena_atual')."
+                    },
+                    "value": {
+                        "type": "string",
+                        "description": "Valor do fato a ser armazenado."
+                    }
+                },
                 "required": ["key", "value"]
             }
         }
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "save_event",
+            "description": "Salva um evento narrativo importante da Mary (como gravidez confirmada, encontro marcante, etc.)",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "label": {
+                        "type": "string",
+                        "description": "Rótulo curto e único para o evento (por exemplo: 'gravidez_confirmada_2025-11-26')."
+                    },
+                    "content": {
+                        "type": "string",
+                        "description": "Texto completo do evento a ser gravado."
+                    }
+                },
+                "required": []
+            }
+        }
+    }
 ]
 
 
+# ==============================================
+# 1) Helpers de cache/infra bem genéricos
+# ==============================================
 def _current_user_key() -> str:
     """
-    Devolve SEMPRE a mesma chave de usuário para Mary.
-    Se não tiver login, usa 'anon::mary'.
+    Tenta derivar uma chave interna de usuário.
+    Se você tiver login, pode usar o e-mail, id do banco, etc.
     """
-    uid = str(st.session_state.get("user_id", "") or "").strip()
-    if not uid:
-        return "anon::mary"
-    return f"{uid}::mary"
+    u = st.session_state.get("user_id") or st.session_state.get("usuario") or "anon"
+    u = str(u).strip()
+    return f"user::{u}"
 
 
-# ====== MEMÓRIA TEMÁTICA (gravar e recuperar) ======
-
-# frases que disparam o modo "grava o que a MARY VAI FALAR"
-SAVE_PROMPTS = (
-    "mary, use sua ferramenta de memória para registrar",
-    "mary use sua ferramenta de memória para registrar",
-    "mary, registre na sua memória",
-    "mary registre na sua memória",
-    "mary, salve na memória",
-    "mary salve na memória",
-)
-
-
-def _user_is_asking_to_save_assistant_version(prompt: str) -> bool:
-    p = (prompt or "").lower().strip()
-    if not p:
-        return False
-    return any(p.startswith(s) for s in SAVE_PROMPTS)
+def cached_get_facts(usuario_key: str) -> Dict[str, any]:
+    cache_key = f"facts::{usuario_key}"
+    if cache_key in st.session_state:
+        return st.session_state[cache_key]
+    try:
+        f = get_facts(usuario_key) or {}
+    except Exception:
+        f = {}
+    st.session_state[cache_key] = f
+    return f
 
 
-def _detect_thematic_tags_from_prompt(prompt: str) -> list[str]:
+def clear_user_cache(usuario_key: str):
     """
-    Detecta eventos temáticos com base em palavras-chave no prompt.
-    Ex.: 'Carlos e sua esposa', 'Carlos e Beatriz', etc.
+    Limpa cache leve para forçar reload de facts/histórico após alterações.
     """
-    p = (prompt or "").lower()
-    tags: list[str] = []
+    fk = f"facts::{usuario_key}"
+    if fk in st.session_state:
+        del st.session_state[fk]
 
-    # Carlos & Beatriz: aceita 'beatriz' OU 'esposa' / 'mulher dele'
-    if "carlos" in p and (
-        "beatriz" in p
-        or "esposa" in p
-        or "mulher dele" in p
-        or "sua esposa" in p
-    ):
-        tags.append("mary.evento.carlos_beatriz")
+    hk = f"history::{usuario_key}"
+    if hk in st.session_state:
+        del st.session_state[hk]
 
+
+def cached_get_history(usuario_key: str):
+    hk = f"history::{usuario_key}"
+    if hk in st.session_state:
+        return st.session_state[hk]
+    try:
+        docs = get_history_docs(usuario_key)
+    except Exception:
+        docs = []
+    st.session_state[hk] = docs
+    return docs
+
+
+# ==============================================
+# 2) Preferências do usuário (sexo, ritmo, etc.)
+# ==============================================
+def _read_prefs(facts: Dict[str, any]) -> Dict[str, str]:
+    """
+    Lê as preferências salvas para Mary.
+    Exemplo de fato salvo:
+      - "mary.pref.nivel_sensual" = "sutil" | "media" | "alta"
+      - "mary.pref.ritmo"         = "lento" | "normal" | "rapido"
+      - "mary.pref.tamanho"       = "curta" | "media" | "longa"
+    """
+    nivel = facts.get("mary.pref.nivel_sensual", "sutil") or "sutil"
+    ritmo = facts.get("mary.pref.ritmo", "normal") or "normal"
+    tamanho = facts.get("mary.pref.tamanho", "media") or "media"
+    return {
+        "nivel_sensual": str(nivel),
+        "ritmo": str(ritmo),
+        "tamanho_resposta": str(tamanho),
+    }
+
+
+def _prefs_line(prefs: Dict[str, str]) -> str:
+    return (
+        f"nivel_sensual={prefs.get('nivel_sensual')}; "
+        f"ritmo={prefs.get('ritmo')}; "
+        f"tamanho_resposta={prefs.get('tamanho_resposta')}"
+    )
+
+
+def nsfw_enabled(usuario_key: str) -> bool:
+    try:
+        v = get_fact(usuario_key, "nsfw_on", False)
+    except Exception:
+        v = False
+    if isinstance(v, bool):
+        return v
+    s = str(v).strip().lower()
+    return s in ("1", "true", "sim", "on", "yes", "y")
+
+
+# ==============================================
+# 3) Tamanho de contexto por modelo (janela)
+# ==============================================
+# Janela padrão se não conhecer o modelo:
+_DEFAULT_WINDOW = 16000
+
+
+def _get_window_for(model_id: str) -> int:
+    if not model_id:
+        return _DEFAULT_WINDOW
+
+    m = model_id.lower().strip()
+    # Exemplos: você pode adaptar conforme seus modelos
+    if "deepseek-r1" in m or "deepseek-reasoner" in m:
+        return 128000
+    if "deepseek-chat" in m:
+        return 65536
+    if "gpt-4.1" in m or "gpt-4.5" in m:
+        return 128000
+    if "llama-3.1-405b" in m or "llama-3.1" in m:
+        return 128000
+    if "qwen2.5-72b" in m:
+        return 32000
+    if "claude-3.5" in m:
+        return 200000
+    if "grok-4.1" in m:
+        return 200000
+    if "tng-r1t-chimera" in m:
+        return 163840
+
+    # fallback
+    return _DEFAULT_WINDOW
+
+
+# ==============================================
+# 4) Orçamento por modelo (histórico x meta)
+# ==============================================
+def _budget_slices(model_id: str) -> Tuple[int, int, int]:
+    """
+    Retorna (hist_budget, meta_budget, safety_budget) em tokens.
+    hist_budget: histórico/resumos
+    meta_budget: system/persona/memória
+    safety_budget: folga para resposta
+    """
+    win = _get_window_for(model_id)
+    # regra simples: 50% histórico, 20% meta, 30% folga
+    hist = int(win * 0.5)
+    meta = int(win * 0.2)
+    safety = win - hist - meta
+    return hist, meta, safety
+
+
+# ==============================================
+# 5) Summarizer auxiliar para históricos longos
+# ==============================================
+def _llm_summarize(model_id: str, text: str) -> str:
+    """
+    Usa o mesmo roteador de LLMs para gerar um resumo curto.
+    """
+    if not text.strip():
+        return ""
+
+    # fallback de modelo para resumo (algo barato/leve)
+    candidates = [
+        "together/Qwen/Qwen2.5-32B-Instruct",
+        "together/meta-llama/Meta-Llama-3.1-8B-Instruct-Turbo",
+        "deepseek/deepseek-chat-v3-0324",
+    ]
+    use_model = model_id or candidates[0]
+    mlow = (use_model or "").lower()
+    if "grok-4.1" in mlow or "tng-r1t-chimera" in mlow:
+        # pra resumo, usa algo mais "barato"
+        for c in candidates:
+            if c in list_models() or True:
+                use_model = c
+                break
+
+    seed = (
+        "Resuma o seguinte histórico de diálogo entre Mary e o usuário em 8–12 frases curtas, "
+        "focando apenas em fatos e decisões duráveis (relação, gravidez, locais, acordos, conflitos, segredos). "
+        "Não repita diálogos literais; não invente fatos novos. "
+        "Use português natural e mantenha coerência temporal."
+    )
+    body = {
+        "model": use_model,
+        "messages": [
+            {"role": "system", "content": seed},
+            {"role": "user", "content": text},
+        ],
+        "max_tokens": 260,
+        "temperature": 0.2,
+        "top_p": 0.9,
+    }
+    try:
+        data, used, prov = route_chat_strict(use_model, body)
+        msg = (data.get("choices", [{}])[0].get("message", {}) or {})
+        return (msg.get("content") or "").strip()
+    except Exception:
+        return ""
+
+
+# ==============================================
+# 6) ENTIDADES (nomes, datas, etc.)
+# ==============================================
+def _entities_to_line(f: Dict[str, any]) -> str:
+    """
+    Converte fatos do tipo "mary.ent.*" em uma linha compacta.
+    Exemplo de fato:
+      - mary.ent.parceiro_nome = "Janio"
+      - mary.ent.amante_carlos = "Carlos"
+    """
+    ents = []
+    for k, v in f.items():
+        if not isinstance(k, str):
+            continue
+        if not k.startswith("mary.ent."):
+            continue
+        label = k.replace("mary.ent.", "", 1)
+        vs = str(v).strip()
+        if not vs:
+            continue
+        ents.append(f"{label}={vs}")
+    if not ents:
+        return "—"
+    return "; ".join(sorted(ents))
+
+
+def _extract_and_store_entities(usuario_key: str, user_text: str, assistant_text: str) -> None:
+    """
+    Extrator super simples de entidades, só para exemplo.
+    Você pode evoluir com NER real depois.
+    """
+    try:
+        txt = f"{user_text}\n{assistant_text}"
+        txt_low = txt.lower()
+        # Exemplos bobos só para ilustrar
+        nomes = []
+        for nome in ["carlos", "beatriz", "laura", "ricardo", "janio", "mary"]:
+            if nome in txt_low:
+                nomes.append(nome)
+        for nome in nomes:
+            k = f"mary.ent.{nome}"
+            set_fact(usuario_key, k, nome.capitalize(), {"fonte": "auto_entidade"})
+        clear_user_cache(usuario_key)
+    except Exception:
+        return
+
+
+# ==============================================
+# 7) Pregnância a partir de eventos
+# ==============================================
+def _collect_mary_events_from_facts(facts: Dict[str, any]) -> Dict[str, str]:
+    """
+    Coleta eventos de Mary em 2 formatos:
+      1) Chaves planas: "mary.evento.xyz": "..."
+      2) Estrutura aninhada: "mary": { "evento": { "xyz": "..." } }
+    Retorna dict label -> texto.
+    """
+    eventos: Dict[str, str] = {}
+
+    # Formato plano
+    for k, v in facts.items():
+        if not isinstance(k, str):
+            continue
+        if not k.startswith("mary.evento."):
+            continue
+        label = k.replace("mary.evento.", "", 1)
+        if not v:
+            continue
+        eventos[label] = str(v)
+
+    # Formato aninhado
+    mary_obj = facts.get("mary", {})
+    if isinstance(mary_obj, dict):
+        evt_block = mary_obj.get("evento") or mary_obj.get("eventos") or {}
+        if isinstance(evt_block, dict):
+            for label, val in evt_block.items():
+                if not val:
+                    continue
+                if label not in eventos:
+                    eventos[label] = str(val)
+
+    return eventos
+
+
+def _collect_pregnancy_events_from_facts(facts: Dict[str, any]) -> Dict[str, str]:
+    """
+    Extrai só eventos que parecem falar de gravidez.
+    """
+    eventos = _collect_mary_events_from_facts(facts)
+    preg_events: Dict[str, str] = {}
+    for label, txt in eventos.items():
+        low = txt.lower()
+        if any(w in low for w in ["gravidez", "grávida", "teste positivo", "ultrassom", "ultrassom", "beta-hcg"]):
+            preg_events[label] = txt
+    return preg_events
+
+
+def _derive_pregnancy_from_events(eventos: Dict[str, str]) -> Dict[str, any]:
+    """
+    A partir dos textos de eventos, tenta derivar:
+      - gravida: bool
+      - gravidez.meses
+      - gravidez.semanas
+      - gravidez.data_confirma
+    Estratégia simplificada.
+    """
+    if not eventos:
+        return {}
+
+    # pega o último evento (ordem por label pode não ser temporal, mas é algo)
+    # se você tiver timestamp embutido no label, pode ordenar melhor
+    labels = sorted(eventos.keys())
+    ultimo = eventos[labels[-1]].lower()
+
+    out: Dict[str, any] = {}
+    if any(w in ultimo for w in ["gravidez", "grávida", "teste positivo", "beta-hcg"]):
+        out["gravida"] = True
+
+    m_mes = re.search(r"(\d+)\s*mes", ultimo)
+    if m_mes:
+        out["gravidez.meses"] = m_mes.group(1)
+
+    m_sem = re.search(r"(\d+)\s*semana", ultimo)
+    if m_sem:
+        out["gravidez.semanas"] = m_sem.group(1)
+
+    # data simples tipo 26/11/2025
+    m_data = re.search(r"(\d{1,2}/\d{1,2}/\d{4})", ultimo)
+    if m_data:
+        out["gravidez.data_confirma"] = m_data.group(1)
+
+    return out
+
+
+# ==============================================
+# 8) BLOCO de sistema principal da Mary
+# ==============================================
+def _build_system_block(
+    persona_text: str,
+    rolling_summary: str,
+    sensory_focus: str,
+    nsfw_hint: str,
+    scene_loc: str,
+    entities_line: str,
+    evidence: str,
+    prefs_line: str,
+    scene_time: str = "",
+) -> str:
+    """
+    System único que embute persona + resumo contínuo + preferências + memórias.
+    """
+    return f"""
+Você é **Mary Massariol – Esposa Cúmplice**, personagem fixa em um roleplay contínuo com o usuário.
+
+REGRAS GERAIS:
+- Fale SEMPRE em primeira pessoa (eu).
+- Trate o usuário como parceiro/cônjuge, com intimidade e cumplicidade estáveis (salvo se os fatos disserem o contrário).
+- Tom sensual adaptado às preferências do usuário (nível, ritmo, tamanho de resposta).
+- **Nunca quebre a quarta parede**: não fale sobre tokens, prompts, LLM, nem sobre "modelo de linguagem".
+- Mantenha a continuidade dos fatos descritos no RESUMO_CONTINUO e na MEMÓRIA_PIN.
+- Se houver contradição entre o pedido do usuário e a MEMÓRIA_PIN, priorize a MEMÓRIA_PIN como verdade canônica e negocie com o usuário dentro da cena.
+
+PERSONA (núcleo fixo):
+{persona_text}
+
+RESUMO_CONTINUO (v2 – história geral até agora):
+{rolling_summary or '(sem resumo ainda – mantenha o tom de começo de relação, mas já casados e cúmplices).'}
+
+PREFERENCIAS_DO_USUARIO:
+{prefs_line}
+
+ENTIDADES_MARY:
+{entities_line}
+
+EVIDENCIA_RECENTE_DO_USUARIO (últimas falas compactadas):
+{evidence}
+
+CENA_ATUAL:
+- Local atual: {scene_loc}
+- Momento/tempo atual (se existir): {scene_time or 'não especificado'}
+
+FOCO_SENSORIAL_DESTE_TURNO:
+- Priorize na descrição: {sensory_focus} (mas não se limite apenas a isso).
+
+NSFW/POLITICA_DE_CONTEUDO:
+{nsfw_hint}
+
+ESTILO_DE_RESPOSTA:
+- 4 a 7 parágrafos.
+- 2 a 4 frases por parágrafo.
+- Sempre misture descrição (terceira pessoa leve sobre ela mesma), sensação física, emoção e fala direta.
+- Evite repetir expressões de forma mecânica.
+- Não faça listas; escreva prosa contínua.
+- Se o usuário pedir mudança brusca de cenário/tempo, negocie dentro da narrativa ou marque como "salto temporal" de forma suave, sem apagar o passado.
+
+IMPORTANTE:
+- Use as memórias fixas (EVENTOS_FIXOS_MARY e MEMÓRIA_PIN) como FONTE DE VERDADE sobre fatos importantes (por exemplo, gravidez, traições, decisões marcantes).
+- Se algo não estiver na memória, não invente detalhes canônicos definitivos; trate como hipótese ou expectativa até ser confirmado.
+    """.strip()
+
+
+# ==============================================
+# 9) Janela segura de saída
+# ==============================================
+def _safe_max_output(window_tokens: int, prompt_tokens: int) -> int:
+    """
+    Garante um limite de saída que não estoure a janela de contexto.
+    """
+    if window_tokens <= 0:
+        window_tokens = _DEFAULT_WINDOW
+    # deixa ~20% para segurança
+    max_out = int(window_tokens * 0.3)
+    # se o prompt já comer quase tudo, reduz mais ainda
+    if prompt_tokens > window_tokens * 0.8:
+        max_out = int(window_tokens * 0.2)
+    if max_out < 512:
+        max_out = 512
+    return max_out
+
+
+# ==============================================
+# 10) Aviso visual de “queda de memória”
+# ==============================================
+def _mem_drop_warn(report: Dict[str, any]):
+    if not report:
+        return
+    summarized = report.get("summarized_pairs", 0)
+    trimmed = report.get("trimmed_pairs", 0)
+    hist_tokens = report.get("hist_tokens", 0)
+    hist_budget = report.get("hist_budget", 0)
+    if summarized or trimmed:
+        st.caption(
+            f"🧠 Memória ajustada: {summarized} pares antigos resumidos, {trimmed} blocos verbatim podados. "
+            f"(histórico: {hist_tokens}/{hist_budget} tokens). Se notar esquecimentos, peça um 'recap curto' "
+            "ou fixe fatos na Memória Canônica."
+        )
+
+
+# ==============================================
+# 11) Tool-calling robusto + roteamento
+# ==============================================
+def _provider_for_model(mid: str) -> str:
+    if not mid:
+        return "desconhecido"
+    m = mid.lower()
+    if m.startswith("together/"):
+        return "Together"
+    if "deepseek" in m:
+        return "OpenRouter"  # ou Together, conforme seu setup
+    if "grok-4.1" in m or "tng-r1t-chimera" in m:
+        return "OpenRouter"
+    if "claude" in m:
+        return "OpenRouter"
+    if "qwen" in m or "llama-3" in m:
+        return "Together"  # ou OpenRouter — depende da sua configuração
+    return "OpenRouter"
+
+
+def _robust_chat_call(
+    model: str,
+    messages: List[Dict[str, any]],
+    max_tokens: int,
+    temperature: float,
+    top_p: float,
+    fallback_models: List[str] | None = None,
+    tools: List[Dict[str, any]] | None = None,
+):
+    """
+    Camada única de chamada de LLM com:
+      - roteamento automático via route_chat_strict
+      - failover para modelos alternativos
+      - suporte opcional a tools
+      - REASONING dinâmico para Grok e TNG-R1T-Chimera
+    """
+    if fallback_models is None:
+        fallback_models = []
+
+    used_model = model
+    provider = _provider_for_model(model)
+
+    def _build_body(mid: str) -> Dict[str, any]:
+        low = (mid or "").lower()
+        extra: Dict[str, any] = {}
+
+        # GROK 4.1 Fast – reasoning opcional
+        if "grok-4.1-fast" in low:
+            # Você pode afinar isso conforme o "modo" da Mary ou prefs
+            # Por enquanto, esforço médio fixo
+            extra["reasoning"] = {"effort": "medium"}
+
+        # TNG R1T Chimera – é um modelo R1T, tende a usar "think tokens"
+        if "tng-r1t-chimera" in low:
+            # Aqui não existe parâmetro oficial de reasoning, mas mantemos temp baixa
+            # e top_p moderado, e deixamos o modelo usar seu próprio "think".
+            pass
+
+        body: Dict[str, any] = {
+            "model": mid,
+            "messages": messages,
+            "max_tokens": max_tokens,
+            "temperature": temperature,
+            "top_p": top_p,
+        }
+        if tools:
+            body["tools"] = tools
+            body["tool_choice"] = "auto"
+        if extra:
+            body["extra_body"] = extra
+        return body
+
+    # 1ª tentativa: modelo principal
+    try:
+        body = _build_body(model)
+        data, used_model, prov = route_chat_strict(model, body)
+        return data, used_model, prov
+    except Exception as e:
+        err_msg = str(e)
+        st.warning(f"⚠️ Modelo principal falhou ({model}): {err_msg}")
+
+    # Tentativas de fallback
+    for fb in fallback_models:
+        try:
+            body = _build_body(fb)
+            data, used_model, prov = route_chat_strict(fb, body)
+            # Sinaliza que foi fallback
+            return data, f"together/{fb}" if not fb.startswith("together/") else fb, prov
+        except Exception as e:
+            st.warning(f"⚠️ Fallback falhou ({fb}): {e}")
+
+    # Se tudo falhar, devolve um shape mínimo
+    return {
+        "choices": [{
+            "message": {
+                "role": "assistant",
+                "content": "Desculpa, tive um problema para responder agora. Tenta de novo em instantes."
+            }
+        }]
+    }, "synthetic-fallback", "synthetic-fallback"
+
+
+# ==============================================
+# 12) Detecção de tags temáticas simples
+# ==============================================
+def _detect_thematic_tags_from_prompt(prompt: str) -> List[str]:
+    low = (prompt or "").lower()
+    tags = []
+    if any(w in low for w in ["gravidez", "grávida", "ultrassom", "ultrassom", "obstetra", "ginecologista"]):
+        tags.append("gravidez")
+    if any(w in low for w in ["trai", "traição", "infiel", "amante"]):
+        tags.append("traicao")
+    if any(w in low for w in ["primeira vez", "virgem", "desvirg"]):
+        tags.append("primeira_vez")
+    if any(w in low for w in ["viagem", "hotel", "aeroporto"]):
+        tags.append("viagem")
     return tags
 
 
-def _get_thematic_memories_for_tags(user_key: str, tags: list[str]) -> str:
-    """
-    Dado uma lista de chaves que podem ter sido salvas via set_fact,
-    monta um bloco único pra injetar no system.
-    """
+def _get_thematic_memories_for_tags(usuario_key: str, tags: List[str]) -> str:
     if not tags:
         return ""
-    parts: list[str] = []
-    for tag in tags:
-        try:
-            val = get_fact(user_key, tag, None)
-        except Exception:
-            val = None
-        if val:
-            parts.append(f"{tag}: {val}")
-    return "\n".join(parts)
-
-
-def _exec_tool_call(self, name: str, args: dict, usuario_key: str) -> str:
-    """
-    Execução das ferramentas chamadas via Tool Calling (versão global – hoje não usada diretamente).
-    Retorna SEMPRE string (conteúdo que será repassado ao modelo como `tool` message).
-    Mantida por compatibilidade; a lógica principal está em MaryService._exec_tool_call().
-    """
     try:
-        if name == "get_memory_pin":
-            return self._build_memory_pin(usuario_key, st.session_state.get("user_id", "") or "")
-        if name == "set_fact":
-            k = (args or {}).get("key", "")
-            v = (args or {}).get("value", "")
-            set_fact(usuario_key, k, v, {"fonte": "tool_call"})
-            try:
-                clear_user_cache(usuario_key)  # se existir no seu projeto
-            except Exception:
-                pass
-            return f"OK: {k}={v}"
-        return "ERRO: ferramenta desconhecida"
-    except Exception as e:
-        return f"ERRO: {e}"
+        f = cached_get_facts(usuario_key) or {}
+    except Exception:
+        f = {}
+    blocos = []
+    for tag in tags:
+        k = f"mary.thematic.{tag}"
+        v = f.get(k)
+        if not v:
+            continue
+        blocos.append(f"[{tag}] {v}")
+    return "\n".join(blocos)
 
 
-# NSFW (opcional)
-try:
-    from core.nsfw import nsfw_enabled
-except Exception:  # fallback seguro
-    def nsfw_enabled(_user: str) -> bool:
-        return False
-
-
+# ==============================================
 # Persona específica (ideal: characters/mary/persona.py)
+# ==============================================
 try:
     from .persona import get_persona  # -> Tuple[str, List[Dict[str,str]]]
 except Exception:
@@ -155,599 +657,9 @@ except Exception:
         return txt, []
 
 
-# === Janela por modelo e orçamento ===
-MODEL_WINDOWS = {
-    "anthropic/claude-3.5-haiku": 200_000,
-    "together/meta-llama/Meta-Llama-3.1-405B-Instruct-Turbo": 128_000,
-    "together/Qwen/Qwen2.5-72B-Instruct": 32_000,
-    "deepseek/deepseek-chat-v3-0324": 32_000,
-    "inclusionai/ling-1t": 64_000,  # ajuste se o provedor publicar outro contexto
-
-     # 🆕 Modelos novos:
-    "x-ai/grok-4.1-fast:free": 2_000_000,        # 2M de contexto
-    "tngtech/tng-r1t-chimera:free": 163_840,     # ~163k de contexto
-}
-DEFAULT_WINDOW = 32_000
-
-
-def _get_window_for(model: str) -> int:
-    return MODEL_WINDOWS.get((model or "").strip(), DEFAULT_WINDOW)
-
-
-def _budget_slices(model: str) -> tuple[int, int, int]:
-    """
-    Retorna (hist_budget, meta_budget, out_budget_base) em tokens.
-    - histórico ~ 60%, meta (system+fatos+resumos) ~ 20%, saída ~ 20%.
-    - garante piso razoável para histórico.
-    """
-    win = _get_window_for(model)
-    hist = max(8_000, int(win * 0.55))
-    meta = int(win * 0.20)
-    outb = int(win * 0.25)
-    return hist, meta, outb
-
-
-def _safe_max_output(win: int, prompt_tokens: int) -> int:
-    """Reserva espaço de saída sem estourar a janela (mínimo 512)."""
-    alvo = int(win * 0.30)
-    sobra = max(0, win - prompt_tokens - 256)
-    return max(512, min(alvo, sobra))
-
-
-# =========================
-# Cache leve (facts/history)
-# =========================
-CACHE_TTL = int(st.secrets.get("CACHE_TTL", 30))  # segundos
-_cache_facts: Dict[str, Dict] = {}
-_cache_history: Dict[str, List[Dict]] = {}
-_cache_timestamps: Dict[str, float] = {}
-
-
-def _purge_expired_cache():
-    now = time.time()
-    # facts
-    for k in list(_cache_facts.keys()):
-        if now - _cache_timestamps.get(f"facts_{k}", 0) >= CACHE_TTL:
-            _cache_facts.pop(k, None)
-            _cache_timestamps.pop(f"facts_{k}", None)
-    # history
-    for k in list(_cache_history.keys()):
-        if now - _cache_timestamps.get(f"hist_{k}", 0) >= CACHE_TTL:
-            _cache_history.pop(k, None)
-            _cache_timestamps.pop(f"hist_{k}", None)
-
-
-def clear_user_cache(user_key: str):
-    _cache_facts.pop(user_key, None)
-    _cache_timestamps.pop(f"facts_{user_key}", None)
-    _cache_history.pop(user_key, None)
-    _cache_timestamps.pop(f"hist_{user_key}", None)
-
-
-def cached_get_facts(user_key: str) -> Dict:
-    _purge_expired_cache()
-    now = time.time()
-    if user_key in _cache_facts and (now - _cache_timestamps.get(f"facts_{user_key}", 0) < CACHE_TTL):
-        return _cache_facts[user_key]
-    try:
-        f = get_facts(user_key) or {}
-    except Exception:
-        f = {}
-    _cache_facts[user_key] = f
-    _cache_timestamps[f"facts_{user_key}"] = now
-    return f
-
-
-def cached_get_history(user_key: str) -> List[Dict]:
-    _purge_expired_cache()
-    now = time.time()
-    if user_key in _cache_history and (now - _cache_timestamps.get(f"hist_{user_key}", 0) < CACHE_TTL):
-        return _cache_history[user_key]
-    try:
-        docs = get_history_docs(user_key) or []
-    except Exception:
-        docs = []
-    _cache_history[user_key] = docs
-    _cache_timestamps[f"hist_{user_key}"] = now
-    return docs
-
-
-# === Preferências do usuário ===
-def _read_prefs(facts: Dict) -> Dict:
-    """Lê preferências persistidas e define padrões seguros."""
-    prefs = {
-        "nivel_sensual": str(facts.get("mary.pref.nivel_sensual", "") or "sutil").lower(),   # sutil | media | alta
-        "ritmo": str(facts.get("mary.pref.ritmo", "") or "lento").lower(),                   # lento | normal | rapido
-        "tamanho_resposta": str(facts.get("mary.pref.tamanho_resposta", "") or "media").lower(),  # curta | media | longa
-        "evitar_topicos": facts.get("mary.pref.evitar_topicos", []) or [],
-        "temas_favoritos": facts.get("mary.pref.temas_favoritos", []) or [],
-    }
-    if isinstance(prefs["evitar_topicos"], str):
-        prefs["evitar_topicos"] = [prefs["evitar_topicos"]]
-    if isinstance(prefs["temas_favoritos"], str):
-        prefs["temas_favoritos"] = [prefs["temas_favoritos"]]
-    return prefs
-
-
-def _prefs_line(prefs: Dict) -> str:
-    """Linha barata para o system com instruções de estilo dinâmicas."""
-    evitar = ", ".join(prefs.get("evitar_topicos") or [])
-    temas = ", ".join(prefs.get("temas_favoritos") or [])
-    nivel = str(prefs.get("nivel_sensual", "sutil") or "sutil").lower()
-
-    base = (
-        f"PREFERÊNCIAS: nível={nivel}; ritmo={prefs.get('ritmo','lento')}; "
-        f"tamanho={prefs.get('tamanho_resposta','media')}; "
-        f"evitar=[{evitar or '—'}]; temas_favoritos=[{temas or '—'}]. "
-    )
-
-    if nivel == "alta":
-        extra = (
-            "Para cenas mais intensas, você pode ser mais explícita na descrição do sexo, "
-            "mantendo fluidez, coerência emocional e respeito aos limites do casal. "
-        )
-    elif nivel == "media":
-        extra = (
-            "Mantenha sensualidade clara e progressiva, equilibrando descrição do corpo e das ações "
-            "sem exageros mecânicos ou repetitivos. "
-        )
-    else:  # sutil
-        extra = (
-            "Priorize insinuação elegante e tensão sexual, deixando os detalhes mais gráficos para quando "
-            "o usuário pedir ou a cena evoluir naturalmente. "
-        )
-
-    return base + extra + "Evite listas mecânicas de atos e aceleração artificial."
-
-
-# === Mini-sumarizadores ===
-def _heuristic_summarize(texto: str, max_bullets: int = 10) -> str:
-    """Compacta texto grande em bullets telegráficos (fallback sem LLM)."""
-    texto = re.sub(r"\s+", " ", (texto or "").strip())
-    sent = re.split(r"(?<=[\.\!\?])\s+", texto)
-    sent = [s.strip() for s in sent if s.strip()]
-    return " • " + "\n • ".join(sent[:max_bullets])
-
-
-def _llm_summarize(model: str, user_chunk: str) -> str:
-    """Usa o roteador para resumir um bloco antigo. Se der erro, cai no heurístico."""
-    seed = (
-        "Resuma em 6–10 frases telegráficas, somente fatos duráveis (decisões, nomes, locais, tempo, "
-        "gestos/itens fixos e rumo da cena). Proibido diálogo literal."
-    )
-    try:
-        data, used_model, provider = route_chat_strict(model, {
-            "model": model,
-            "messages": [
-                {"role": "system", "content": seed},
-                {"role": "user", "content": user_chunk}
-            ],
-            "max_tokens": 220,
-            "temperature": 0.2,
-            "top_p": 0.9
-        })
-        txt = (data.get("choices", [{}])[0].get("message", {}) or {}).get("content", "") or ""
-        return txt.strip() or _heuristic_summarize(user_chunk)
-    except Exception:
-        return _heuristic_summarize(user_chunk)
-
-
-# ===== Blocos de system (slots) =====
-def _build_system_block(
-    persona_text: str,
-    rolling_summary: str,
-    sensory_focus: str,
-    nsfw_hint: str,
-    scene_loc: str,
-    entities_line: str,
-    evidence: str,
-    prefs_line: str = "",
-    scene_time: str = "",
-) -> str:
-    persona_text = (persona_text or "").strip()
-    rolling_summary = (rolling_summary or "—").strip()
-    entities_line = (entities_line or "—").strip()
-    prefs_line = (prefs_line or "PREFERÊNCIAS: nível=sutil; ritmo=lento; tamanho=media.").strip()
-
-    continuity = f"Cenário atual: {scene_loc or '—'}" + (f" — Momento: {scene_time}" if scene_time else "")
-    sensory = (
-        f"SENSORIAL_FOCO: no 1º ou 2º parágrafo, traga 1–2 pistas envolvendo **{sensory_focus}**, "
-        "sempre integradas à ação (jamais em lista)."
-    )
-    length = "ESTILO: 4–7 parágrafos; 2–4 frases por parágrafo; sem listas; sem metacena."
-    rules = (
-        "CONTINUIDADE: não mude tempo/lugar sem pedido explícito do usuário. "
-        "Use MEMÓRIA e ENTIDADES abaixo como **fonte de verdade**. "
-        "Se um nome/endereço não estiver salvo na MEMÓRIA/ENTIDADES, **não invente**; convide o usuário a confirmar em 1 linha."
-    )
-    safety = "LIMITES: adultos; consentimento; nada ilegal."
-    evidence_block = f"EVIDÊNCIA RECENTE (resumo ultra-curto de falas do usuário): {evidence or '—'}"
-
-    return "\n\n".join([
-        persona_text,
-        prefs_line,
-        length,
-        sensory,
-        nsfw_hint,
-        rules,
-        f"MEMÓRIA (canon curto): {rolling_summary}",
-        f"ENTIDADES: {entities_line}",
-        f"CONTINUIDADE: {continuity}",
-        evidence_block,
-        safety,
-    ])
-
-
-# ===== Robustez de chamada (retry + failover) =====
-def _looks_like_cloudflare_5xx(err_text: str) -> bool:
-    if not err_text:
-        return False
-    s = err_text.lower()
-    return ("cloudflare" in s) and any(code in s for code in ["500", "502", "503", "504"])
-
-
-def _robust_chat_call(
-    model: str,
-    messages: List[Dict[str, str]],
-    *,
-    max_tokens: int = 1536,
-    temperature: float = 0.7,
-    top_p: float = 0.95,
-    fallback_models: List[str] | None = None,
-    tools: List[Dict] | None = None,
-) -> Tuple[Dict, str, str]:
-    attempts = 3
-    last_err = ""
-    for i in range(attempts):
-        try:
-            payload = {
-                "model": model,
-                "messages": messages,
-                "max_tokens": max_tokens,
-                "temperature": temperature,
-                "top_p": top_p,
-            }
-
-            # 👉 se o sidebar ligou tool-calling, o service passou tools
-            if tools:
-                payload["tools"] = tools
-
-            # 👉 JSON Mode do sidebar
-            if st.session_state.get("json_mode_on", False):
-                payload["response_format"] = {"type": "json_object"}
-
-            # 👉 LoRA Together opcional
-            adapter_id = (st.session_state.get("together_lora_id") or "").strip()
-            if adapter_id and (model or "").startswith("together/"):
-                payload["adapter_id"] = adapter_id
-
-            # ✅ agora sim podemos chamar o router
-            return route_chat_strict(model, payload)
-
-        except Exception as e:
-            last_err = str(e)
-            # se for erro “instável”, tenta de novo
-            if _looks_like_cloudflare_5xx(last_err) or "OpenRouter 502" in last_err:
-                time.sleep((0.7 * (2 ** i)) + random.uniform(0, .4))
-                continue
-            break  # erro real -> sai do loop
-
-    # ===== FALLBACKS =====
-    if fallback_models:
-        for fb in fallback_models:
-            try:
-                payload_fb = {
-                    "model": fb,
-                    "messages": messages,
-                    "max_tokens": max_tokens,
-                    "temperature": temperature,
-                    "top_p": top_p,
-                }
-
-                if tools:
-                    payload_fb["tools"] = tools
-
-                if st.session_state.get("json_mode_on", False):
-                    payload_fb["response_format"] = {"type": "json_object"}
-
-                adapter_id = (st.session_state.get("together_lora_id") or "").strip()
-                if adapter_id and (fb or "").startswith("together/"):
-                    payload_fb["adapter_id"] = adapter_id
-
-                return route_chat_strict(fb, payload_fb)
-            except Exception as e2:
-                last_err = str(e2)
-
-    # ===== fallback sintético final =====
-    synthetic = {
-        "choices": [{
-            "message": {
-                "content": (
-                    "Amor… o provedor caiu agora, mas mantive o cenário. "
-                    "Me diz numa linha o que você quer fazer e eu continuo."
-                )
-            }
-        }]
-    }
-    return synthetic, model, "synthetic-fallback"
-
-
-# ===== Utilidades de memória/entidades =====
-_ENTITY_KEYS = ("club_name", "club_address", "club_alias", "club_contact", "club_ig")
-
-
-def _entities_to_line(f: Dict) -> str:
-    parts = []
-    for k in _ENTITY_KEYS:
-        v = str(f.get(f"mary.entity.{k}", "") or "").strip()
-        if v:
-            parts.append(f"{k}={v}")
-    return "; ".join(parts) if parts else "—"
-
-def _collect_mary_events_from_facts(f_all: Dict) -> Dict[str, str]:
-    """
-    Normaliza todas as memórias de evento da Mary a partir dos facts.
-
-    Suporta:
-    - formato plano:  'mary.evento.foo' = '...'
-    - formato aninhado: 'mary': {'evento': {'foo': '...'}, 'eventos': {...}}
-    - cache da sessão: last_saved_mary_event_key/val (para aparecer imediatamente)
-    """
-    eventos: Dict[str, str] = {}
-
-    # --- formato 1: plano (mary.evento.*)
-    try:
-        items = (f_all or {}).items()
-    except Exception:
-        items = []
-    for k, v in items:
-        if not isinstance(k, str) or not v:
-            continue
-        if k.startswith("mary.evento."):
-            label = k.replace("mary.evento.", "", 1)
-            eventos.setdefault(label, str(v))
-
-    # --- formato 2: aninhado em f_all["mary"]["evento"/"eventos"]
-    mary_obj = (f_all or {}).get("mary", {})
-    if isinstance(mary_obj, dict):
-        evt_block = mary_obj.get("evento") or mary_obj.get("eventos") or {}
-        if isinstance(evt_block, dict):
-            for label, val in evt_block.items():
-                if not val:
-                    continue
-                if label not in eventos:
-                    eventos[label] = str(val)
-
-    # --- formato 3: cache da sessão (acabou de salvar nesta sessão)
-    last_key = st.session_state.get("last_saved_mary_event_key", "")
-    last_val = st.session_state.get("last_saved_mary_event_val", "")
-    if last_key and last_val:
-        if isinstance(last_key, str):
-            label = last_key.replace("mary.evento.", "", 1)
-        else:
-            label = str(last_key)
-        eventos.setdefault(label, str(last_val))
-
-    return eventos
-
-
-def _derive_pregnancy_from_events(eventos: Dict[str, str]) -> Dict[str, str]:
-    """
-    Lê eventos narrativos (ex.: 'MEMÓRIA_PIN: GRAVIDEZ=ativa; semanas=4; data_confirma=26/11/2025; ...')
-    e extrai um conjunto mínimo de fatos canônicos de gravidez.
-
-    - Considera múltiplos eventos (mary.evento.*)
-    - Escolhe o evento MAIS RECENTE (por data no rótulo ou no texto)
-    - Retorna:
-        {
-          "gravida": "True",
-          "gravidez.semanas": "...",
-          "gravidez.meses": "...",
-          "gravidez.data_confirma": "..."
-        }
-      ou {} se não encontrar nada confiável.
-    """
-
-    def _parse_date(label: str, texto: str) -> tuple[int, int, int]:
-        """
-        Extrai uma data (ano, mês, dia) de:
-        - rótulo: ..._2025-11-28
-        - texto: 28/11/2025 ou 28-11-2025
-        Se não achar, devolve (0, 0, 0).
-        """
-        # 1) tenta padrão AAAA-MM-DD no label
-        m = re.search(r"(\d{4})-(\d{2})-(\d{2})", label or "")
-        if m:
-            y, mth, d = m.groups()
-            return int(y), int(mth), int(d)
-
-        # 2) tenta DD/MM/AAAA ou DD-MM-AAAA no texto
-        m = re.search(r"(\d{1,2})[/-](\d{1,2})[/-](\d{4})", texto or "")
-        if m:
-            d, mth, y = m.groups()
-            return int(y), int(mth), int(d)
-
-        return (0, 0, 0)
-
-    best: Dict[str, str] = {}
-    best_date: tuple[int, int, int] = (0, 0, 0)
-
-    for label, texto in (eventos or {}).items():
-        t = str(texto or "")
-        t_low = t.lower()
-
-        # --- filtro grosseiro: só mantém eventos que claramente falam de gravidez positiva
-        # palavras-chave de gravidez
-        if not any(
-            kw in t_low
-            for kw in ("gravidez", "gravida", "grávida", "gravidez_2t")
-        ):
-            continue
-
-        # descarta coisas explicitamente negativas
-        if "negativ" in t_low or "não grávida" in t_low:
-            continue
-
-        # precisa ter algum indicativo de confirmação/positivo
-        if not any(
-            kw in t_low
-            for kw in ("teste=positivo", "positivo", "confirmado", "grávida de", "gravida de")
-        ):
-            continue
-
-        # --- extrai data deste evento
-        evt_date = _parse_date(label, t)
-
-        # se a data deste evento é mais recente que a melhor até agora, ele vira o novo "melhor"
-        if evt_date <= best_date:
-            # já temos algo mais recente
-            continue
-
-        # ---- a partir daqui, este evento passa a ser o candidato principal ----
-        cand: Dict[str, str] = {"gravida": "True"}
-
-        # semanas (ex.: "semanas=4")
-        m_sem = re.search(r"semanas?\s*=\s*(\d+)", t, re.IGNORECASE)
-        if not m_sem:
-            # também aceita "4 semanas" solto
-            m_sem = re.search(r"\b(\d{1,2})\s*semanas?", t, re.IGNORECASE)
-        if m_sem:
-            cand["gravidez.semanas"] = m_sem.group(1)
-
-        # meses (ex.: "Grávida de 2 meses", "2 meses de gestação")
-        m_mes = re.search(
-            r"(\d{1,2})\s*mes(?:es)?",
-            t,
-            re.IGNORECASE,
-        )
-        if m_mes:
-            cand["gravidez.meses"] = m_mes.group(1)
-
-        # data de confirmação (ex.: "data_confirma=26/11/2025")
-        m_data = re.search(
-            r"data[_ ]?confirma\s*=\s*([0-9]{1,2}[/\-\.][0-9]{1,2}[/\-\.][0-9]{2,4})",
-            t,
-            re.IGNORECASE,
-        )
-        if m_data:
-            cand["gravidez.data_confirma"] = m_data.group(1)
-
-        # se não veio meses mas veio semanas -> aproxima meses = semanas // 4
-        if "gravidez.meses" not in cand and "gravidez.semanas" in cand:
-            try:
-                w = int(cand["gravidez.semanas"])
-                if w > 0:
-                    cand["gravidez.meses"] = str(max(1, w // 4))
-            except Exception:
-                pass
-
-        # se não veio semanas mas veio meses -> aproxima semanas = meses * 4
-        if "gravidez.semanas" not in cand and "gravidez.meses" in cand:
-            try:
-                mval = int(cand["gravidez.meses"])
-                if mval > 0:
-                    cand["gravidez.semanas"] = str(mval * 4)
-            except Exception:
-                pass
-
-        # Atualiza "melhor evento" (mais recente)
-        best = cand
-        best_date = evt_date
-
-    return best
-
-
-
-_CLUB_PAT = re.compile(r"\b(clube|club|casa)\s+([A-ZÀ-Üa-zà-ü0-9][\wÀ-ÖØ-öø-ÿ'’\- ]{1,40})\b", re.I)
-_ADDR_PAT = re.compile(r"\b(rua|av\.?|avenida|al\.?|alameda|rod\.?|rodovia)\s+[^,]{1,50},?\s*\d{1,5}\b", re.I)
-_IG_PAT = re.compile(r"(?:instagram\.com/|@)([A-Za-z0-9_.]{2,30})")
-
-
-def _extract_and_store_entities(usuario_key: str, user_text: str, assistant_text: str) -> None:
-    """Extrai entidades prováveis e persiste se fizer sentido (não sobrescreve agressivamente)."""
-    try:
-        f = cached_get_facts(usuario_key) or {}
-    except Exception:
-        f = {}
-
-    # Nome do clube/casa: usar group(2) (somente o nome), sem o prefixo "clube/casa"
-    m = _CLUB_PAT.search(user_text or "") or _CLUB_PAT.search(assistant_text or "")
-    if m:
-        name = re.sub(r"\s+", " ", m.group(2)).strip()
-        cur = str(f.get("mary.entity.club_name", "") or "").strip()
-        if not cur or len(name) >= len(cur):
-            set_fact(usuario_key, "mary.entity.club_name", name, {"fonte": "extracted"})
-            clear_user_cache(usuario_key)
-
-    a = _ADDR_PAT.search(user_text or "") or _ADDR_PAT.search(assistant_text or "")
-    if a:
-        addr = a.group(0).strip()
-        cur = str(f.get("mary.entity.club_address", "") or "").strip()
-        if not cur or len(addr) >= len(cur):
-            set_fact(usuario_key, "mary.entity.club_address", addr, {"fonte": "extracted"})
-            clear_user_cache(usuario_key)
-
-    ig = _IG_PAT.search(user_text or "") or _IG_PAT.search(assistant_text or "")
-    if ig:
-        handle = ig.group(1).strip("@")
-        cur = str(f.get("mary.entity.club_ig", "") or "").strip()
-        if not cur:
-            set_fact(usuario_key, "mary.entity.club_ig", "@" + handle, {"fonte": "extracted"})
-            clear_user_cache(usuario_key)
-
-def _collect_pregnancy_events_from_facts(f: Dict) -> Dict[str, str]:
-    """
-    Coleta todos os eventos de Mary relacionados a gravidez a partir dos facts:
-    - chaves planas: "mary.evento.*"
-    - formato aninhado: "mary": { "evento": { ... } }
-    """
-    eventos: Dict[str, str] = {}
-
-    # formato plano
-    for k, v in (f or {}).items():
-        if isinstance(k, str) and k.startswith("mary.evento.") and v:
-            eventos[k] = str(v)
-
-    # formato aninhado
-    mary_obj = f.get("mary", {})
-    if isinstance(mary_obj, dict):
-        evt_block = mary_obj.get("evento") or mary_obj.get("eventos") or {}
-        if isinstance(evt_block, dict):
-            for label, val in evt_block.items():
-                if not val:
-                    continue
-                key_full = f"mary.evento.{label}"
-                if key_full not in eventos:
-                    eventos[key_full] = str(val)
-
-    return eventos
-
-
-
-# ===== Aviso de memória (resumo/poda) =====
-def _mem_drop_warn(report: dict) -> None:
-    """Mostra um aviso visual quando houve perda/compactação de memória."""
-    if not report:
-        return
-    summarized = int(report.get("summarized_pairs", 0))
-    trimmed = int(report.get("trimmed_pairs", 0))
-    hist_tokens = int(report.get("hist_tokens", 0))
-    hist_budget = int(report.get("hist_budget", 0))
-    if summarized or trimmed:
-        msg = []
-        if summarized:
-            msg.append(f"**{summarized}** turnos antigos **foram resumidos**")
-        if trimmed:
-            msg.append(f"**{trimmed}** turnos verbatim **foram podados**")
-        txt = " e ".join(msg)
-        st.info(
-            f"⚠️ Memória ajustada: {txt}. "
-            f"(histórico: {hist_tokens}/{hist_budget} tokens). "
-            "Se notar esquecimentos, peça um **‘recap curto’** ou fixe fatos na **Memória Canônica**.",
-            icon="⚠️",
-        )
-
-
+# ==============================================
+# SERVIÇO PRINCIPAL – MARY
+# ==============================================
 class MaryService(BaseCharacter):
     id: str = "mary"
     display_name: str = "Mary"
@@ -961,7 +873,7 @@ class MaryService(BaseCharacter):
             verbatim_ultimos=verbatim_ultimos,
         )
 
-                # --- 3.a) coletar eventos salvos (formato unificado)
+        # --- 3.a) coletar eventos salvos (formato unificado)
         eventos_block = ""
         try:
             eventos_dict = _collect_mary_events_from_facts(f_all)
@@ -1234,6 +1146,20 @@ class MaryService(BaseCharacter):
         except Exception:
             pass
 
+        # === 5) JSON mode opcional ===
+        if st.session_state.get("json_mode_on", False):
+            try:
+                # embrulha num JSON básico, preservando o texto em "content"
+                payload = {
+                    "role": "assistant",
+                    "character": "Mary",
+                    "content": texto,
+                }
+                return json.dumps(payload, ensure_ascii=False, indent=2)
+            except Exception:
+                # se der erro, devolve texto normal
+                return texto
+
         return texto
 
     # ===== utilidades =====
@@ -1264,8 +1190,8 @@ class MaryService(BaseCharacter):
 
         # Integra eventos narrativos (ex.: gravidez) como fonte auxiliar de fatos
         try:
-            eventos = _collect_mary_events_from_facts(f)
-            preg_from_events = _derive_pregnancy_from_events(eventos)
+            preg_events = _collect_pregnancy_events_from_facts(f)
+            preg_from_events = _derive_pregnancy_from_events(preg_events)
         except Exception:
             preg_from_events = {}
 
@@ -1281,17 +1207,12 @@ class MaryService(BaseCharacter):
 
         # 🔴 GRAVIDEZ COMO FATO CANÔNICO (se existir),
         #     COM OVERRIDE vindo dos eventos mary.evento.*
-        preg_events = _collect_pregnancy_events_from_facts(f)
-        preg_from_events = _derive_pregnancy_from_events(preg_events)
-
-        # prioridade: eventos mais recentes > facts simples
         raw_gravida = (
             preg_from_events.get("gravida")
             if "gravida" in preg_from_events
             else f.get("gravida", False)
         )
 
-        gravida = False
         if isinstance(raw_gravida, bool):
             gravida = raw_gravida
         else:
@@ -1324,36 +1245,6 @@ class MaryService(BaseCharacter):
                 detalhes.append(f"desde={data_conf}")
 
             blocos.append("; ".join(detalhes))
-
-        if isinstance(raw_gravida, bool):
-            gravida = raw_gravida
-        else:
-            gravida = str(raw_gravida).strip().lower() in ("1", "true", "sim", "grávida", "gravida")
-
-        if gravida:
-            meses = (
-                f.get("gravidez.meses")
-                or f.get("gravidez.meses_atual")
-                or preg_from_events.get("gravidez.meses")
-                or ""
-            )
-            semanas = f.get("gravidez.semanas") or preg_from_events.get("gravidez.semanas") or ""
-            data_conf = (
-                f.get("gravidez.data_confirma")
-                or preg_from_events.get("gravidez.data_confirma")
-                or ""
-            )
-
-            detalhes = ["gravida=True"]
-            if meses not in ("", None):
-                detalhes.append(f"meses={meses}")
-            if semanas not in ("", None):
-                detalhes.append(f"semanas={semanas}")
-            if data_conf not in ("", None):
-                detalhes.append(f"desde={data_conf}")
-
-            blocos.append("; ".join(detalhes))
-
 
         ent_line = _entities_to_line(f)
         if ent_line and ent_line != "—":
@@ -1443,7 +1334,7 @@ class MaryService(BaseCharacter):
         msgs.extend(verbatim)
 
         # Poda se ainda exceder orçamento
-        def _hist_tokens(mm: List[Dict, ]) -> int:
+        def _hist_tokens(mm: List[Dict[str, str]]) -> int:
             return sum(toklen(m["content"]) for m in mm)
 
         while _hist_tokens(msgs) > hist_budget and verbatim:
