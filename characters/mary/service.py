@@ -1113,37 +1113,46 @@ class MaryService(BaseCharacter):
         except Exception:
             return ""
 
-    def _build_memory_pin(self, usuario_key: str, user_display: str) -> str:
-        """Memória canônica curta + pistas fortes (não exceder)."""
+        def _build_memory_pin(self, usuario_key: str, user_display: str) -> str:
+        """
+        Memória canônica curta + pistas fortes (não exceder).
+
+        AGORA inclui também um mini-timeline textual dos eventos de gravidez,
+        usando exatamente as memórias fixas salvas (mary.evento.*),
+        para o modelo não tratar a gravidez como "hipótese".
+        """
         try:
             f = cached_get_facts(usuario_key) or {}
         except Exception:
             f = {}
 
+        # --- 1) eventos fixos (inclui gravidez, mas não só) ---
+        try:
+            eventos_todos = _collect_mary_events_from_facts(f)
+        except Exception:
+            eventos_todos = {}
+
+        # Eventos especificamente relacionados à gravidez
         try:
             preg_events = _collect_pregnancy_events_from_facts(f)
             preg_from_events = _derive_pregnancy_from_events(preg_events)
         except Exception:
+            preg_events = {}
             preg_from_events = {}
 
         blocos: List[str] = []
 
+        # --- 2) parceiro / relação ---
         parceiro = f.get("parceiro_atual") or f.get("parceiro") or ""
         nome_usuario = (parceiro or user_display).strip()
         if parceiro:
             blocos.append(f"parceiro_atual={parceiro}")
 
-        raw_casados = f.get("casados", None)
-        if raw_casados is None:
-            casados = False
-        else:
-            if isinstance(raw_casados, bool):
-                casados = raw_casados
-            else:
-                casados = str(raw_casados).strip().lower() in ("1", "true", "sim", "casados")
-
+        # 🔴 Default agora é False (não assume casados se nada foi salvo)
+        casados = bool(f.get("casados", False))
         blocos.append(f"casados={casados}")
 
+        # --- 3) gravidez como FATO CANÔNICO (sem engessar mês; lê dos eventos) ---
         raw_gravida = (
             preg_from_events.get("gravida")
             if "gravida" in preg_from_events
@@ -1153,7 +1162,9 @@ class MaryService(BaseCharacter):
         if isinstance(raw_gravida, bool):
             gravida = raw_gravida
         else:
-            gravida = str(raw_gravida).strip().lower() in ("1", "true", "sim", "grávida", "gravida")
+            gravida = str(raw_gravida).strip().lower() in (
+                "1", "true", "sim", "grávida", "gravida"
+            )
 
         if gravida:
             meses = (
@@ -1183,35 +1194,31 @@ class MaryService(BaseCharacter):
 
             blocos.append("; ".join(detalhes))
 
-        # --- INÍCIO DA CORREÇÃO: Inclusão do texto completo do evento de gravidez na MEMÓRIA_PIN ---
-        if gravida:
-            # preg_events já está disponível na linha 1124
-            eventos_gravidez = sorted(preg_events.items(), key=lambda item: item[0], reverse=True)
-            texto_gravidez = ""
-            if eventos_gravidez:
-                # Pega o conteúdo do evento mais recente
-                texto_gravidez = eventos_gravidez[0][1]
-            
-            # Adiciona o texto completo do evento de gravidez ao bloco de memória
-            if texto_gravidez:
-                # Limpa quebras de linha e espaços extras para manter o formato de PIN
-                texto_gravidez_limpo = " ".join(texto_gravidez.split())
-                blocos.append(f"DETALHE_GRAVIDEZ: {texto_gravidez_limpo}")
-        # --- FIM DA CORREÇÃO ---
+            # 🔎 Linha do tempo da gravidez – usa as memórias salvas, com texto real
+            if preg_events:
+                linhas_tl: List[str] = []
 
+                # ordena por label (ex.: mary_2025-11-26, mary_2025-11-28, mary_2025-12-01)
+                for label, raw in sorted(preg_events.items()):
+                    txt = str(raw or "")
+                    # compacta espaços e quebra em no máx ~220 chars
+                    compact = " ".join(txt.split())
+                    snippet = compact[:220]
+                    linhas_tl.append(f"{label}: {snippet}")
+
+                # limita tamanho total pra não explodir o PIN
+                joined = " | ".join(linhas_tl)
+                if len(joined) > 800:
+                    joined = joined[-800:]  # guarda o fim, que tende a ser o mais recente
+
+                blocos.append(f"linha_do_tempo_gravidez={{ {joined} }}")
+
+        # --- 4) entidades gerais (club_name etc.) ---
         ent_line = _entities_to_line(f)
         if ent_line and ent_line != "—":
             blocos.append(f"entidades=({ent_line})")
 
-        # Lista compacta de eventos fixos (só labels) para reforçar uso
-        try:
-            eventos_dict = _collect_mary_events_from_facts(f)
-            if eventos_dict:
-                labels = ", ".join(sorted(eventos_dict.keys()))
-                blocos.append(f"eventos_fixos=[{labels}]")
-        except Exception:
-            pass
-
+        # --- 5) primeira vez registrada, se existir ---
         try:
             ev = last_event(usuario_key, "primeira_vez")
         except Exception:
@@ -1222,13 +1229,18 @@ class MaryService(BaseCharacter):
             blocos.append(f"primeira_vez@{quando}")
 
         mem_str = "; ".join(blocos) if blocos else "—"
+
         pin = (
             "MEMÓRIA_PIN: "
-            f"NOME_USUARIO={nome_usuario}. FATOS={{ {mem_str} }}. "
-            "Regras: casal (casados) e confiança são base. "
-            "Use ENTIDADES e EVENTOS_FIXOS_MARY como fonte de verdade; se ausente, não invente."
+            f"NOME_USUARIO={nome_usuario}. FATOS={{ {mem_str} }}.\n"
+            "Regras:\n"
+            "- Use estes FATOS como verdade canônica sobre relação, gravidez e contexto.\n"
+            "- Se linha_do_tempo_gravidez existir, NUNCA trate a gravidez como dúvida ou hipótese.\n"
+            "- Use ENTIDADES e EVENTOS_FIXOS_MARY (outro bloco de sistema) como fonte de verdade adicional.\n"
+            "- Se algo NÃO estiver na memória, pergunte ou siga o que o usuário disser — não invente."
         )
         return pin
+
 
     def _montar_historico(
         self,
