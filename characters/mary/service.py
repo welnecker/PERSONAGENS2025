@@ -16,6 +16,9 @@ from core.repositories import (
 )
 from core.tokens import toklen
 import json
+from characters.registry import _SERVICE_CACHE
+_SERVICE_CACHE.clear()
+
 
 # === Tool Calling: definição de ferramentas disponíveis para a Mary ===
 # Você pode ampliar livremente esta lista conforme precisar.
@@ -1571,6 +1574,25 @@ class MaryService(BaseCharacter):
                     if len(vs) > 120:
                         vs = vs[:120] + "..."
                     st.write(f"- **{k}** = {vs}")
+        
+    if container.button("🔄 Reset REAL da Mary"):
+        from core.repositories import delete_fact
+        user = _current_user_key()
+    
+        delete_fact(user, "mary.rs.v2")
+        delete_fact(user, "mary.rs.v2.ts")
+    
+        # limpa eventos
+        facts = cached_get_facts(user) or {}
+        for k in list(facts.keys()):
+            if k.startswith("mary.evento."):
+                delete_fact(user, k)
+    
+        clear_user_cache(user)
+        _SERVICE_CACHE.clear()
+        st.success("Mary resetada COMPLETAMENTE (RAM + DB + resumo).")
+        st.experimental_rerun()
+
 
         # ============================
         # 🧠 Memórias fixas de Mary
