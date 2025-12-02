@@ -1709,6 +1709,11 @@ class MaryService(BaseCharacter):
                                 delete_fact(usuario_key, f"mary.eventos.{label}")
                             clear_user_cache(usuario_key)
                             container.success(f"Memória **{label}** apagada.")
-                            st.experimental_rerun()
+                            container.success(f"Memória **{label}** apagada.")
+                            try:
+                                st.rerun()
+                            except Exception:
+                                pass
+                            
                     with col2:
                         container.caption(f"mary.evento.{label}")
