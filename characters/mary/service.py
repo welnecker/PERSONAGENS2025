@@ -1387,6 +1387,7 @@ class MaryService(BaseCharacter):
 
         return msgs if msgs else history_boot[:]
 
+        # ===== Rolling summary helpers =====
     def _get_rolling_summary(self, usuario_key: str) -> str:
         try:
             f = cached_get_facts(usuario_key) or {}
@@ -1402,7 +1403,7 @@ class MaryService(BaseCharacter):
             now = time.time()
             if not last_summary:
                 return True
-            if now - last_update_ts > 300:
+            if now - last_update_ts > 300:  # 5 minutos
                 return True
             if (len(last_user) + len(last_assistant)) > 100:
                 return True
@@ -1410,13 +1411,20 @@ class MaryService(BaseCharacter):
         except Exception:
             return True
 
-    def _update_rolling_summary_v2(self, usuario_key: str, model: str, last_user: str, last_assistant: str) -> None:
+    def _update_rolling_summary_v2(
+        self,
+        usuario_key: str,
+        model: str,
+        last_user: str,
+        last_assistant: str
+    ) -> None:
         """
         Atualiza o resumo rolante (mary.rs.v2) de forma INCREMENTAL.
         """
         if not self._should_update_summary(usuario_key, last_user, last_assistant):
             return
 
+        # Carrega resumo anterior
         try:
             f = cached_get_facts(usuario_key) or {}
             resumo_anterior = str(f.get("mary.rs.v2", "") or "")
@@ -1455,14 +1463,19 @@ class MaryService(BaseCharacter):
                 "temperature": 0.2,
                 "top_p": 0.9,
             })
-            resumo_novo = (data.get("choices", [{}])[0].get("message", {}) or {}).get("content", "").strip()
+            resumo_novo = (
+                data.get("choices", [{}])[0]
+                .get("message", {}) or {}
+            ).get("content", "").strip()
             if resumo_novo:
                 set_fact(usuario_key, "mary.rs.v2", resumo_novo, {"fonte": "auto_summary"})
                 set_fact(usuario_key, "mary.rs.v2.ts", time.time(), {"fonte": "auto_summary"})
                 clear_user_cache(usuario_key)
         except Exception:
+            # Se der erro, mantém o resumo anterior
             return
 
+    # ===== Placeholder leve =====
     def _suggest_placeholder(self, assistant_text: str, scene_loc: str) -> str:
         s = (assistant_text or "").lower()
         if "?" in s:
@@ -1473,6 +1486,7 @@ class MaryService(BaseCharacter):
             return f"No {scene_loc} mesmo — fala baixinho no meu ouvido."
         return "Mantém o cenário e dá o próximo passo com calma."
 
+    # ===== Evidência concisa do usuário (últimas falas) =====
     def _compact_user_evidence(self, docs: List[Dict], max_chars: int = 320) -> str:
         snippets: List[str] = []
         for d in reversed(docs):
@@ -1485,14 +1499,17 @@ class MaryService(BaseCharacter):
         s = " | ".join(reversed(snippets))[:max_chars]
         return s
 
+    # ===== Sidebar (somente leitura) =====
     def render_sidebar(self, container) -> None:
         container.markdown(
-            "**Mary — Esposa Cúmplice** • Respostas sensuais (do sutil ao explícito, conforme preferências); 4–7 parágrafos. "
-            "Relação canônica: casados e cúmplices."
+            "**Mary — Esposa Cúmplice** • Respostas sensuais (do sutil ao explícito, conforme preferências); "
+            "4–7 parágrafos. Relação canônica: casados e cúmplices."
         )
 
+        # mesma chave usada no reply()
         usuario_key = _current_user_key()
 
+        # facts do usuário
         try:
             f = cached_get_facts(usuario_key) or {}
         except Exception:
@@ -1506,6 +1523,7 @@ class MaryService(BaseCharacter):
         container.caption(f"Estado da relação: **{'Casados' if casados else '—'}**")
         container.markdown("---")
 
+        # toggles globais
         json_on = container.checkbox(
             "JSON Mode",
             value=bool(st.session_state.get("json_mode_on", False))
@@ -1533,6 +1551,9 @@ class MaryService(BaseCharacter):
             f"tamanho={prefs.get('tamanho_resposta')}"
         )
 
+        # =====================================================
+        # 1) DEBUG – mostrar tudo que o get_facts(...) trouxe
+        # =====================================================
         with container.expander("🔎 DEBUG – facts brutos", expanded=False):
             if not f:
                 st.caption("⚠️ Nenhum fact retornado para esta chave de usuário.")
@@ -1545,7 +1566,10 @@ class MaryService(BaseCharacter):
                         vs = vs[:120] + "..."
                     st.write(f"- **{k}** = {vs}")
 
-                with container.expander("🧠 Memórias fixas de Mary", expanded=True):
+        # ============================
+        # 🧠 Memórias fixas de Mary
+        # ============================
+        with container.expander("🧠 Memórias fixas de Mary", expanded=True):
             try:
                 f_all = cached_get_facts(usuario_key) or {}
             except Exception:
@@ -1553,7 +1577,7 @@ class MaryService(BaseCharacter):
 
             eventos = _collect_mary_events_from_facts(f_all)
 
-            # também considera o que acabou de ser salvo nesta sessão (antes do backend devolver)
+            # também considera o que acabou de ser salvo nesta sessão
             last_key = st.session_state.get("last_saved_mary_event_key", "")
             last_val = st.session_state.get("last_saved_mary_event_val", "")
             if last_key:
@@ -1573,6 +1597,7 @@ class MaryService(BaseCharacter):
 
                     col1, col2 = container.columns([1, 1])
                     with col1:
+                        # botão apagar (só funciona se seu repo tiver delete_fact)
                         if container.button("🗑 Apagar", key=f"del_{usuario_key}_{label}"):
                             try:
                                 from core.repositories import delete_fact
@@ -1580,6 +1605,7 @@ class MaryService(BaseCharacter):
                                 delete_fact = None
 
                             if delete_fact:
+                                # tenta apagar nos dois formatos
                                 delete_fact(usuario_key, f"mary.evento.{label}")
                                 delete_fact(usuario_key, f"mary.eventos.{label}")
                             clear_user_cache(usuario_key)
