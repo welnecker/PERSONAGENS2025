@@ -604,7 +604,7 @@ try:
         if "casados" not in f:
             set_fact(_mary_key, "casados", True, {"fonte": "auto_seed"}); changed = True
         if not str(f.get("local_cena_atual", "")).strip():
-            set_fact(_mary_key, "local_cena_atual", "quarto", {"fonte": "auto_seed"}); changed = True
+            set_fact(_mary_key, "local_cena_atual", "banheiro da suíte", {"fonte": "auto_seed"}); changed = True
         if changed:
             st.session_state["history_loaded_for"] = ""
             _reload_history(force=True)
@@ -946,7 +946,8 @@ with st.sidebar.expander("⚡ Seed rápido: Mary (Esposa Cúmplice)", expanded=F
             try:
                 set_fact(mary_key, "parceiro_atual", u, {"fonte": "seed"})
                 set_fact(mary_key, "casados", True, {"fonte": "seed"})
-                set_fact(mary_key, "local_cena_atual", "quarto", {"fonte": "seed"})
+                set_fact(mary_key, "local_cena_atual", "banheiro da suíte", {"fonte": "seed"})
+
                 st.success("Seed aplicado para Mary (Esposa Cúmplice).")
                 st.session_state["history_loaded_for"] = ""
                 st.rerun()
