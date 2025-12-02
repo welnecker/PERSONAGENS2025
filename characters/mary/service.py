@@ -332,27 +332,35 @@ def _collect_mary_events_from_facts(facts: Dict[str, any]) -> Dict[str, str]:
     """
     eventos: Dict[str, str] = {}
 
-    # Formato plano
+    if not isinstance(facts, dict):
+        return eventos
+
+    # ---- Formato plano: mary.evento.xyz ----
     for k, v in facts.items():
         if not isinstance(k, str):
             continue
         if not k.startswith("mary.evento."):
             continue
-        label = k.replace("mary.evento.", "", 1)
         if not v:
             continue
+        label = k.replace("mary.evento.", "", 1)
         eventos[label] = str(v)
 
-    # Formato aninhado
-    mary_obj = facts.get("mary", {})
-    if isinstance(mary_obj, dict):
+    # ---- Formato aninhado: facts["mary"]["evento"][label] ----
+    for mk in ("mary", "Mary"):
+        mary_obj = facts.get(mk, {})
+        if not isinstance(mary_obj, dict):
+            continue
+
         evt_block = mary_obj.get("evento") or mary_obj.get("eventos") or {}
-        if isinstance(evt_block, dict):
-            for label, val in evt_block.items():
-                if not val:
-                    continue
-                if label not in eventos:
-                    eventos[label] = str(val)
+        if not isinstance(evt_block, dict):
+            continue
+
+        for label, val in evt_block.items():
+            if not val:
+                continue
+            if label not in eventos:
+                eventos[str(label)] = str(val)
 
     return eventos
 
@@ -382,13 +390,14 @@ def _derive_pregnancy_from_events(eventos: Dict[str, str]) -> Dict[str, any]:
     if not eventos:
         return {}
 
-    # pega o último evento (ordem por label pode não ser temporal, mas é algo)
-    # se você tiver timestamp embutido no label, pode ordenar melhor
+    # Pega o "último" evento pela ordenação do label.
+    # Se o label tiver data tipo mary_2025-12-01 ou ..._2025-11-26,
+    # a ordem alfabética costuma respeitar a ordem temporal.
     labels = sorted(eventos.keys())
     ultimo = eventos[labels[-1]].lower()
 
     out: Dict[str, any] = {}
-    if any(w in ultimo for w in ["gravidez", "grávida", "teste positivo", "beta-hcg"]):
+    if any(w in ultimo for w in ["gravidez", "grávida", "teste positivo", "beta-hcg", "pré-natal", "ultrassom"]):
         out["gravida"] = True
 
     m_mes = re.search(r"(\d+)\s*mes", ultimo)
@@ -405,7 +414,6 @@ def _derive_pregnancy_from_events(eventos: Dict[str, str]) -> Dict[str, any]:
         out["gravidez.data_confirma"] = m_data.group(1)
 
     return out
-
 
 # ==============================================
 # 8) BLOCO de sistema principal da Mary
@@ -1483,29 +1491,15 @@ class MaryService(BaseCharacter):
                         vs = vs[:120] + "..."
                     st.write(f"- **{k}** = {vs}")
 
-        with container.expander("🧠 Memórias fixas de Mary", expanded=True):
+                with container.expander("🧠 Memórias fixas de Mary", expanded=True):
             try:
                 f_all = cached_get_facts(usuario_key) or {}
             except Exception:
                 f_all = {}
 
-            eventos: dict[str, str] = {}
+            eventos = _collect_mary_events_from_facts(f_all)
 
-            for k, v in f_all.items():
-                if isinstance(k, str) and k.startswith("mary.evento.") and v:
-                    label = k.replace("mary.evento.", "")
-                    eventos[label] = str(v)
-
-            mary_obj = f_all.get("mary", {})
-            if isinstance(mary_obj, dict):
-                evt_block = mary_obj.get("evento") or mary_obj.get("eventos") or {}
-                if isinstance(evt_block, dict):
-                    for label, val in evt_block.items():
-                        if not val:
-                            continue
-                        if label not in eventos:
-                            eventos[label] = str(val)
-
+            # também considera o que acabou de ser salvo nesta sessão (antes do backend devolver)
             last_key = st.session_state.get("last_saved_mary_event_key", "")
             last_val = st.session_state.get("last_saved_mary_event_val", "")
             if last_key:
