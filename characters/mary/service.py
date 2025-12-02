@@ -24,55 +24,59 @@ TOOLS = [
         "type": "function",
         "function": {
             "name": "get_memory_pin",
-            "description": "Retorna fatos canônicos da relação de Mary com o usuário, incluindo estado civil, gravidez e entidades relevantes.",
+            "description": "Retorna um resumo curto dos fatos canônicos...",
             "parameters": {
                 "type": "object",
-                "properties": {}
-            }
-        }
+                "properties": {},
+                "required": [],
+            },
+        },
     },
     {
         "type": "function",
         "function": {
             "name": "set_fact",
-            "description": "Grava um fato simples na memória canônica da Mary para este usuário.",
+            "description": "Define/atualiza um fact simples na memória do usuário...",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "key": {
-                        "type": "string",
-                        "description": "Chave do fato (por exemplo: 'gravida', 'parceiro_atual', 'local_cena_atual')."
-                    },
-                    "value": {
-                        "type": "string",
-                        "description": "Valor do fato a ser armazenado."
-                    }
+                    "key": {"type": "string"},
+                    "value": {"type": "string"},
                 },
-                "required": ["key", "value"]
-            }
-        }
+                "required": ["key", "value"],
+            },
+        },
     },
     {
         "type": "function",
         "function": {
             "name": "save_event",
-            "description": "Salva um evento narrativo importante da Mary (como gravidez confirmada, encontro marcante, etc.)",
+            "description": (
+                "Salva um evento narrativo importante da Mary na memória fixa "
+                "(por exemplo, gravidez confirmada, viagem marcante etc.)."
+            ),
             "parameters": {
                 "type": "object",
                 "properties": {
                     "label": {
                         "type": "string",
-                        "description": "Rótulo curto e único para o evento (por exemplo: 'gravidez_confirmada_2025-11-26')."
+                        "description": (
+                            "Identificador curto para o evento, "
+                            "ex.: 'gravidez_confirmada_2025-11-28'."
+                        ),
                     },
                     "content": {
                         "type": "string",
-                        "description": "Texto completo do evento a ser gravado."
-                    }
+                        "description": (
+                            "Texto completo do evento que deve ser preservado "
+                            "como memória canônica."
+                        ),
+                    },
                 },
-                "required": []
-            }
-        }
-    }
+                "required": ["content"],
+            },
+        },
+    },
 ]
 
 
@@ -648,7 +652,7 @@ def _get_thematic_memories_for_tags(usuario_key: str, tags: List[str]) -> str:
 # ==============================================
 try:
     from .persona import get_persona  # -> Tuple[str, List[Dict[str,str]]]
-except Exception:
+except ImportError:
     def get_persona() -> Tuple[str, List[Dict[str, str]]]:
         txt = (
             "Você é Mary Massariol — Esposa Cúmplice — esposa e parceira de aventuras do usuário. "
@@ -1033,13 +1037,11 @@ class MaryService(BaseCharacter):
         # Sentinela: detectar sinais de esquecimento explícito na resposta
         try:
             forgot_pat = re.compile(
-                r"\b(n[ãa]o (lembro|recordo)|quem (é voc[êe]|[ée] voc[êe])|me relembre|o que est[aá]vamos)\b",
+                r"\b(eu\s+n[ãa]o\s+(lembro|recordo)|"
+                r"n[ãa]o\s+me\s+lembro\s+mais|"
+                r"esqueci\s+o\s+que\s+est[aá]vamos\s+fazendo)\b",
                 re.I
             )
-            if forgot_pat.search(texto or ""):
-                st.warning(
-                    "🧠 A IA sinalizou possível esquecimento. Se necessário, peça **‘recap curto’** ou fixe fatos na Memória Canônica."
-                )
         except Exception:
             pass
 
@@ -1486,7 +1488,7 @@ class MaryService(BaseCharacter):
         except Exception:
             f = {}
 
-        casados = bool(f.get("casados", True))
+        casados = bool(f.get("casados", False))
         ent = _entities_to_line(f)
         rs = (f.get("mary.rs.v2") or "")[:200]
         prefs = _read_prefs(f)
