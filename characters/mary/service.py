@@ -237,11 +237,13 @@ def _llm_summarize(model_id: str, text: str) -> str:
     use_model = model_id or candidates[0]
     mlow = (use_model or "").lower()
     if "grok-4.1" in mlow or "tng-r1t-chimera" in mlow:
-        # pra resumo, usa algo mais "barato"
         for c in candidates:
-            if c in list_models() or True:
+            if c in list_models():
                 use_model = c
                 break
+        else:
+            # se nenhum estiver em list_models, usa o primeiro mesmo
+            use_model = candidates[0]
 
     seed = (
         "Resuma o seguinte histórico de diálogo entre Mary e o usuário em 8–12 frases curtas, "
@@ -591,8 +593,8 @@ def _robust_chat_call(
         try:
             body = _build_body(fb)
             data, used_model, prov = route_chat_strict(fb, body)
-            # Sinaliza que foi fallback
-            return data, f"together/{fb}" if not fb.startswith("together/") else fb, prov
+            # Sinaliza que foi fallback – retorna o ID como está
+            return data, fb, prov
         except Exception as e:
             st.warning(f"⚠️ Fallback falhou ({fb}): {e}")
 
@@ -1202,7 +1204,15 @@ class MaryService(BaseCharacter):
         if parceiro:
             blocos.append(f"parceiro_atual={parceiro}")
 
-        casados = bool(f.get("casados", True))
+        raw_casados = f.get("casados", None)
+        if raw_casados is None:
+            casados = False  # default neutro → não casados até ter fato explícito
+        else:
+            if isinstance(raw_casados, bool):
+                casados = raw_casados
+            else:
+                casados = str(raw_casados).strip().lower() in ("1", "true", "sim", "casados")
+        
         blocos.append(f"casados={casados}")
 
         # 🔴 GRAVIDEZ COMO FATO CANÔNICO (se existir),
