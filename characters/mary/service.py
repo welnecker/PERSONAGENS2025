@@ -739,6 +739,60 @@ class MaryService(BaseCharacter):
 
         # COMANDOS DEBUG
         plow = prompt.strip().lower()
+                # ============================
+        # /reset historico  (apenas diálogo + resumo)
+        # ============================
+        if plow in (
+            "/reset historico",
+            "/reset histórico",
+            "/reset historico mary",
+            "/reset histórico mary",
+        ):
+            try:
+                # 1) Zera apenas HISTÓRICO em cache (docs de conversa),
+                #    sem apagar facts nem mary.evento.*
+                hk = f"history::{usuario_key}"
+                st.session_state[hk] = []
+
+                # 2) Zera resumo rolante v2 (mas não apaga eventos/canônicos)
+                set_fact(
+                    usuario_key,
+                    "mary.rs.v2",
+                    "",
+                    {"fonte": "reset_debug"},
+                )
+                set_fact(
+                    usuario_key,
+                    "mary.rs.v2.ts",
+                    0,
+                    {"fonte": "reset_debug"},
+                )
+
+                # 3) Limpa cache leve para forçar reload limpo
+                clear_user_cache(usuario_key)
+
+                # 4) Atualiza relatório de memória para UI
+                hist_budget, meta_budget, safety_budget = _budget_slices(model)
+                st.session_state["_mem_drop_report"] = {
+                    "summarized_pairs": 0,
+                    "trimmed_pairs": 0,
+                    "hist_tokens": 0,
+                    "hist_budget": hist_budget,
+                }
+
+            except Exception as e:
+                return (
+                    "⚠️ Erro ao resetar histórico desta sessão.\n"
+                    f"Detalhe técnico: {e}"
+                )
+
+            return (
+                "🧹 **Histórico de diálogo e resumo rolante de Mary foram zerados APENAS para esta sessão.**\n"
+                "- Memória Canônica (parceiro_atual, casados, local, etc.) foi preservada.\n"
+                "- Memórias fixas (`mary.evento.*`) e registros dentro de `mary['evento']` foram preservados.\n"
+                "- Use normalmente: Mary continua lendo suas memórias fixas e fatos salvos."
+            )
+
         if plow.startswith("/debug eventos"):
             try:
                 f_all = cached_get_facts(usuario_key) or {}
