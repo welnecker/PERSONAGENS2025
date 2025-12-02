@@ -1508,7 +1508,7 @@ class MaryService(BaseCharacter):
         s = " | ".join(reversed(snippets))[:max_chars]
         return s
 
-     # ===== Sidebar (somente leitura) =====
+         # ===== Sidebar (somente leitura) =====
     def render_sidebar(self, container) -> None:
         container.markdown(
             "**Mary — Esposa Cúmplice** • Respostas sensuais (do sutil ao explícito, conforme preferências); "
@@ -1619,7 +1619,14 @@ class MaryService(BaseCharacter):
                                 delete_fact(usuario_key, f"mary.eventos.{label}")
                             clear_user_cache(usuario_key)
                             container.success(f"Memória **{label}** apagada.")
-                            st.experimental_rerun()
+                            # 🔁 rerun compatível com versões novas/antigas
+                            try:
+                                st.rerun()
+                            except Exception:
+                                try:
+                                    st.experimental_rerun()
+                                except Exception:
+                                    pass
                     with col2:
                         container.caption(f"mary.evento.{label}")
 
@@ -1647,7 +1654,15 @@ class MaryService(BaseCharacter):
 
             clear_user_cache(user)
             container.success("Mary resetada COMPLETAMENTE (resumo + eventos fixos) para este usuário.")
-            st.experimental_rerun()
+            # 🔁 rerun compatível
+            try:
+                st.rerun()
+            except Exception:
+                try:
+                    st.experimental_rerun()
+                except Exception:
+                    pass
+
 
 
         # ============================
