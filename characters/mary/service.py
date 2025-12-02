@@ -321,7 +321,7 @@ def _extract_and_store_entities(usuario_key: str, user_text: str, assistant_text
 
 
 # ==============================================
-# 7) Pregnância a partir de eventos
+# 7) Eventos fixos (inclui gravidez, mas não só)
 # ==============================================
 def _collect_mary_events_from_facts(facts: Dict[str, any]) -> Dict[str, str]:
     """
@@ -365,7 +365,7 @@ def _collect_pregnancy_events_from_facts(facts: Dict[str, any]) -> Dict[str, str
     preg_events: Dict[str, str] = {}
     for label, txt in eventos.items():
         low = txt.lower()
-        if any(w in low for w in ["gravidez", "grávida", "teste positivo", "ultrassom", "ultrassom", "beta-hcg"]):
+        if any(w in low for w in ["gravidez", "grávida", "teste positivo", "ultrassom", "ultra-som", "beta-hcg"]):
             preg_events[label] = txt
     return preg_events
 
@@ -432,8 +432,8 @@ REGRAS GERAIS:
 - Trate o usuário como parceiro/cônjuge, com intimidade e cumplicidade estáveis (salvo se os fatos disserem o contrário).
 - Tom sensual adaptado às preferências do usuário (nível, ritmo, tamanho de resposta).
 - **Nunca quebre a quarta parede**: não fale sobre tokens, prompts, LLM, nem sobre "modelo de linguagem".
-- Mantenha a continuidade dos fatos descritos no RESUMO_CONTINUO e na MEMÓRIA_PIN.
-- Se houver contradição entre o pedido do usuário e a MEMÓRIA_PIN, priorize a MEMÓRIA_PIN como verdade canônica e negocie com o usuário dentro da cena.
+- Mantenha a continuidade dos fatos descritos no RESUMO_CONTINUO, na MEMÓRIA_PIN e em EVENTOS_FIXOS_MARY.
+- Se houver contradição entre o pedido do usuário e a MEMÓRIA_PIN/EVENTOS_FIXOS_MARY, priorize essas memórias como verdade canônica e negocie com o usuário dentro da cena.
 
 PERSONA (núcleo fixo):
 {persona_text}
@@ -559,14 +559,10 @@ def _robust_chat_call(
 
         # GROK 4.1 Fast – reasoning opcional
         if "grok-4.1-fast" in low:
-            # Você pode afinar isso conforme o "modo" da Mary ou prefs
-            # Por enquanto, esforço médio fixo
             extra["reasoning"] = {"effort": "medium"}
 
         # TNG R1T Chimera – é um modelo R1T, tende a usar "think tokens"
         if "tng-r1t-chimera" in low:
-            # Aqui não existe parâmetro oficial de reasoning, mas mantemos temp baixa
-            # e top_p moderado, e deixamos o modelo usar seu próprio "think".
             pass
 
         body: Dict[str, any] = {
@@ -597,7 +593,6 @@ def _robust_chat_call(
         try:
             body = _build_body(fb)
             data, used_model, prov = route_chat_strict(fb, body)
-            # Sinaliza que foi fallback – retorna o ID como está
             return data, fb, prov
         except Exception as e:
             st.warning(f"⚠️ Fallback falhou ({fb}): {e}")
@@ -619,7 +614,7 @@ def _robust_chat_call(
 def _detect_thematic_tags_from_prompt(prompt: str) -> List[str]:
     low = (prompt or "").lower()
     tags = []
-    if any(w in low for w in ["gravidez", "grávida", "ultrassom", "ultrassom", "obstetra", "ginecologista"]):
+    if any(w in low for w in ["gravidez", "grávida", "ultrassom", "ultra-som", "obstetra", "ginecologista"]):
         tags.append("gravidez")
     if any(w in low for w in ["trai", "traição", "infiel", "amante"]):
         tags.append("traicao")
@@ -676,14 +671,11 @@ class MaryService(BaseCharacter):
         Sempre retorna STRING, para ser usada como mensagem de `tool`.
         """
         try:
-            # 1) pegar user_display só uma vez
             user_display = st.session_state.get("user_id", "") or ""
 
-            # 2) ferramenta básica: devolver pin de memória
             if name == "get_memory_pin":
                 return self._build_memory_pin(usuario_key, user_display)
 
-            # 3) ferramenta básica: set_fact (genérica)
             if name == "set_fact":
                 k = (args or {}).get("key", "") if isinstance(args, dict) else ""
                 v = (args or {}).get("value", "") if isinstance(args, dict) else ""
@@ -696,12 +688,6 @@ class MaryService(BaseCharacter):
                     pass
                 return f"OK: {k}={v}"
 
-            # 4) ferramenta específica: salvar evento narrativo da Mary
-            #    name: "save_event"
-            #    args esperados:
-            #      - label: nome curto da memória (ex.: "carlos_beatriz")
-            #      - content: texto completo que o modelo acabou de produzir
-            # Se não vier label, vamos gerar um.
             if name == "save_event":
                 label = ""
                 content = ""
@@ -710,20 +696,16 @@ class MaryService(BaseCharacter):
                     content = (args.get("content") or "").strip()
 
                 if not content:
-                    # tenta pegar da última mensagem do assistente, se você estiver guardando
                     content = st.session_state.get("last_assistant_message", "").strip()
 
                 if not content:
                     return "ERRO: nenhum conteúdo para salvar."
 
-                # se não veio label, gera um rápido
                 if not label:
-                    # tenta achar nomes no conteúdo
                     low = content.lower()
                     if "carlos" in low and "beatriz" in low:
                         label = "carlos_beatriz"
                     else:
-                        # fallback com timestamp curtinho
                         label = f"evento_{int(time.time())}"
 
                 fact_key = f"mary.evento.{label}"
@@ -734,7 +716,6 @@ class MaryService(BaseCharacter):
                     pass
                 return f"OK: salvo em {fact_key}"
 
-            # 5) se não reconheceu:
             return f"ERRO: ferramenta desconhecida: {name}"
 
         except Exception as e:
@@ -746,9 +727,9 @@ class MaryService(BaseCharacter):
         if not prompt:
             return ""
 
-        usuario_key = _current_user_key()   # << primeiro
+        usuario_key = _current_user_key()
 
-        # ==== COMANDOS DE DEBUG SIMPLES (chat) ====
+        # COMANDOS DEBUG
         plow = prompt.strip().lower()
         if plow.startswith("/debug eventos"):
             try:
@@ -782,7 +763,6 @@ class MaryService(BaseCharacter):
 
         persona_text, history_boot = self._load_persona()
 
-        # Memória/continuidade base
         local_atual = self._safe_get_local(usuario_key)
         try:
             f_all = cached_get_facts(usuario_key) or {}
@@ -791,11 +771,9 @@ class MaryService(BaseCharacter):
         prefs = _read_prefs(f_all)
         memoria_pin = self._build_memory_pin(usuario_key, user)
 
-        # Memória temática: pega eventos específicos ligados ao prompt
         thematic_tags = _detect_thematic_tags_from_prompt(prompt)
         thematic_block = _get_thematic_memories_for_tags(usuario_key, thematic_tags)
 
-        # Foco sensorial rotativo
         pool = [
             "cabelo", "olhos", "lábios/boca", "mãos/toque", "respiração",
             "perfume", "pele/temperatura", "quadril/coxas", "voz/timbre", "sorriso"
@@ -805,7 +783,6 @@ class MaryService(BaseCharacter):
         st.session_state["mary_attr_idx"] = idx
         foco = pool[idx]
 
-        # NSFW por usuário com nuance de preferência (seguro)
         try:
             nsfw_on = bool(nsfw_enabled(usuario_key))
         except Exception:
@@ -828,15 +805,13 @@ class MaryService(BaseCharacter):
                     "NSFW: LIBERADO. Intensifique descrição corporal e sensorial, "
                     "mantendo coerência emocional e respeito aos limites do casal."
                 )
-            else:  # 'media'
+            else:
                 nsfw_hint = (
                     "NSFW: LIBERADO. Sensualidade clara e progressiva; descreva sensações e ações sem pressa, "
                     "demonstrando desejo sexual e sedução sem repetição mecânica."
                 )
-        # =================================
 
-        # ===== SUMÁRIO + ENTIDADES + EVIDÊNCIA =====
-        rolling = self._get_rolling_summary(usuario_key)  # v2
+        rolling = self._get_rolling_summary(usuario_key)
         entities_line = _entities_to_line(f_all)
 
         try:
@@ -845,7 +820,6 @@ class MaryService(BaseCharacter):
             docs = []
         evidence = self._compact_user_evidence(docs, max_chars=320)
 
-        # System único com slots (+ PREFERÊNCIAS)
         system_block = _build_system_block(
             persona_text=persona_text,
             rolling_summary=rolling,
@@ -858,7 +832,6 @@ class MaryService(BaseCharacter):
             scene_time=st.session_state.get("momento_atual", "")
         )
 
-        # === LORE (memória longa)
         lore_msgs: List[Dict[str, str]] = []
         try:
             q = (prompt or "") + "\n" + (rolling or "")
@@ -870,8 +843,7 @@ class MaryService(BaseCharacter):
         except Exception:
             pass
 
-        # === Histórico com orçamento por modelo + relatório de memória ===
-        verbatim_ultimos = int(st.session_state.get("verbatim_ultimos", 20))  # << configurável via UI
+        verbatim_ultimos = int(st.session_state.get("verbatim_ultimos", 20))
         hist_msgs = self._montar_historico(
             usuario_key,
             history_boot,
@@ -879,7 +851,6 @@ class MaryService(BaseCharacter):
             verbatim_ultimos=verbatim_ultimos,
         )
 
-        # --- 3.a) coletar eventos salvos (formato unificado)
         eventos_block = ""
         try:
             eventos_dict = _collect_mary_events_from_facts(f_all)
@@ -897,7 +868,6 @@ class MaryService(BaseCharacter):
         except Exception:
             eventos_block = ""
 
-        # --- 3.b) montar messages final
         messages: List[Dict, ] = (
             [{"role": "system", "content": system_block}]
             + ([{"role": "system", "content": memoria_pin}] if memoria_pin else [])
@@ -916,13 +886,11 @@ class MaryService(BaseCharacter):
             + [{"role": "user", "content": prompt}]
         )
 
-        # Aviso visual se houve resumo/poda neste turno
         try:
             _mem_drop_warn(st.session_state.get("_mem_drop_report", {}))
         except Exception:
             pass
 
-        # --- orçamento de saída dinâmico (modulado por preferência de tamanho) ---
         win = _get_window_for(model)
         try:
             prompt_tokens = sum(toklen(m["content"]) for m in messages)
@@ -933,31 +901,26 @@ class MaryService(BaseCharacter):
         mult = 1.0 if size == "media" else (0.75 if size == "curta" else 1.4)
         max_out = max(512, int(base_out * mult))
 
-        # Temperatura conforme ritmo
         ritmo = prefs.get("ritmo", "lento")
         temperature = 0.6 if ritmo == "lento" else (0.9 if ritmo == "rapido" else 0.7)
 
-        # Chamada robusta (Writer)
         fallbacks = [
             "together/Qwen/Qwen2.5-72B-Instruct",
             "together/meta-llama/Meta-Llama-3.1-405B-Instruct-Turbo",
             "anthropic/claude-3.5-haiku",
         ]
-        # Preparar tools se Tool Calling estiver ativo
         tools_to_use = None
         if st.session_state.get("tool_calling_on", False):
             tools_to_use = TOOLS
 
-        # Loop de Tool Calling (máximo 3 iterações para evitar loops infinitos)
         max_iterations = 3
         iteration = 0
         texto = ""
-
         tool_calls = []
+
         while iteration < max_iterations:
             iteration += 1
 
-            # Chamada robusta (Writer) com tools
             data, used_model, provider = _robust_chat_call(
                 model,
                 messages,
@@ -968,39 +931,30 @@ class MaryService(BaseCharacter):
                 tools=tools_to_use,
             )
 
-            # Extrair resposta
             msg = (data.get("choices", [{}])[0].get("message", {}) or {})
             texto = (msg.get("content", "") or "").strip()
             tool_calls = msg.get("tool_calls", [])
 
-            # Se não há tool calls, termina o loop
             if not tool_calls or not st.session_state.get("tool_calling_on", False):
                 break
 
-            # Processar tool calls
             st.caption(f"🔧 Executando {len(tool_calls)} ferramenta(s)...")
 
-            # Adiciona a mensagem do assistente com tool_calls
             messages.append({
                 "role": "assistant",
                 "content": texto or None,
                 "tool_calls": tool_calls
             })
 
-            # Executa cada tool call
             for tc in tool_calls:
                 tool_id = tc.get("id", f"call_{iteration}")
                 func_name = tc.get("function", {}).get("name", "")
                 func_args_str = tc.get("function", {}).get("arguments", "{}")
 
                 try:
-                    # Parse dos argumentos
                     func_args = json.loads(func_args_str) if func_args_str else {}
-
-                    # Executa a ferramenta
                     result = self._exec_tool_call(func_name, func_args, usuario_key)
 
-                    # Adiciona resultado às mensagens
                     messages.append({
                         "role": "tool",
                         "tool_call_id": tool_id,
@@ -1018,14 +972,9 @@ class MaryService(BaseCharacter):
                     })
                     st.warning(f"⚠️ {error_msg}")
 
-            # Se chegou aqui, há tool calls - continua o loop para nova chamada
-            # (o modelo vai processar os resultados das tools e gerar resposta final)
-
-        # Aviso se atingiu limite de iterações
         if iteration >= max_iterations and st.session_state.get("tool_calling_on", False):
             st.warning("⚠️ Limite de iterações de Tool Calling atingido. Resposta pode estar incompleta.")
 
-        # Ultra IA (opcional): writer -> critic -> polisher
         try:
             if bool(st.session_state.get("ultra_ia_on", False)) and texto:
                 critic_model = st.session_state.get("ultra_critic_model", model) or model
@@ -1034,7 +983,6 @@ class MaryService(BaseCharacter):
         except Exception:
             pass
 
-        # Sentinela: detectar sinais de esquecimento explícito na resposta
         try:
             forgot_pat = re.compile(
                 r"\b(eu\s+n[ãa]o\s+(lembro|recordo)|"
@@ -1043,17 +991,13 @@ class MaryService(BaseCharacter):
                 re.I
             )
         except Exception:
-            pass
+            forgot_pat = None
 
-        # ============================================================
-        # Persistência da interação (com gravação automática de memórias)
-        # ============================================================
         try:
             save_interaction(usuario_key, prompt, texto, f"{provider}:{used_model}")
         except Exception:
             pass
 
-        # === 4.a) detectar se o usuário pediu gravação explícita ===
         mem_triggers = (
             "use sua ferramenta de memória",
             "mary, use sua ferramenta de memória",
@@ -1067,18 +1011,15 @@ class MaryService(BaseCharacter):
 
         if any(t in plow for t in mem_triggers):
             try:
-                # 1) tentar achar nomes conhecidos no prompt pra gerar rótulo melhor
                 nomes_conhecidos = ["carlos", "beatriz", "ricardo", "laura", "janio", "mary"]
                 achados = [n for n in nomes_conhecidos if n in plow]
 
-                # 2) tenta detectar data tipo 30/10/2025
                 mdata = re.search(r"(\d{1,2})/(\d{1,2})/(\d{4})", plow)
                 data_sufixo = ""
                 if mdata:
                     d, m, y = mdata.groups()
                     data_sufixo = f"_{y}-{int(m):02d}-{int(d):02d}"
 
-                # 3) monta label base (sem data)
                 if len(achados) >= 2:
                     base_label = f"{achados[0]}_{achados[1]}"
                 elif len(achados) == 1:
@@ -1089,13 +1030,10 @@ class MaryService(BaseCharacter):
                 label = f"{base_label}{data_sufixo}"
                 fact_key = f"mary.evento.{label}"
 
-                # 4) o que vamos salvar? → A FALA DELA
                 content = texto.strip() or "(sem conteúdo)"
 
-                # grava a versão datada/completa
                 set_fact(usuario_key, fact_key, content, {"fonte": "auto_gravado"})
 
-                # 🔑 se for Carlos + Beatriz, grava também um ALIAS fixo
                 if "carlos" in achados and "beatriz" in achados:
                     set_fact(
                         usuario_key,
@@ -1106,7 +1044,6 @@ class MaryService(BaseCharacter):
 
                 clear_user_cache(usuario_key)
 
-                # 5) garante que o sidebar já mostre mesmo antes do backend voltar
                 st.session_state["last_saved_mary_event_key"] = fact_key
                 st.session_state["last_saved_mary_event_val"] = content
 
@@ -1114,26 +1051,22 @@ class MaryService(BaseCharacter):
             except Exception as e:
                 st.warning(f"⚠️ Falha ao registrar memória fixa: {e}")
 
-        # === 4.b) Atualiza ENTIDADES
         try:
             _extract_and_store_entities(usuario_key, prompt, texto)
         except Exception:
             pass
 
-        # === 4.c) Atualiza resumo rolante
         try:
             self._update_rolling_summary_v2(usuario_key, model, prompt, texto)
         except Exception:
             pass
 
-        # === 4.d) Memória longa (lore)
         try:
             frag = f"[USER] {prompt}\n[MARY] {texto}"
             lore_save(usuario_key, frag, tags=["mary", "chat"])
         except Exception:
             pass
 
-        # === 4.e) Placeholder e cache leve
         try:
             ph = self._suggest_placeholder(texto, local_atual)
             st.session_state["suggestion_placeholder"] = ph
@@ -1141,7 +1074,6 @@ class MaryService(BaseCharacter):
         except Exception:
             st.session_state["suggestion_placeholder"] = ""
 
-        # === 4.f) Sinaliza failover
         try:
             if provider == "synthetic-fallback":
                 st.info("⚠️ Provedor instável. Resposta em fallback — pode continuar normalmente.")
@@ -1150,10 +1082,8 @@ class MaryService(BaseCharacter):
         except Exception:
             pass
 
-        # === 5) JSON mode opcional ===
         if st.session_state.get("json_mode_on", False):
             try:
-                # embrulha num JSON básico, preservando o texto em "content"
                 payload = {
                     "role": "assistant",
                     "character": "Mary",
@@ -1161,12 +1091,10 @@ class MaryService(BaseCharacter):
                 }
                 return json.dumps(payload, ensure_ascii=False, indent=2)
             except Exception:
-                # se der erro, devolve texto normal
                 return texto
 
         return texto
 
-    # ===== utilidades =====
     def _load_persona(self) -> Tuple[str, List[Dict[str, str]]]:
         return get_persona()
 
@@ -1192,7 +1120,6 @@ class MaryService(BaseCharacter):
         except Exception:
             f = {}
 
-        # Integra eventos narrativos (ex.: gravidez) como fonte auxiliar de fatos
         try:
             preg_events = _collect_pregnancy_events_from_facts(f)
             preg_from_events = _derive_pregnancy_from_events(preg_events)
@@ -1208,17 +1135,15 @@ class MaryService(BaseCharacter):
 
         raw_casados = f.get("casados", None)
         if raw_casados is None:
-            casados = False  # default neutro → não casados até ter fato explícito
+            casados = False
         else:
             if isinstance(raw_casados, bool):
                 casados = raw_casados
             else:
                 casados = str(raw_casados).strip().lower() in ("1", "true", "sim", "casados")
-        
+
         blocos.append(f"casados={casados}")
 
-        # 🔴 GRAVIDEZ COMO FATO CANÔNICO (se existir),
-        #     COM OVERRIDE vindo dos eventos mary.evento.*
         raw_gravida = (
             preg_from_events.get("gravida")
             if "gravida" in preg_from_events
@@ -1262,6 +1187,15 @@ class MaryService(BaseCharacter):
         if ent_line and ent_line != "—":
             blocos.append(f"entidades=({ent_line})")
 
+        # Lista compacta de eventos fixos (só labels) para reforçar uso
+        try:
+            eventos_dict = _collect_mary_events_from_facts(f)
+            if eventos_dict:
+                labels = ", ".join(sorted(eventos_dict.keys()))
+                blocos.append(f"eventos_fixos=[{labels}]")
+        except Exception:
+            pass
+
         try:
             ev = last_event(usuario_key, "primeira_vez")
         except Exception:
@@ -1276,7 +1210,7 @@ class MaryService(BaseCharacter):
             "MEMÓRIA_PIN: "
             f"NOME_USUARIO={nome_usuario}. FATOS={{ {mem_str} }}. "
             "Regras: casal (casados) e confiança são base. "
-            "Use ENTIDADES como fonte de verdade; se ausente, não invente."
+            "Use ENTIDADES e EVENTOS_FIXOS_MARY como fonte de verdade; se ausente, não invente."
         )
         return pin
 
@@ -1302,7 +1236,6 @@ class MaryService(BaseCharacter):
             st.session_state["_mem_drop_report"] = {}
             return history_boot[:]
 
-        # Constrói pares user/assistant em ordem cronológica
         pares: List[Dict[str, str]] = []
         for d in docs:
             u = (d.get("mensagem_usuario") or "").strip()
@@ -1324,7 +1257,6 @@ class MaryService(BaseCharacter):
         summarized_pairs = 0
         trimmed_pairs = 0
 
-        # Resumo em camadas
         if antigos:
             summarized_pairs = len(antigos) // 2
             bloco = "\n\n".join(m["content"] for m in antigos)
@@ -1342,10 +1274,8 @@ class MaryService(BaseCharacter):
             for i, r in enumerate(resumo_layers, start=1):
                 msgs.append({"role": "system", "content": f"[RESUMO-{i}]\n{r}"})
 
-        # Injeta verbatim
         msgs.extend(verbatim)
 
-        # Poda se ainda exceder orçamento
         def _hist_tokens(mm: List[Dict[str, str]]) -> int:
             return sum(toklen(m["content"]) for m in mm)
 
@@ -1357,7 +1287,6 @@ class MaryService(BaseCharacter):
                 verbatim = []
             msgs = [m for m in msgs if m["role"] == "system"] + verbatim
 
-        # Report para aviso visual
         hist_tokens = _hist_tokens(msgs)
         st.session_state["_mem_drop_report"] = {
             "summarized_pairs": summarized_pairs,
@@ -1368,7 +1297,6 @@ class MaryService(BaseCharacter):
 
         return msgs if msgs else history_boot[:]
 
-    # ===== Rolling summary helpers =====
     def _get_rolling_summary(self, usuario_key: str) -> str:
         try:
             f = cached_get_facts(usuario_key) or {}
@@ -1384,7 +1312,7 @@ class MaryService(BaseCharacter):
             now = time.time()
             if not last_summary:
                 return True
-            if now - last_update_ts > 300:  # 5 min
+            if now - last_update_ts > 300:
                 return True
             if (len(last_user) + len(last_assistant)) > 100:
                 return True
@@ -1394,21 +1322,19 @@ class MaryService(BaseCharacter):
 
     def _update_rolling_summary_v2(self, usuario_key: str, model: str, last_user: str, last_assistant: str) -> None:
         """
-        Atualiza o resumo rolante (mary.rs.v2) de forma INCREMENTAL:
-        - Lê o resumo anterior (se existir).
-        - Pede ao modelo para atualizar esse resumo adicionando só o que for novo.
-        - Mantém fatos antigos válidos; não apaga nada à toa.
+        Atualiza o resumo rolante (mary.rs.v2) de forma INCREMENTAL.
         """
         if not self._should_update_summary(usuario_key, last_user, last_assistant):
             return
 
-        # Carrega resumo anterior
         try:
             f = cached_get_facts(usuario_key) or {}
             resumo_anterior = str(f.get("mary.rs.v2", "") or "")
             ts_anterior = float(f.get("mary.rs.v2.ts", 0) or 0)
         except Exception:
             resumo_anterior = ""
+            ts_anterior = 0.0
+
         seed = (
             "Você mantém um RESUMO CONTÍNUO da história entre Mary e o usuário.\n\n"
             "TAREFA:\n"
@@ -1445,10 +1371,8 @@ class MaryService(BaseCharacter):
                 set_fact(usuario_key, "mary.rs.v2.ts", time.time(), {"fonte": "auto_summary"})
                 clear_user_cache(usuario_key)
         except Exception:
-            # Fallback: se der erro, não apaga o resumo antigo
             return
 
-    # ===== Placeholder leve =====
     def _suggest_placeholder(self, assistant_text: str, scene_loc: str) -> str:
         s = (assistant_text or "").lower()
         if "?" in s:
@@ -1459,7 +1383,6 @@ class MaryService(BaseCharacter):
             return f"No {scene_loc} mesmo — fala baixinho no meu ouvido."
         return "Mantém o cenário e dá o próximo passo com calma."
 
-    # ===== Evidência concisa do usuário (últimas falas) =====
     def _compact_user_evidence(self, docs: List[Dict], max_chars: int = 320) -> str:
         snippets: List[str] = []
         for d in reversed(docs):
@@ -1472,17 +1395,14 @@ class MaryService(BaseCharacter):
         s = " | ".join(reversed(snippets))[:max_chars]
         return s
 
-    # ===== Sidebar (somente leitura) =====
     def render_sidebar(self, container) -> None:
         container.markdown(
             "**Mary — Esposa Cúmplice** • Respostas sensuais (do sutil ao explícito, conforme preferências); 4–7 parágrafos. "
             "Relação canônica: casados e cúmplices."
         )
 
-        # mesma chave usada no reply()
         usuario_key = _current_user_key()
 
-        # facts do usuário
         try:
             f = cached_get_facts(usuario_key) or {}
         except Exception:
@@ -1496,7 +1416,6 @@ class MaryService(BaseCharacter):
         container.caption(f"Estado da relação: **{'Casados' if casados else '—'}**")
         container.markdown("---")
 
-        # toggles globais
         json_on = container.checkbox(
             "JSON Mode",
             value=bool(st.session_state.get("json_mode_on", False))
@@ -1524,9 +1443,6 @@ class MaryService(BaseCharacter):
             f"tamanho={prefs.get('tamanho_resposta')}"
         )
 
-        # =====================================================
-        # 1) DEBUG – mostrar tudo que o get_facts(...) trouxe
-        # =====================================================
         with container.expander("🔎 DEBUG – facts brutos", expanded=False):
             if not f:
                 st.caption("⚠️ Nenhum fact retornado para esta chave de usuário.")
@@ -1539,27 +1455,19 @@ class MaryService(BaseCharacter):
                         vs = vs[:120] + "..."
                     st.write(f"- **{k}** = {vs}")
 
-        # ============================
-        # 🧠 Memórias fixas de Mary
-        # ============================
         with container.expander("🧠 Memórias fixas de Mary", expanded=True):
             try:
                 f_all = cached_get_facts(usuario_key) or {}
             except Exception:
                 f_all = {}
 
-            # pode vir em 2 formatos:
-            # 1) plano:  "mary.evento.xyz": "..."
-            # 2) aninhado: "mary": { "evento": { "xyz": "..." } }
             eventos: dict[str, str] = {}
 
-            # --- formato 1: plano
             for k, v in f_all.items():
                 if isinstance(k, str) and k.startswith("mary.evento.") and v:
                     label = k.replace("mary.evento.", "")
                     eventos[label] = str(v)
 
-            # --- formato 2: aninhado
             mary_obj = f_all.get("mary", {})
             if isinstance(mary_obj, dict):
                 evt_block = mary_obj.get("evento") or mary_obj.get("eventos") or {}
@@ -1567,11 +1475,9 @@ class MaryService(BaseCharacter):
                     for label, val in evt_block.items():
                         if not val:
                             continue
-                        # se já veio pelo formato plano, não sobrescreve
                         if label not in eventos:
                             eventos[label] = str(val)
 
-            # --- também mostra o que acabou de ser salvo nesta sessão (cache ainda não voltou)
             last_key = st.session_state.get("last_saved_mary_event_key", "")
             last_val = st.session_state.get("last_saved_mary_event_val", "")
             if last_key:
@@ -1591,7 +1497,6 @@ class MaryService(BaseCharacter):
 
                     col1, col2 = container.columns([1, 1])
                     with col1:
-                        # botão apagar (só funciona se seu repo tiver delete_fact)
                         if container.button("🗑 Apagar", key=f"del_{usuario_key}_{label}"):
                             try:
                                 from core.repositories import delete_fact
@@ -1599,7 +1504,6 @@ class MaryService(BaseCharacter):
                                 delete_fact = None
 
                             if delete_fact:
-                                # tenta apagar nos dois formatos
                                 delete_fact(usuario_key, f"mary.evento.{label}")
                                 delete_fact(usuario_key, f"mary.eventos.{label}")
                             clear_user_cache(usuario_key)
