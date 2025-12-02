@@ -335,15 +335,21 @@ def _collect_mary_events_from_facts(facts: Dict[str, any]) -> Dict[str, str]:
     if not isinstance(facts, dict):
         return eventos
 
-    # ---- Formato plano: mary.evento.xyz ----
+    # ---- Formato plano: mary.evento.xyz ou mary.eventos.xyz ----
     for k, v in facts.items():
         if not isinstance(k, str):
             continue
-        if not k.startswith("mary.evento."):
-            continue
         if not v:
             continue
-        label = k.replace("mary.evento.", "", 1)
+
+        if k.startswith("mary.evento."):
+            label = k.replace("mary.evento.", "", 1)
+        elif k.startswith("mary.eventos."):
+            # compat: versões antigas com "eventos" no plural
+            label = k.replace("mary.eventos.", "", 1)
+        else:
+            continue
+
         eventos[label] = str(v)
 
     # ---- Formato aninhado: facts["mary"]["evento"][label] ----
