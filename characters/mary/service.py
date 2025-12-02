@@ -1113,7 +1113,7 @@ class MaryService(BaseCharacter):
         except Exception:
             return ""
 
-        def _build_memory_pin(self, usuario_key: str, user_display: str) -> str:
+    def _build_memory_pin(self, usuario_key: str, user_display: str) -> str:
         """
         Memória canônica curta + pistas fortes (não exceder).
 
