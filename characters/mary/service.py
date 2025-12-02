@@ -1183,6 +1183,22 @@ class MaryService(BaseCharacter):
 
             blocos.append("; ".join(detalhes))
 
+        # --- INÍCIO DA CORREÇÃO: Inclusão do texto completo do evento de gravidez na MEMÓRIA_PIN ---
+        if gravida:
+            # preg_events já está disponível na linha 1124
+            eventos_gravidez = sorted(preg_events.items(), key=lambda item: item[0], reverse=True)
+            texto_gravidez = ""
+            if eventos_gravidez:
+                # Pega o conteúdo do evento mais recente
+                texto_gravidez = eventos_gravidez[0][1]
+            
+            # Adiciona o texto completo do evento de gravidez ao bloco de memória
+            if texto_gravidez:
+                # Limpa quebras de linha e espaços extras para manter o formato de PIN
+                texto_gravidez_limpo = " ".join(texto_gravidez.split())
+                blocos.append(f"DETALHE_GRAVIDEZ: {texto_gravidez_limpo}")
+        # --- FIM DA CORREÇÃO ---
+
         ent_line = _entities_to_line(f)
         if ent_line and ent_line != "—":
             blocos.append(f"entidades=({ent_line})")
