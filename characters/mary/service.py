@@ -1508,7 +1508,7 @@ class MaryService(BaseCharacter):
         s = " | ".join(reversed(snippets))[:max_chars]
         return s
 
-    # ===== Sidebar (somente leitura) =====
+     # ===== Sidebar (somente leitura) =====
     def render_sidebar(self, container) -> None:
         container.markdown(
             "**Mary — Esposa Cúmplice** • Respostas sensuais (do sutil ao explícito, conforme preferências); "
@@ -1574,24 +1574,80 @@ class MaryService(BaseCharacter):
                     if len(vs) > 120:
                         vs = vs[:120] + "..."
                     st.write(f"- **{k}** = {vs}")
-        
-    if container.button("🔄 Reset REAL da Mary"):
-        from core.repositories import delete_fact
-        user = _current_user_key()
-    
-        delete_fact(user, "mary.rs.v2")
-        delete_fact(user, "mary.rs.v2.ts")
-    
-        # limpa eventos
-        facts = cached_get_facts(user) or {}
-        for k in list(facts.keys()):
-            if k.startswith("mary.evento."):
-                delete_fact(user, k)
-    
-        clear_user_cache(user)
-        _SERVICE_CACHE.clear()
-        st.success("Mary resetada COMPLETAMENTE (RAM + DB + resumo).")
-        st.experimental_rerun()
+
+        # ============================
+        # 🧠 Memórias fixas de Mary
+        # ============================
+        with container.expander("🧠 Memórias fixas de Mary", expanded=True):
+            try:
+                f_all = cached_get_facts(usuario_key) or {}
+            except Exception:
+                f_all = {}
+
+            eventos = _collect_mary_events_from_facts(f_all)
+
+            # também considera o que acabou de ser salvo nesta sessão
+            last_key = st.session_state.get("last_saved_mary_event_key", "")
+            last_val = st.session_state.get("last_saved_mary_event_val", "")
+            if last_key:
+                short = last_key.replace("mary.evento.", "")
+                if short not in eventos:
+                    eventos[short] = last_val or "(salvo nesta sessão; aguardando backend)"
+
+            if not eventos:
+                container.caption(
+                    "Nenhuma memória salva ainda.\n"
+                    "Ex.: **Mary, use sua ferramenta de memória para registrar o fato: ...**"
+                )
+            else:
+                for label, val in sorted(eventos.items()):
+                    container.markdown(f"**{label}**")
+                    container.caption(val[:280] + ("..." if len(val) > 280 else ""))
+
+                    col1, col2 = container.columns([1, 1])
+                    with col1:
+                        # botão apagar (só funciona se seu repo tiver delete_fact)
+                        if container.button("🗑 Apagar", key=f"del_{usuario_key}_{label}"):
+                            try:
+                                from core.repositories import delete_fact
+                            except Exception:
+                                delete_fact = None
+
+                            if delete_fact:
+                                # tenta apagar nos dois formatos
+                                delete_fact(usuario_key, f"mary.evento.{label}")
+                                delete_fact(usuario_key, f"mary.eventos.{label}")
+                            clear_user_cache(usuario_key)
+                            container.success(f"Memória **{label}** apagada.")
+                            st.experimental_rerun()
+                    with col2:
+                        container.caption(f"mary.evento.{label}")
+
+        # ============================
+        # 🔄 Reset REAL da Mary
+        # ============================
+        if container.button("🔄 Reset REAL da Mary"):
+            try:
+                from core.repositories import delete_fact
+            except Exception:
+                delete_fact = None
+
+            user = _current_user_key()
+
+            if delete_fact:
+                # limpa resumo rolante
+                delete_fact(user, "mary.rs.v2")
+                delete_fact(user, "mary.rs.v2.ts")
+
+                # limpa eventos mary.evento.*
+                facts = cached_get_facts(user) or {}
+                for k in list(facts.keys()):
+                    if str(k).startswith("mary.evento."):
+                        delete_fact(user, k)
+
+            clear_user_cache(user)
+            container.success("Mary resetada COMPLETAMENTE (resumo + eventos fixos) para este usuário.")
+            st.experimental_rerun()
 
 
         # ============================
