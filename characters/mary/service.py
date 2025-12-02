@@ -88,62 +88,31 @@ TOOLS = [
 # ==============================================
 def _current_user_key() -> str:
     """
-    Chave interna de usuário para Mary.
-
-    IMPORTANTE:
-    - Mantém o padrão antigo `<user_id>::mary`, que é o mesmo que o main.py
-      usa para boot da primeira mensagem, auto-seed etc.
-    - Isso garante que a primeira resposta enxergue a fala inicial salva
-      em get_history_docs(...).
+    Deriva a chave interna de usuário **compatível com o restante do app**.
+    Para Mary, a chave padrão é "<user_id>::mary".
+    Isso precisa bater com o que o main.py usa em save_interaction / set_fact.
     """
-    uid = (st.session_state.get("user_id")
-           or st.session_state.get("usuario")
-           or "").strip()
-    if not uid:
-        return "anon::mary"
+    uid = (
+        st.session_state.get("user_id")
+        or st.session_state.get("usuario")
+        or ""
+    )
+    uid = str(uid).strip() or "anon"
+    # Compatível com o service antigo e com o main.py
     return f"{uid}::mary"
 
 
-def _legacy_user_key() -> str:
-    """
-    Chave usada na versão nova anterior (`user::<uid>`).
-    Mantemos só para conseguir ler/migrar dados que tenham sido gravados assim.
-    """
-    uid = (st.session_state.get("user_id")
-           or st.session_state.get("usuario")
-           or "").strip()
-    if not uid:
-        return "user::anon"
-    return f"user::{uid}"
-
-
 def cached_get_facts(usuario_key: str) -> Dict[str, any]:
+    """
+    Cache leve em session_state para facts da Mary.
+    """
     cache_key = f"facts::{usuario_key}"
     if cache_key in st.session_state:
         return st.session_state[cache_key]
-
-    # 1ª tentativa: chave canônica `<uid>::mary`
     try:
         f = get_facts(usuario_key) or {}
     except Exception:
         f = {}
-
-    # Se não achou nada e for Mary, tenta chave legada `user::<uid>`
-    if not f and usuario_key.endswith("::mary"):
-        try:
-            f_legacy = get_facts(_legacy_user_key()) or {}
-        except Exception:
-            f_legacy = {}
-
-        # Se tiver algo legado, tenta migrar para a chave nova
-        if f_legacy:
-            try:
-                for k, v in f_legacy.items():
-                    set_fact(usuario_key, k, v, {"fonte": "migrado_legacy"})
-                f = get_facts(usuario_key) or f_legacy
-            except Exception:
-                f = f_legacy
-
     st.session_state[cache_key] = f
     return f
 
@@ -162,23 +131,17 @@ def clear_user_cache(usuario_key: str):
 
 
 def cached_get_history(usuario_key: str):
+    """
+    Cache para histórico bruto (docs do Mongo) usando
+    a mesma chave interna "<user_id>::mary".
+    """
     hk = f"history::{usuario_key}"
     if hk in st.session_state:
         return st.session_state[hk]
-
-    # 1ª tentativa: chave canônica
     try:
         docs = get_history_docs(usuario_key) or []
     except Exception:
         docs = []
-
-    # Se não achou nada e for Mary, tenta histórico legado
-    if not docs and usuario_key.endswith("::mary"):
-        try:
-            docs = get_history_docs(_legacy_user_key()) or []
-        except Exception:
-            pass
-
     st.session_state[hk] = docs
     return docs
 
