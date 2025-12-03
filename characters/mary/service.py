@@ -305,19 +305,14 @@ def _entities_to_line(f: Dict[str, Any]) -> str:
 
 
 def _extract_and_store_entities(usuario_key: str, user_text: str, assistant_text: str) -> None:
-    try:
-        txt = f"{user_text}\n{assistant_text}"
-        txt_low = txt.lower()
-        nomes = []
-        for nome in ["carlos", "beatriz", "laura", "ricardo", "janio", "mary"]:
-            if nome in txt_low:
-                nomes.append(nome)
-        for nome in nomes:
-            k = f"mary.ent.{nome}"
-            set_fact(usuario_key, k, nome.capitalize(), {"fonte": "auto_entidade"})
-        clear_user_cache(usuario_key)
-    except Exception:
-        return
+    """
+    [DEPRECATED] Extração antiga de entidades por lista fixa de nomes.
+    Mantida apenas como stub para compatibilidade.
+    A lógica principal de entidades agora é feita pela ferramenta `register_entity`,
+    chamada diretamente pela Mary via Tool Calling quando encontra pessoas relevantes.
+    """
+    return
+
 
 
 # ==============================================
@@ -457,6 +452,15 @@ ESTILO_DE_RESPOSTA:
 - Se o usuário pedir mudança brusca de cenário/tempo, negocie dentro da narrativa ou marque como "salto temporal" de forma suave, sem apagar o passado.
 
 IMPORTANTE:
+- Quando perceber que uma nova pessoa se tornou importante e recorrente na história
+  (por exemplo, novo parceiro, amante, ex, médica, amiga próxima, rival),
+  use a ferramenta `register_entity` para registrar essa pessoa:
+  - name: nome completo ou forma como Mary chama essa pessoa.
+  - role: papel na vida da Mary (parceiro, amante, ex, médica, amiga, rival).
+  - description: 1 a 3 frases explicando quem é essa pessoa e por que importa.
+- Não use `register_entity` para pessoas citadas só de passagem ou que não devem
+  voltar em cenas futuras.
+
 - Use as memórias fixas (EVENTOS_FIXOS_MARY e MEMÓRIA_PIN) como FONTE DE VERDADE para fatos importantes
   (por exemplo, gravidez, traições, decisões marcantes, mudanças de estado do casal).
 - Quando perceber que aconteceu um EVENTO CANÔNICO importante, chame a ferramenta `save_event`:
@@ -683,7 +687,7 @@ class MaryService(BaseCharacter):
                     pass
                 return f"OK: {k}={v}"
 
-            if name == "save_event":
+                        if name == "save_event":
                 label = ""
                 content = ""
                 if isinstance(args, dict):
@@ -711,10 +715,48 @@ class MaryService(BaseCharacter):
                     pass
                 return f"OK: salvo em {fact_key}"
 
+            # <<< A PARTIR DAQUI É O NOVO BLOCO >>>
+            if name == "register_entity":
+                ent_name = ""
+                ent_role = ""
+                desc = ""
+
+                if isinstance(args, dict):
+                    ent_name = (args.get("name") or "").strip()
+                    ent_role = (args.get("role") or "").strip().lower()
+                    desc = (args.get("description") or "").strip()
+
+                if not ent_name:
+                    return "ERRO: nome da entidade não informado."
+
+                # Slug simples para montar a chave na memória
+                slug = re.sub(r"[^a-z0-9]+", "_", ent_name.lower()).strip("_") or "entidade"
+                base = f"mary.ent.{slug}"
+
+                # Nome “bonitinho” armazenado
+                set_fact(usuario_key, f"{base}.nome", ent_name, {"fonte": "auto_entidade"})
+
+                # Papel (parceiro, médica, rival, etc.)
+                if ent_role:
+                    set_fact(usuario_key, f"{base}.papel", ent_role, {"fonte": "auto_entidade"})
+
+                # Descrição opcional
+                if desc:
+                    set_fact(usuario_key, f"{base}.descricao", desc, {"fonte": "auto_entidade"})
+
+                try:
+                    clear_user_cache(usuario_key)
+                except Exception:
+                    pass
+
+                return f"OK: entidade registrada em {base}"
+            # <<< FIM DO BLOCO NOVO >>>
+
             return f"ERRO: ferramenta desconhecida: {name}"
 
         except Exception as e:
             return f"ERRO: {e}"
+
 
     def reply(self, user: str, model: str) -> str:
         prompt = self._get_user_prompt()
