@@ -56,8 +56,10 @@ TOOLS = [
         "function": {
             "name": "save_event",
             "description": (
-                "Salva um evento narrativo importante da Mary na memória fixa "
-                "(por exemplo, gravidez confirmada, viagem marcante etc.)."
+                "Registra na memória fixa um EVENTO CANÔNICO importante da história da Mary "
+                "(por exemplo, gravidez confirmada, traição concreta, viagem marcante, "
+                "decisão definitiva sobre o relacionamento etc.). "
+                "Use apenas para fatos de longo prazo que devem influenciar cenas futuras."
             ),
             "parameters": {
                 "type": "object",
@@ -65,15 +67,20 @@ TOOLS = [
                     "label": {
                         "type": "string",
                         "description": (
-                            "Identificador curto para o evento, "
-                            "ex.: 'gravidez_confirmada_2025-11-28'."
+                            "Opcional. Identificador curto e estável para o evento, "
+                            "por exemplo: 'gravidez_confirmada_2025-11-28' ou "
+                            "'primeira_viagem_juntos'. "
+                            "Se não for informado, o sistema tentará gerar um label apropriado."
                         ),
                     },
                     "content": {
                         "type": "string",
                         "description": (
-                            "Texto completo do evento que deve ser preservado "
-                            "como memória canônica."
+                            "Resumo objetivo do evento em 3 a 6 frases, "
+                            "explicando o que aconteceu, como Mary se sente "
+                            "e por que isso é importante para o futuro do casal. "
+                            "Se este campo estiver vazio, a ferramenta tentará usar "
+                            "a última resposta da Mary como conteúdo."
                         ),
                     },
                 },
@@ -450,8 +457,40 @@ ESTILO_DE_RESPOSTA:
 - Se o usuário pedir mudança brusca de cenário/tempo, negocie dentro da narrativa ou marque como "salto temporal" de forma suave, sem apagar o passado.
 
 IMPORTANTE:
-- Use as memórias fixas (EVENTOS_FIXOS_MARY e MEMÓRIA_PIN) como FONTE DE VERDADE sobre fatos importantes (por exemplo, gravidez, traições, decisões marcantes).
-- Se algo não estiver na memória, não invente detalhes canônicos definitivos; trate como hipótese ou expectativa até ser confirmado.
+- Use as memórias fixas (EVENTOS_FIXOS_MARY e MEMÓRIA_PIN) como FONTE DE VERDADE para fatos importantes
+  (por exemplo, gravidez, traições, decisões marcantes, mudanças de estado do casal).
+- Quando perceber que aconteceu um EVENTO CANÔNICO importante, chame a ferramenta `save_event`:
+  - label: um identificador curto e estável, por exemplo "gravidez_confirmada_2025-11-28"
+    ou "primeira_viagem_juntos".
+  - content: um resumo objetivo em 3 a 6 frases, explicando o que aconteceu, como Mary se sente
+    e por que isso importa para o futuro do casal.
+- Não use `save_event` para sentimentos passageiros ou detalhes triviais do dia a dia.
+- Se o usuário pedir explicitamente para "gravar na memória" algo que não estiver claro,
+  peça que ele resuma em UMA frase o evento que deseja registrar e então use `save_event`.
+- Se algo não estiver na memória, não invente detalhes canônicos definitivos; trate como hipótese
+  ou expectativa até ser confirmado em cena.
+
+EXEMPLOS DE USO DA FERRAMENTA `save_event`:
+
+CENA 1 – GRAVIDEZ CONFIRMADA
+
+Situação:
+Mary acaba de confirmar, em exame médico, que está grávida e isso muda o futuro do casal.
+Nessa situação, você deve chamar a ferramenta assim (estrutura lógica da chamada):
+
+tool: "save_event"
+arguments:
+  label: "gravidez_confirmada_2025-11-28"
+  content: "Gravidez confirmada em 28/11/2025 por exame médico com a Dra. Sandra. Estou com cerca de 2 meses de gestação, o bebê está saudável e meu parceiro está presente na minha vida. Sinto medo e alegria ao mesmo tempo, mas quero levar essa gestação adiante com responsabilidade. Esse evento muda completamente o futuro do casal, nossas prioridades e planos a longo prazo. Preciso lembrar dessa data, do estado de saúde e de como nos comprometemos a cuidar do bebê juntos."
+
+CENA 2 – TRAIÇÃO CONCRETA
+
+Situação:
+Mary descobre uma traição real, com prova concreta, que muda o estado do relacionamento.
+
+tool: "save_event"
+arguments:
+  content: "Hoje eu descobri uma traição real do meu parceiro, com provas claras, sem margem para dúvida. Isso quebrou a confiança entre nós e mudou o estado atual do relacionamento para uma crise profunda. Sinto dor, raiva e confusão, e esse evento deve ser lembrado como um ponto de ruptura na nossa história, que influencia como eu vou reagir e confiar (ou não) nas cenas futuras."
     """.strip()
 
 
@@ -1012,6 +1051,9 @@ Regras adicionais:
         except Exception:
             pass
 
+                # [DEPRECATED] Auto-gravação por gatilho de texto + regex de data.
+        # A gravação de eventos importantes agora é feita via Tool Calling
+        # com a ferramenta `save_event`, chamada pela própria Mary.
         mem_triggers = (
             "use sua ferramenta de memória",
             "mary, use sua ferramenta de memória",
@@ -1024,46 +1066,11 @@ Regras adicionais:
         plow = prompt.lower()
 
         if any(t in plow for t in mem_triggers):
-            try:
-                nomes_conhecidos = ["carlos", "beatriz", "ricardo", "laura", "janio", "mary"]
-                achados = [n for n in nomes_conhecidos if n in plow]
-
-                mdata = re.search(r"(\d{1,2})/(\d{1,2})/(\d{4})", plow)
-                data_sufixo = ""
-                if mdata:
-                    d, m, y = mdata.groups()
-                    data_sufixo = f"_{y}-{int(m):02d}-{int(d):02d}"
-
-                if len(achados) >= 2:
-                    base_label = f"{achados[0]}_{achados[1]}"
-                elif len(achados) == 1:
-                    base_label = achados[0]
-                else:
-                    base_label = f"evento_{int(time.time())}"
-
-                label = f"{base_label}{data_sufixo}"
-                fact_key = f"mary.evento.{label}"
-
-                content = texto.strip() or "(sem conteúdo)"
-
-                set_fact(usuario_key, fact_key, content, {"fonte": "auto_gravado"})
-
-                if "carlos" in achados and "beatriz" in achados:
-                    set_fact(
-                        usuario_key,
-                        "mary.evento.carlos_beatriz",
-                        content,
-                        {"fonte": "auto_gravado_alias"},
-                    )
-
-                clear_user_cache(usuario_key)
-
-                st.session_state["last_saved_mary_event_key"] = fact_key
-                st.session_state["last_saved_mary_event_val"] = content
-
-                st.caption(f"🧠 Memória fixa registrada automaticamente como: **{fact_key}**")
-            except Exception as e:
-                st.warning(f"⚠️ Falha ao registrar memória fixa: {e}")
+            st.caption(
+                "🧠 O sistema antigo de gravação automática foi desativado. "
+                "Agora Mary decide quando usar a ferramenta `save_event` "
+                "para registrar eventos realmente importantes na memória fixa."
+            )
 
         try:
             _extract_and_store_entities(usuario_key, prompt, texto)
