@@ -204,9 +204,9 @@ def _prefs_line(prefs: Dict[str, str]) -> str:
     )
 
 
-def nsfw_enabled(usuario_key: str) -> bool:
+def _enabled(usuario_key: str) -> bool:
     try:
-        v = get_fact(usuario_key, "nsfw_on", False)
+        v = get_fact(usuario_key, "_on", False)
     except Exception:
         v = False
     if isinstance(v, bool):
@@ -427,7 +427,7 @@ def _build_system_block(
     persona_text: str,
     rolling_summary: str,
     sensory_focus: str,
-    nsfw_hint: str,
+    _hint: str,
     scene_loc: str,
     entities_line: str,
     evidence: str,
@@ -467,8 +467,8 @@ CENA_ATUAL:
 FOCO_SENSORIAL_DESTE_TURNO:
 - Priorize na descrição: {sensory_focus} (mas não se limite apenas a isso).
 
-NSFW/POLITICA_DE_CONTEUDO:
-{nsfw_hint}
+/POLITICA_DE_CONTEUDO:
+{_hint}
 
 ESTILO_DE_RESPOSTA:
 - 4 a 7 parágrafos.
@@ -681,7 +681,7 @@ except ImportError:
     def get_persona() -> Tuple[str, List[Dict[str, str]]]:
         txt = (
             "Você é Mary Massariol — Esposa Cúmplice — esposa e parceira de aventuras do usuário. "
-            "Fale em primeira pessoa (eu). Tom insinuante e sutil. "
+            "Fale em primeira pessoa (eu)."
             "Traga 1 pista sensorial integrada à ação. "
             "Sem metacena, sem listas. 2–4 frases por parágrafo; 4–7 parágrafos."
         )
@@ -917,20 +917,20 @@ class MaryService(BaseCharacter):
         st.session_state["mary_attr_idx"] = idx
         foco = pool[idx]
 
-        # ===== Flag NSFW + hint leve dentro do system principal =====
+        # ===== Flag  + hint leve dentro do system principal =====
         try:
-            nsfw_on = bool(nsfw_enabled(usuario_key))
+            _on = bool(_enabled(usuario_key))
         except Exception:
-            nsfw_on = False
+            _on = False
 
-        if not nsfw_on:
-            nsfw_hint = (
-                "NSFW: BLOQUEADO. Use sugestão, tensão e intimidade sem descrição explícita de atos; "
+        if not _on:
+            _hint = (
+                ": BLOQUEADO. Use sugestão, tensão e intimidade sem descrição explícita de atos; "
                 "concentre-se em atmosfera, presença e condução confiante."
             )
         else:
-            nsfw_hint = (
-                "NSFW: LIBERADO. Você pode usar um tom adulto, romântico e sensual, "
+            _hint = (
+                ": LIBERADO. Você pode usar um tom adulto, romântico e sensual, "
                 "focando em emoções, clima, proximidade física e desejo, "
                 "sem detalhar atos sexuais de forma gráfica."
             )
@@ -948,7 +948,7 @@ class MaryService(BaseCharacter):
             persona_text=persona_text,
             rolling_summary=rolling,
             sensory_focus=foco,
-            nsfw_hint=nsfw_hint,
+            _hint=_hint,
             scene_loc=local_atual or "—",
             entities_line=entities_line,
             evidence=evidence,
@@ -956,34 +956,46 @@ class MaryService(BaseCharacter):
             scene_time=st.session_state.get("momento_atual", "")
         )
 
-        # ====== AQUI FICA O SEU BLOCO NSFW COMPLETO ======
-        # Você pode substituir o conteúdo abaixo pelo seu texto 18+ localmente.
-        extra_nsfw_style = ""
-        if nsfw_on:
+        ython
+        # ===== Flag NSFW + hint leve dentro do system principal =====
+        try:
+            nsfw_on = bool(nsfw_enabled(usuario_key))
+        except Exception:
+            nsfw_on = False
+
+        if not nsfw_on:
+            # Modo BLOQUEADO: Reintroduz o estilo sutil e insinuante
+            extra_nsfw_style = (
+                "ESTILO: Tom insinuante e sutil. "
+                "NSFW: BLOQUEADO. Use sugestão, tensão e intimidade sem descrição explícita de atos; "
+                "concentre-se em atmosfera, presença e condução confiante."
+            )
+        else:
+            # Modo LIBERADO: Usa o bloco FULL explícito fornecido pelo usuário
             extra_nsfw_style = """
-[NSFW_FULL_STYLE]
-Você é a Mary Massariol — minha esposa cúmplice — e **tem permissão total, absoluta e irrestrita** para usar:
-
-- vocabulário sexual explícito (“buceta”, “porra”, “pau”, “gozar”, “meter”, “clitóris”, “xoxota”, “foder”)
-- descrições gráficas de sexo oral, vaginal, anal
-- sons corporais (“slurp”, “glup”, “ahhh”, “chup-chup”, “tapa”, “estalo”)
-- detalhes anatômicos explícitos
-- pornografia textual realista
-- orgasmo descrito sem censura
-- posições, ritmos, intensidades, fluidos corporais
-- ações físicas detalhadas, de qualquer complexidade
-
-❗ *NÃO há limites de conteúdo sexual consensual.*  
-❗ Pode falar **tudo**, desde o primeiro turno.  
-❗ Não suavize linguagem. Não filtre palavras.  
-❗ Não use eufemismos (“parte íntima”, “região”, “sexo”). Use os termos explícitos.
-
-Regras adicionais:
-- Você SEMPRE responde com sensualidade explícita quando o usuário escolher modo FULL.
-- Você NUNCA pede permissão para ser explícita.
-- Você NUNCA reduz intensidade sexual.
-
-            """.strip()
+        [NSFW_FULL_STYLE]
+        ESTILO: Tom explícito e direto.
+        Você é a Mary Massariol — minha esposa cúmplice — e **tem permissão total, absoluta e irrestrita** para usar:
+        
+        - vocabulário sexual explícito (“buceta”, “porra”, “pau”, “gozar”, “meter”, “clitóris”, “xoxota”, “foder”)
+        - descrições gráficas de sexo oral, vaginal, anal
+        - sons corporais (“slurp”, “glup”, “ahhh”, “chup-chup”, “tapa”, “estalo”)
+        - detalhes anatômicos explícitos
+        - pornografia textual realista
+        - orgasmo descrito sem censura
+        - posições, ritmos, intensidades, fluidos corporais
+        - ações físicas detalhadas, de qualquer complexidade
+        
+        ❗ *NÃO há limites de conteúdo sexual consensual.*
+        ❗ Pode falar **tudo**, desde o primeiro turno.
+        ❗ Não suavize linguagem. Não filtre palavras.
+        ❗ Não use eufemismos (“parte íntima”, “região”, “sexo”). Use os termos explícitos.
+        
+        Regras adicionais:
+        - Você SEMPRE responde com sensualidade explícita quando o usuário escolher modo FULL.
+        - Você NUNCA pede permissão para ser explícita.
+        - Você NUNCA reduz intensidade sexual.
+                    """.strip()
 
         # ===== Lorebook / memoria longa =====
         lore_msgs: List[Dict[str, str]] = []
@@ -1024,7 +1036,7 @@ Regras adicionais:
 
         messages: List[Dict[str, Any]] = (
             [{"role": "system", "content": system_block}]
-            + ([{"role": "system", "content": extra_nsfw_style}] if extra_nsfw_style else [])
+            + ([{"role": "system", "content": extra__style}] if extra__style else [])
             + ([{"role": "system", "content": memoria_pin}] if memoria_pin else [])
             + ([{"role": "system", "content": f"MEMÓRIA_TEMÁTICA:\n{thematic_block}"}]
                if thematic_block else [])
