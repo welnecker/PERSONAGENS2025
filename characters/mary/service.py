@@ -5,6 +5,7 @@ import time
 import random
 from typing import List, Dict, Tuple, Any
 import streamlit as st
+import logging
 
 from core.memoria_longa import topk as lore_topk, save_fragment as lore_save
 from core.ultra import critic_review, polish
@@ -17,6 +18,32 @@ from core.repositories import (
 from core.tokens import toklen
 import json
 from characters.registry import _SERVICE_CACHE
+
+logger = logging.getLogger(__name__)
+
+
+def _log_error(context: str, exc: Exception) -> None:
+    """
+    Loga erros de forma padronizada, tanto em log interno quanto (opcionalmente)
+    na interface Streamlit quando o modo debug estiver ativo.
+    """
+    msg = f"[MaryService][{context}] {type(exc).__name__}: {exc}"
+
+    # Log interno (stdout / log do servidor)
+    try:
+        logger.exception(msg)
+    except Exception:
+        # Evita que problemas de logging derrubem o app
+        pass
+
+    # Feedback visual opcional em modo debug
+    try:
+        if st.session_state.get("mary_debug_errors"):
+            st.error(msg)
+    except Exception:
+        # Se o Streamlit não estiver pronto ou fora de contexto, ignora
+        pass
+
 
 # Garantir que o cache de serviços seja limpo ao recarregar este módulo
 _SERVICE_CACHE.clear()
@@ -687,35 +714,10 @@ class MaryService(BaseCharacter):
                     pass
                 return f"OK: {k}={v}"
 
-                        if name == "save_event":
-                label = ""
-                content = ""
-                if isinstance(args, dict):
-                    label = (args.get("label") or "").strip()
-                    content = (args.get("content") or "").strip()
-
-                if not content:
-                    content = st.session_state.get("last_assistant_message", "").strip()
-
-                if not content:
-                    return "ERRO: nenhum conteúdo para salvar."
-
-                if not label:
-                    low = content.lower()
-                    if "carlos" in low and "beatriz" in low:
-                        label = "carlos_beatriz"
-                    else:
-                        label = f"evento_{int(time.time())}"
-
-                fact_key = f"mary.evento.{label}"
-                set_fact(usuario_key, fact_key, content, {"fonte": "tool_call"})
-                try:
-                    clear_user_cache(usuario_key)
-                except Exception:
-                    pass
+            if name == "save_event":
+                ...
                 return f"OK: salvo em {fact_key}"
 
-            # <<< A PARTIR DAQUI É O NOVO BLOCO >>>
             if name == "register_entity":
                 ent_name = ""
                 ent_role = ""
@@ -746,16 +748,17 @@ class MaryService(BaseCharacter):
 
                 try:
                     clear_user_cache(usuario_key)
-                except Exception:
-                    pass
+                except Exception as e:
+                    _log_error("exec_tool_call.clear_user_cache(register_entity)", e)
 
                 return f"OK: entidade registrada em {base}"
-            # <<< FIM DO BLOCO NOVO >>>
 
             return f"ERRO: ferramenta desconhecida: {name}"
 
         except Exception as e:
-            return f"ERRO: {e}"
+            _log_error("exec_tool_call", e)
+            return f"ERRO: {type(e).__name__}: {e}"
+
 
 
     def reply(self, user: str, model: str) -> str:
@@ -803,10 +806,12 @@ class MaryService(BaseCharacter):
                 }
 
             except Exception as e:
+                _log_error("reset_history_session", e)
                 return (
                     "⚠️ Erro ao resetar histórico desta sessão.\n"
-                    f"Detalhe técnico: {e}"
+                    f"Detalhe técnico: {type(e).__name__}: {e}"
                 )
+
 
             return (
                 "🧹 **Histórico de diálogo e resumo rolante de Mary foram zerados APENAS para esta sessão.**\n"
@@ -1069,13 +1074,15 @@ Regras adicionais:
                     st.caption(f"  ✓ {func_name}: {result[:50]}...")
 
                 except Exception as e:
-                    error_msg = f"ERRO ao executar {func_name}: {str(e)}"
+                    _log_error(f"tool_exec::{func_name}", e)
+                    error_msg = f"ERRO ao executar {func_name}: {type(e).__name__}: {e}"
                     messages.append({
                         "role": "tool",
                         "tool_call_id": tool_id,
                         "content": error_msg
                     })
                     st.warning(f"⚠️ {error_msg}")
+
 
         if iteration >= max_iterations and st.session_state.get("tool_calling_on", False):
             st.warning("⚠️ Limite de iterações de Tool Calling atingido. Resposta pode estar incompleta.")
@@ -1116,19 +1123,14 @@ Regras adicionais:
 
         try:
             _extract_and_store_entities(usuario_key, prompt, texto)
-        except Exception:
-            pass
+        except Exception as e:
+            _log_error("reply.extract_and_store_entities", e)
 
         try:
             self._update_rolling_summary_v2(usuario_key, model, prompt, texto)
-        except Exception:
-            pass
+        except Exception as e:
+            _log_error("reply.update_rolling_summary_v2", e)
 
-        try:
-            frag = f"[USER] {prompt}\n[MARY] {texto}"
-            lore_save(usuario_key, frag, tags=["mary", "chat"])
-        except Exception:
-            pass
 
         try:
             ph = self._suggest_placeholder(texto, local_atual)
