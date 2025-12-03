@@ -3,13 +3,13 @@ from __future__ import annotations
 import re
 import time
 import random
-from typing import List, Dict, Tuple
+from typing import List, Dict, Tuple, Any
 import streamlit as st
 
 from core.memoria_longa import topk as lore_topk, save_fragment as lore_save
 from core.ultra import critic_review, polish
 from core.common.base_service import BaseCharacter
-from core.service_router import route_chat_strict, list_models, available_providers
+from core.service_router import route_chat_strict, list_models
 from core.repositories import (
     save_interaction, get_history_docs,
     get_facts, get_fact, last_event, set_fact
@@ -17,11 +17,12 @@ from core.repositories import (
 from core.tokens import toklen
 import json
 from characters.registry import _SERVICE_CACHE
+
+# Garantir que o cache de serviços seja limpo ao recarregar este módulo
 _SERVICE_CACHE.clear()
 
 
 # === Tool Calling: definição de ferramentas disponíveis para a Mary ===
-# Você pode ampliar livremente esta lista conforme precisar.
 TOOLS = [
     {
         "type": "function",
@@ -98,11 +99,10 @@ def _current_user_key() -> str:
         or ""
     )
     uid = str(uid).strip() or "anon"
-    # Compatível com o service antigo e com o main.py
     return f"{uid}::mary"
 
 
-def cached_get_facts(usuario_key: str) -> Dict[str, any]:
+def cached_get_facts(usuario_key: str) -> Dict[str, Any]:
     """
     Cache leve em session_state para facts da Mary.
     """
@@ -149,17 +149,21 @@ def cached_get_history(usuario_key: str):
 # ==============================================
 # 2) Preferências do usuário (sexo, ritmo, etc.)
 # ==============================================
-def _read_prefs(facts: Dict[str, any]) -> Dict[str, str]:
+def _read_prefs(facts: Dict[str, Any]) -> Dict[str, str]:
     """
     Lê as preferências salvas para Mary.
-    Exemplo de fato salvo:
+
+    Como você removeu o menu de preferências da sidebar,
+    aqui usamos defaults agressivos (modo A) e, se existirem,
+    valores salvos em facts:
+
       - "mary.pref.nivel_sensual" = "sutil" | "media" | "alta"
       - "mary.pref.ritmo"         = "lento" | "normal" | "rapido"
       - "mary.pref.tamanho"       = "curta" | "media" | "longa"
     """
-    nivel = facts.get("mary.pref.nivel_sensual", "sutil") or "sutil"
-    ritmo = facts.get("mary.pref.ritmo", "normal") or "normal"
-    tamanho = facts.get("mary.pref.tamanho", "media") or "media"
+    nivel = facts.get("mary.pref.nivel_sensual") or "alta"
+    ritmo = facts.get("mary.pref.ritmo") or "rapido"
+    tamanho = facts.get("mary.pref.tamanho") or "longa"
     return {
         "nivel_sensual": str(nivel),
         "ritmo": str(ritmo),
@@ -189,7 +193,6 @@ def nsfw_enabled(usuario_key: str) -> bool:
 # ==============================================
 # 3) Tamanho de contexto por modelo (janela)
 # ==============================================
-# Janela padrão se não conhecer o modelo:
 _DEFAULT_WINDOW = 16000
 
 
@@ -198,7 +201,6 @@ def _get_window_for(model_id: str) -> int:
         return _DEFAULT_WINDOW
 
     m = model_id.lower().strip()
-    # Exemplos: você pode adaptar conforme seus modelos
     if "deepseek-r1" in m or "deepseek-reasoner" in m:
         return 128000
     if "deepseek-chat" in m:
@@ -215,8 +217,6 @@ def _get_window_for(model_id: str) -> int:
         return 200000
     if "tng-r1t-chimera" in m:
         return 163840
-
-    # fallback
     return _DEFAULT_WINDOW
 
 
@@ -231,7 +231,6 @@ def _budget_slices(model_id: str) -> Tuple[int, int, int]:
     safety_budget: folga para resposta
     """
     win = _get_window_for(model_id)
-    # regra simples: 50% histórico, 20% meta, 30% folga
     hist = int(win * 0.5)
     meta = int(win * 0.2)
     safety = win - hist - meta
@@ -248,7 +247,6 @@ def _llm_summarize(model_id: str, text: str) -> str:
     if not text.strip():
         return ""
 
-    # fallback de modelo para resumo (algo barato/leve)
     candidates = [
         "together/Qwen/Qwen2.5-32B-Instruct",
         "together/meta-llama/Meta-Llama-3.1-8B-Instruct-Turbo",
@@ -262,7 +260,6 @@ def _llm_summarize(model_id: str, text: str) -> str:
                 use_model = c
                 break
         else:
-            # se nenhum estiver em list_models, usa o primeiro mesmo
             use_model = candidates[0]
 
     seed = (
@@ -292,13 +289,7 @@ def _llm_summarize(model_id: str, text: str) -> str:
 # ==============================================
 # 6) ENTIDADES (nomes, datas, etc.)
 # ==============================================
-def _entities_to_line(f: Dict[str, any]) -> str:
-    """
-    Converte fatos do tipo "mary.ent.*" em uma linha compacta.
-    Exemplo de fato:
-      - mary.ent.parceiro_nome = "Janio"
-      - mary.ent.amante_carlos = "Carlos"
-    """
+def _entities_to_line(f: Dict[str, Any]) -> str:
     ents = []
     for k, v in f.items():
         if not isinstance(k, str):
@@ -316,14 +307,9 @@ def _entities_to_line(f: Dict[str, any]) -> str:
 
 
 def _extract_and_store_entities(usuario_key: str, user_text: str, assistant_text: str) -> None:
-    """
-    Extrator super simples de entidades, só para exemplo.
-    Você pode evoluir com NER real depois.
-    """
     try:
         txt = f"{user_text}\n{assistant_text}"
         txt_low = txt.lower()
-        # Exemplos bobos só para ilustrar
         nomes = []
         for nome in ["carlos", "beatriz", "laura", "ricardo", "janio", "mary"]:
             if nome in txt_low:
@@ -339,19 +325,12 @@ def _extract_and_store_entities(usuario_key: str, user_text: str, assistant_text
 # ==============================================
 # 7) Eventos fixos (inclui gravidez, mas não só)
 # ==============================================
-def _collect_mary_events_from_facts(facts: Dict[str, any]) -> Dict[str, str]:
-    """
-    Coleta eventos de Mary em 2 formatos:
-      1) Chaves planas: "mary.evento.xyz": "..."
-      2) Estrutura aninhada: "mary": { "evento": { "xyz": "..." } }
-    Retorna dict label -> texto.
-    """
+def _collect_mary_events_from_facts(facts: Dict[str, Any]) -> Dict[str, str]:
     eventos: Dict[str, str] = {}
 
     if not isinstance(facts, dict):
         return eventos
 
-    # ---- Formato plano: mary.evento.xyz ou mary.eventos.xyz ----
     for k, v in facts.items():
         if not isinstance(k, str):
             continue
@@ -361,14 +340,12 @@ def _collect_mary_events_from_facts(facts: Dict[str, any]) -> Dict[str, str]:
         if k.startswith("mary.evento."):
             label = k.replace("mary.evento.", "", 1)
         elif k.startswith("mary.eventos."):
-            # compat: versões antigas com "eventos" no plural
             label = k.replace("mary.eventos.", "", 1)
         else:
             continue
 
         eventos[label] = str(v)
 
-    # ---- Formato aninhado: facts["mary"]["evento"][label] ----
     for mk in ("mary", "Mary"):
         mary_obj = facts.get(mk, {})
         if not isinstance(mary_obj, dict):
@@ -387,10 +364,7 @@ def _collect_mary_events_from_facts(facts: Dict[str, any]) -> Dict[str, str]:
     return eventos
 
 
-def _collect_pregnancy_events_from_facts(facts: Dict[str, any]) -> Dict[str, str]:
-    """
-    Extrai só eventos que parecem falar de gravidez.
-    """
+def _collect_pregnancy_events_from_facts(facts: Dict[str, Any]) -> Dict[str, str]:
     eventos = _collect_mary_events_from_facts(facts)
     preg_events: Dict[str, str] = {}
     for label, txt in eventos.items():
@@ -400,25 +374,14 @@ def _collect_pregnancy_events_from_facts(facts: Dict[str, any]) -> Dict[str, str
     return preg_events
 
 
-def _derive_pregnancy_from_events(eventos: Dict[str, str]) -> Dict[str, any]:
-    """
-    A partir dos textos de eventos, tenta derivar:
-      - gravida: bool
-      - gravidez.meses
-      - gravidez.semanas
-      - gravidez.data_confirma
-    Estratégia simplificada.
-    """
+def _derive_pregnancy_from_events(eventos: Dict[str, str]) -> Dict[str, Any]:
     if not eventos:
         return {}
 
-    # Pega o "último" evento pela ordenação do label.
-    # Se o label tiver data tipo mary_2025-12-01 ou ..._2025-11-26,
-    # a ordem alfabética costuma respeitar a ordem temporal.
     labels = sorted(eventos.keys())
     ultimo = eventos[labels[-1]].lower()
 
-    out: Dict[str, any] = {}
+    out: Dict[str, Any] = {}
     if any(w in ultimo for w in ["gravidez", "grávida", "teste positivo", "beta-hcg", "pré-natal", "ultrassom"]):
         out["gravida"] = True
 
@@ -430,12 +393,12 @@ def _derive_pregnancy_from_events(eventos: Dict[str, str]) -> Dict[str, any]:
     if m_sem:
         out["gravidez.semanas"] = m_sem.group(1)
 
-    # data simples tipo 26/11/2025
     m_data = re.search(r"(\d{1,2}/\d{1,2}/\d{4})", ultimo)
     if m_data:
         out["gravidez.data_confirma"] = m_data.group(1)
 
     return out
+
 
 # ==============================================
 # 8) BLOCO de sistema principal da Mary
@@ -451,9 +414,6 @@ def _build_system_block(
     prefs_line: str,
     scene_time: str = "",
 ) -> str:
-    """
-    System único que embute persona + resumo contínuo + preferências + memórias.
-    """
     return f"""
 Você é **Mary Massariol – Esposa Cúmplice**, personagem fixa em um roleplay contínuo com o usuário.
 
@@ -508,14 +468,9 @@ IMPORTANTE:
 # 9) Janela segura de saída
 # ==============================================
 def _safe_max_output(window_tokens: int, prompt_tokens: int) -> int:
-    """
-    Garante um limite de saída que não estoure a janela de contexto.
-    """
     if window_tokens <= 0:
         window_tokens = _DEFAULT_WINDOW
-    # deixa ~20% para segurança
     max_out = int(window_tokens * 0.3)
-    # se o prompt já comer quase tudo, reduz mais ainda
     if prompt_tokens > window_tokens * 0.8:
         max_out = int(window_tokens * 0.2)
     if max_out < 512:
@@ -526,7 +481,7 @@ def _safe_max_output(window_tokens: int, prompt_tokens: int) -> int:
 # ==============================================
 # 10) Aviso visual de “queda de memória”
 # ==============================================
-def _mem_drop_warn(report: Dict[str, any]):
+def _mem_drop_warn(report: Dict[str, Any]):
     if not report:
         return
     summarized = report.get("summarized_pairs", 0)
@@ -551,51 +506,39 @@ def _provider_for_model(mid: str) -> str:
     if m.startswith("together/"):
         return "Together"
     if "deepseek" in m:
-        return "OpenRouter"  # ou Together, conforme seu setup
+        return "OpenRouter"
     if "grok-4.1" in m or "tng-r1t-chimera" in m:
         return "OpenRouter"
     if "claude" in m:
         return "OpenRouter"
     if "qwen" in m or "llama-3" in m:
-        return "Together"  # ou OpenRouter — depende da sua configuração
+        return "Together"
     return "OpenRouter"
 
 
 def _robust_chat_call(
     model: str,
-    messages: List[Dict[str, any]],
+    messages: List[Dict[str, Any]],
     max_tokens: int,
     temperature: float,
     top_p: float,
     fallback_models: List[str] | None = None,
-    tools: List[Dict[str, any]] | None = None,
+    tools: List[Dict[str, Any]] | None = None,
 ):
-    """
-    Camada única de chamada de LLM com:
-      - roteamento automático via route_chat_strict
-      - failover para modelos alternativos
-      - suporte opcional a tools
-      - REASONING dinâmico para Grok e TNG-R1T-Chimera
-    """
     if fallback_models is None:
         fallback_models = []
 
-    used_model = model
-    provider = _provider_for_model(model)
-
-    def _build_body(mid: str) -> Dict[str, any]:
+    def _build_body(mid: str) -> Dict[str, Any]:
         low = (mid or "").lower()
-        extra: Dict[str, any] = {}
+        extra: Dict[str, Any] = {}
 
-        # GROK 4.1 Fast – reasoning opcional
         if "grok-4.1-fast" in low:
             extra["reasoning"] = {"effort": "medium"}
 
-        # TNG R1T Chimera – é um modelo R1T, tende a usar "think tokens"
         if "tng-r1t-chimera" in low:
             pass
 
-        body: Dict[str, any] = {
+        body: Dict[str, Any] = {
             "model": mid,
             "messages": messages,
             "max_tokens": max_tokens,
@@ -609,25 +552,21 @@ def _robust_chat_call(
             body["extra_body"] = extra
         return body
 
-    # 1ª tentativa: modelo principal
     try:
         body = _build_body(model)
         data, used_model, prov = route_chat_strict(model, body)
         return data, used_model, prov
     except Exception as e:
-        err_msg = str(e)
-        st.warning(f"⚠️ Modelo principal falhou ({model}): {err_msg}")
+        st.warning(f"⚠️ Modelo principal falhou ({model}): {e}")
 
-    # Tentativas de fallback
     for fb in fallback_models:
         try:
             body = _build_body(fb)
             data, used_model, prov = route_chat_strict(fb, body)
-            return data, fb, prov
+            return data, used_model, prov
         except Exception as e:
             st.warning(f"⚠️ Fallback falhou ({fb}): {e}")
 
-    # Se tudo falhar, devolve um shape mínimo
     return {
         "choices": [{
             "message": {
@@ -673,7 +612,7 @@ def _get_thematic_memories_for_tags(usuario_key: str, tags: List[str]) -> str:
 
 
 # ==============================================
-# Persona específica (ideal: characters/mary/persona.py)
+# Persona específica
 # ==============================================
 try:
     from .persona import get_persona  # -> Tuple[str, List[Dict[str,str]]]
@@ -696,10 +635,6 @@ class MaryService(BaseCharacter):
     display_name: str = "Mary"
 
     def _exec_tool_call(self, name: str, args: dict, usuario_key: str) -> str:
-        """
-        Executa uma ferramenta chamada pelo modelo.
-        Sempre retorna STRING, para ser usada como mensagem de `tool`.
-        """
         try:
             user_display = st.session_state.get("user_id", "") or ""
 
@@ -751,18 +686,16 @@ class MaryService(BaseCharacter):
         except Exception as e:
             return f"ERRO: {e}"
 
-    # ===== API =====
     def reply(self, user: str, model: str) -> str:
         prompt = self._get_user_prompt()
         if not prompt:
             return ""
 
         usuario_key = _current_user_key()
-
-        # COMANDOS DEBUG
         plow = prompt.strip().lower()
-                # ============================
-        # /reset historico  (apenas diálogo + resumo)
+
+        # ============================
+        # /reset historico
         # ============================
         if plow in (
             "/reset historico",
@@ -771,12 +704,9 @@ class MaryService(BaseCharacter):
             "/reset histórico mary",
         ):
             try:
-                # 1) Zera apenas HISTÓRICO em cache (docs de conversa),
-                #    sem apagar facts nem mary.evento.*
                 hk = f"history::{usuario_key}"
                 st.session_state[hk] = []
 
-                # 2) Zera resumo rolante v2 (mas não apaga eventos/canônicos)
                 set_fact(
                     usuario_key,
                     "mary.rs.v2",
@@ -790,10 +720,8 @@ class MaryService(BaseCharacter):
                     {"fonte": "reset_debug"},
                 )
 
-                # 3) Limpa cache leve para forçar reload limpo
                 clear_user_cache(usuario_key)
 
-                # 4) Atualiza relatório de memória para UI
                 hist_budget, meta_budget, safety_budget = _budget_slices(model)
                 st.session_state["_mem_drop_report"] = {
                     "summarized_pairs": 0,
@@ -872,7 +800,7 @@ class MaryService(BaseCharacter):
         except Exception:
             nsfw_on = False
 
-        nivel = prefs.get("nivel_sensual", "sutil")
+        nivel = prefs.get("nivel_sensual", "alta")
         if not nsfw_on:
             nsfw_hint = (
                 "NSFW: BLOQUEADO. Use sugestão, tensão e intimidade sem descrição explícita de atos; "
@@ -952,7 +880,7 @@ class MaryService(BaseCharacter):
         except Exception:
             eventos_block = ""
 
-        messages: List[Dict, ] = (
+        messages: List[Dict[str, Any]] = (
             [{"role": "system", "content": system_block}]
             + ([{"role": "system", "content": memoria_pin}] if memoria_pin else [])
             + ([{"role": "system", "content": f"MEMÓRIA_TEMÁTICA:\n{thematic_block}"}]
@@ -981,11 +909,11 @@ class MaryService(BaseCharacter):
         except Exception:
             prompt_tokens = 0
         base_out = _safe_max_output(win, prompt_tokens)
-        size = prefs.get("tamanho_resposta", "media")
+        size = prefs.get("tamanho_resposta", "longa")
         mult = 1.0 if size == "media" else (0.75 if size == "curta" else 1.4)
         max_out = max(512, int(base_out * mult))
 
-        ritmo = prefs.get("ritmo", "lento")
+        ritmo = prefs.get("ritmo", "rapido")
         temperature = 0.6 if ritmo == "lento" else (0.9 if ritmo == "rapido" else 0.7)
 
         fallbacks = [
@@ -1066,16 +994,6 @@ class MaryService(BaseCharacter):
                 texto = polish(model, system_block, prompt, texto, notes)
         except Exception:
             pass
-
-        try:
-            forgot_pat = re.compile(
-                r"\b(eu\s+n[ãa]o\s+(lembro|recordo)|"
-                r"n[ãa]o\s+me\s+lembro\s+mais|"
-                r"esqueci\s+o\s+que\s+est[aá]vamos\s+fazendo)\b",
-                re.I
-            )
-        except Exception:
-            forgot_pat = None
 
         try:
             save_interaction(usuario_key, prompt, texto, f"{provider}:{used_model}")
@@ -1198,25 +1116,16 @@ class MaryService(BaseCharacter):
             return ""
 
     def _build_memory_pin(self, usuario_key: str, user_display: str) -> str:
-        """
-        Memória canônica curta + pistas fortes (não exceder).
-
-        AGORA inclui também um mini-timeline textual dos eventos de gravidez,
-        usando exatamente as memórias fixas salvas (mary.evento.*),
-        para o modelo não tratar a gravidez como "hipótese".
-        """
         try:
             f = cached_get_facts(usuario_key) or {}
         except Exception:
             f = {}
 
-        # --- 1) eventos fixos (inclui gravidez, mas não só) ---
         try:
             eventos_todos = _collect_mary_events_from_facts(f)
         except Exception:
             eventos_todos = {}
 
-        # Eventos especificamente relacionados à gravidez
         try:
             preg_events = _collect_pregnancy_events_from_facts(f)
             preg_from_events = _derive_pregnancy_from_events(preg_events)
@@ -1226,17 +1135,14 @@ class MaryService(BaseCharacter):
 
         blocos: List[str] = []
 
-        # --- 2) parceiro / relação ---
         parceiro = f.get("parceiro_atual") or f.get("parceiro") or ""
         nome_usuario = (parceiro or user_display).strip()
         if parceiro:
             blocos.append(f"parceiro_atual={parceiro}")
 
-        # 🔴 Default agora é False (não assume casados se nada foi salvo)
         casados = bool(f.get("casados", False))
         blocos.append(f"casados={casados}")
 
-        # --- 3) gravidez como FATO CANÔNICO (sem engessar mês; lê dos eventos) ---
         raw_gravida = (
             preg_from_events.get("gravida")
             if "gravida" in preg_from_events
@@ -1278,31 +1184,24 @@ class MaryService(BaseCharacter):
 
             blocos.append("; ".join(detalhes))
 
-            # 🔎 Linha do tempo da gravidez – usa as memórias salvas, com texto real
             if preg_events:
                 linhas_tl: List[str] = []
-
-                # ordena por label (ex.: mary_2025-11-26, mary_2025-11-28, mary_2025-12-01)
                 for label, raw in sorted(preg_events.items()):
                     txt = str(raw or "")
-                    # compacta espaços e quebra em no máx ~220 chars
                     compact = " ".join(txt.split())
                     snippet = compact[:220]
                     linhas_tl.append(f"{label}: {snippet}")
 
-                # limita tamanho total pra não explodir o PIN
                 joined = " | ".join(linhas_tl)
                 if len(joined) > 800:
-                    joined = joined[-800:]  # guarda o fim, que tende a ser o mais recente
+                    joined = joined[-800:]
 
                 blocos.append(f"linha_do_tempo_gravidez={{ {joined} }}")
 
-        # --- 4) entidades gerais (club_name etc.) ---
         ent_line = _entities_to_line(f)
         if ent_line and ent_line != "—":
             blocos.append(f"entidades=({ent_line})")
 
-        # --- 5) primeira vez registrada, se existir ---
         try:
             ev = last_event(usuario_key, "primeira_vez")
         except Exception:
@@ -1325,7 +1224,6 @@ class MaryService(BaseCharacter):
         )
         return pin
 
-
     def _montar_historico(
         self,
         usuario_key: str,
@@ -1333,13 +1231,6 @@ class MaryService(BaseCharacter):
         model: str,
         verbatim_ultimos: int = 10,
     ) -> List[Dict[str, str]]:
-        """
-        Monta histórico usando orçamento por modelo:
-          - Últimos N turnos verbatim preservados.
-          - Antigos viram [RESUMO-*] em 1–3 camadas.
-          - Se necessário, poda verbatim mais antigo.
-        Além disso, grava um relatório em st.session_state['_mem_drop_report'].
-        """
         win = _get_window_for(model)
         hist_budget, meta_budget, _ = _budget_slices(model)
 
@@ -1409,7 +1300,7 @@ class MaryService(BaseCharacter):
 
         return msgs if msgs else history_boot[:]
 
-        # ===== Rolling summary helpers =====
+    # ===== Rolling summary helpers =====
     def _get_rolling_summary(self, usuario_key: str) -> str:
         try:
             f = cached_get_facts(usuario_key) or {}
@@ -1425,7 +1316,7 @@ class MaryService(BaseCharacter):
             now = time.time()
             if not last_summary:
                 return True
-            if now - last_update_ts > 300:  # 5 minutos
+            if now - last_update_ts > 300:
                 return True
             if (len(last_user) + len(last_assistant)) > 100:
                 return True
@@ -1440,13 +1331,9 @@ class MaryService(BaseCharacter):
         last_user: str,
         last_assistant: str
     ) -> None:
-        """
-        Atualiza o resumo rolante (mary.rs.v2) de forma INCREMENTAL.
-        """
         if not self._should_update_summary(usuario_key, last_user, last_assistant):
             return
 
-        # Carrega resumo anterior
         try:
             f = cached_get_facts(usuario_key) or {}
             resumo_anterior = str(f.get("mary.rs.v2", "") or "")
@@ -1494,7 +1381,6 @@ class MaryService(BaseCharacter):
                 set_fact(usuario_key, "mary.rs.v2.ts", time.time(), {"fonte": "auto_summary"})
                 clear_user_cache(usuario_key)
         except Exception:
-            # Se der erro, mantém o resumo anterior
             return
 
     # ===== Placeholder leve =====
@@ -1521,17 +1407,14 @@ class MaryService(BaseCharacter):
         s = " | ".join(reversed(snippets))[:max_chars]
         return s
 
-         # ===== Sidebar (somente leitura) =====
+    # ===== Sidebar (somente leitura, sem menu de preferências) =====
     def render_sidebar(self, container) -> None:
         container.markdown(
-            "**Mary — Esposa Cúmplice** • Respostas sensuais (do sutil ao explícito, conforme preferências); "
-            "4–7 parágrafos. Relação canônica: casados e cúmplices."
+            "**Mary — Esposa Cúmplice** • Respostas sensuais contínuas, com memória canônica de relação, gravidez e eventos fixos."
         )
 
-        # mesma chave usada no reply()
         usuario_key = _current_user_key()
 
-        # facts do usuário
         try:
             f = cached_get_facts(usuario_key) or {}
         except Exception:
@@ -1540,12 +1423,10 @@ class MaryService(BaseCharacter):
         casados = bool(f.get("casados", False))
         ent = _entities_to_line(f)
         rs = (f.get("mary.rs.v2") or "")[:200]
-        prefs = _read_prefs(f)
 
         container.caption(f"Estado da relação: **{'Casados' if casados else '—'}**")
         container.markdown("---")
 
-        # toggles globais
         json_on = container.checkbox(
             "JSON Mode",
             value=bool(st.session_state.get("json_mode_on", False))
@@ -1567,15 +1448,8 @@ class MaryService(BaseCharacter):
             container.caption(f"Entidades salvas: {ent}")
         if rs:
             container.caption("Resumo rolante ativo (v2).")
-        container.caption(
-            f"Prefs: nível={prefs.get('nivel_sensual')}, "
-            f"ritmo={prefs.get('ritmo')}, "
-            f"tamanho={prefs.get('tamanho_resposta')}"
-        )
 
-        # =====================================================
-        # 1) DEBUG – mostrar tudo que o get_facts(...) trouxe
-        # =====================================================
+        # DEBUG – facts brutos
         with container.expander("🔎 DEBUG – facts brutos", expanded=False):
             if not f:
                 st.caption("⚠️ Nenhum fact retornado para esta chave de usuário.")
@@ -1588,9 +1462,7 @@ class MaryService(BaseCharacter):
                         vs = vs[:120] + "..."
                     st.write(f"- **{k}** = {vs}")
 
-        # ============================
         # 🧠 Memórias fixas de Mary
-        # ============================
         with container.expander("🧠 Memórias fixas de Mary", expanded=True):
             try:
                 f_all = cached_get_facts(usuario_key) or {}
@@ -1599,7 +1471,6 @@ class MaryService(BaseCharacter):
 
             eventos = _collect_mary_events_from_facts(f_all)
 
-            # também considera o que acabou de ser salvo nesta sessão
             last_key = st.session_state.get("last_saved_mary_event_key", "")
             last_val = st.session_state.get("last_saved_mary_event_val", "")
             if last_key:
@@ -1619,7 +1490,6 @@ class MaryService(BaseCharacter):
 
                     col1, col2 = container.columns([1, 1])
                     with col1:
-                        # botão apagar (só funciona se seu repo tiver delete_fact)
                         if container.button("🗑 Apagar", key=f"del_{usuario_key}_{label}"):
                             try:
                                 from core.repositories import delete_fact
@@ -1627,12 +1497,10 @@ class MaryService(BaseCharacter):
                                 delete_fact = None
 
                             if delete_fact:
-                                # tenta apagar nos dois formatos
                                 delete_fact(usuario_key, f"mary.evento.{label}")
                                 delete_fact(usuario_key, f"mary.eventos.{label}")
                             clear_user_cache(usuario_key)
                             container.success(f"Memória **{label}** apagada.")
-                            # 🔁 rerun compatível com versões novas/antigas
                             try:
                                 st.rerun()
                             except Exception:
@@ -1643,9 +1511,7 @@ class MaryService(BaseCharacter):
                     with col2:
                         container.caption(f"mary.evento.{label}")
 
-        # ============================
         # 🔄 Reset REAL da Mary
-        # ============================
         if container.button("🔄 Reset REAL da Mary"):
             try:
                 from core.repositories import delete_fact
@@ -1655,11 +1521,9 @@ class MaryService(BaseCharacter):
             user = _current_user_key()
 
             if delete_fact:
-                # limpa resumo rolante
                 delete_fact(user, "mary.rs.v2")
                 delete_fact(user, "mary.rs.v2.ts")
 
-                # limpa eventos mary.evento.*
                 facts = cached_get_facts(user) or {}
                 for k in list(facts.keys()):
                     if str(k).startswith("mary.evento."):
@@ -1667,7 +1531,6 @@ class MaryService(BaseCharacter):
 
             clear_user_cache(user)
             container.success("Mary resetada COMPLETAMENTE (resumo + eventos fixos) para este usuário.")
-            # 🔁 rerun compatível
             try:
                 st.rerun()
             except Exception:
@@ -1675,58 +1538,3 @@ class MaryService(BaseCharacter):
                     st.experimental_rerun()
                 except Exception:
                     pass
-
-
-
-        # ============================
-        # 🧠 Memórias fixas de Mary
-        # ============================
-        with container.expander("🧠 Memórias fixas de Mary", expanded=True):
-            try:
-                f_all = cached_get_facts(usuario_key) or {}
-            except Exception:
-                f_all = {}
-
-            eventos = _collect_mary_events_from_facts(f_all)
-
-            # também considera o que acabou de ser salvo nesta sessão
-            last_key = st.session_state.get("last_saved_mary_event_key", "")
-            last_val = st.session_state.get("last_saved_mary_event_val", "")
-            if last_key:
-                short = last_key.replace("mary.evento.", "")
-                if short not in eventos:
-                    eventos[short] = last_val or "(salvo nesta sessão; aguardando backend)"
-
-            if not eventos:
-                container.caption(
-                    "Nenhuma memória salva ainda.\n"
-                    "Ex.: **Mary, use sua ferramenta de memória para registrar o fato: ...**"
-                )
-            else:
-                for label, val in sorted(eventos.items()):
-                    container.markdown(f"**{label}**")
-                    container.caption(val[:280] + ("..." if len(val) > 280 else ""))
-
-                    col1, col2 = container.columns([1, 1])
-                    with col1:
-                        # botão apagar (só funciona se seu repo tiver delete_fact)
-                        if container.button("🗑 Apagar", key=f"del_{usuario_key}_{label}"):
-                            try:
-                                from core.repositories import delete_fact
-                            except Exception:
-                                delete_fact = None
-
-                            if delete_fact:
-                                # tenta apagar nos dois formatos
-                                delete_fact(usuario_key, f"mary.evento.{label}")
-                                delete_fact(usuario_key, f"mary.eventos.{label}")
-                            clear_user_cache(usuario_key)
-                            container.success(f"Memória **{label}** apagada.")
-                            container.success(f"Memória **{label}** apagada.")
-                            try:
-                                st.rerun()
-                            except Exception:
-                                pass
-                            
-                    with col2:
-                        container.caption(f"mary.evento.{label}")
