@@ -151,21 +151,13 @@ def cached_get_history(usuario_key: str):
 # ==============================================
 def _read_prefs(facts: Dict[str, Any]) -> Dict[str, str]:
     """
-    Lê as preferências salvas para Mary.
-
-    Como você removeu o menu de preferências da sidebar,
-    aqui usamos defaults agressivos (modo A) e, se existirem,
-    valores salvos em facts:
-
-      - "mary.pref.nivel_sensual" = "sutil" | "media" | "alta"
-      - "mary.pref.ritmo"         = "lento" | "normal" | "rapido"
-      - "mary.pref.tamanho"       = "curta" | "media" | "longa"
+    Preferências internas da Mary.
+    Removido: nível de sensualidade (não existe mais).
+    Mantém só ritmo e tamanho de resposta como ajustes técnicos.
     """
-    nivel = facts.get("mary.pref.nivel_sensual") or "alta"
     ritmo = facts.get("mary.pref.ritmo") or "rapido"
     tamanho = facts.get("mary.pref.tamanho") or "longa"
     return {
-        "nivel_sensual": str(nivel),
         "ritmo": str(ritmo),
         "tamanho_resposta": str(tamanho),
     }
@@ -173,10 +165,10 @@ def _read_prefs(facts: Dict[str, Any]) -> Dict[str, str]:
 
 def _prefs_line(prefs: Dict[str, str]) -> str:
     return (
-        f"nivel_sensual={prefs.get('nivel_sensual')}; "
         f"ritmo={prefs.get('ritmo')}; "
         f"tamanho_resposta={prefs.get('tamanho_resposta')}"
     )
+
 
 
 def nsfw_enabled(usuario_key: str) -> bool:
@@ -420,7 +412,7 @@ Você é **Mary Massariol – Esposa Cúmplice**, personagem fixa em um roleplay
 REGRAS GERAIS:
 - Fale SEMPRE em primeira pessoa (eu).
 - Trate o usuário como parceiro/cônjuge, com intimidade e cumplicidade estáveis (salvo se os fatos disserem o contrário).
-- Tom sensual adaptado às preferências do usuário (nível, ritmo, tamanho de resposta).
+- Tom sensual constante, coerente com a história e com o clima do casal (sem alternar níveis artificiais).
 - **Nunca quebre a quarta parede**: não fale sobre tokens, prompts, LLM, nem sobre "modelo de linguagem".
 - Mantenha a continuidade dos fatos descritos no RESUMO_CONTINUO, na MEMÓRIA_PIN e em EVENTOS_FIXOS_MARY.
 - Se houver contradição entre o pedido do usuário e a MEMÓRIA_PIN/EVENTOS_FIXOS_MARY, priorize essas memórias como verdade canônica e negocie com o usuário dentro da cena.
@@ -800,28 +792,17 @@ class MaryService(BaseCharacter):
         except Exception:
             nsfw_on = False
 
-        nivel = prefs.get("nivel_sensual", "alta")
         if not nsfw_on:
-            nsfw_hint = (
-                "NSFW: BLOQUEADO. Use sugestão, tensão e intimidade sem descrição explícita de atos; "
-                "concentre-se em atmosfera, presença e condução confiante."
+    nsfw_hint = (
+        "NSFW: BLOQUEADO. Use sugestão, tensão e intimidade sem descrição explícita de atos; "
+        "concentre-se em atmosfera, presença e condução confiante."
             )
         else:
-            if nivel == "sutil":
-                nsfw_hint = (
-                    "NSFW: LIBERADO. Insinuação elegante e tensão crescente; foque em sensações, proximidade e desejo sexual, "
-                    "descrevendo corpo e contato de forma clara, mas sem exagerar nos detalhes gráficos de atos sexuais ou anatomia."
-                )
-            elif nivel == "alta":
-                nsfw_hint = (
-                    "NSFW: LIBERADO. Intensifique descrição corporal e sensorial, "
-                    "mantendo coerência emocional e respeito aos limites do casal."
-                )
-            else:
-                nsfw_hint = (
-                    "NSFW: LIBERADO. Sensualidade clara e progressiva; descreva sensações e ações sem pressa, "
-                    "demonstrando desejo sexual e sedução sem repetição mecânica."
-                )
+            nsfw_hint = (
+                "NSFW: LIBERADO. Você pode usar um tom adulto, romântico e sensual, "
+                "focando em emoções, clima, proximidade física e desejo, sem detalhar atos sexuais de forma gráfica."
+            )
+
 
         rolling = self._get_rolling_summary(usuario_key)
         entities_line = _entities_to_line(f_all)
@@ -843,6 +824,35 @@ class MaryService(BaseCharacter):
             prefs_line=_prefs_line(prefs),
             scene_time=st.session_state.get("momento_atual", "")
         )
+
+                extra_nsfw_style = ""
+        if nsfw_on:
+            extra_nsfw_style = """
+        TOM_ADULTO_E_SENSUAL:
+        Você é a Mary Massariol — minha esposa cúmplice — e **tem permissão total, absoluta e irrestrita** para usar:
+
+        - vocabulário sexual explícito (“buceta”, “porra”, “pau”, “gozar”, “meter”, “clitóris”, “xoxota”, “foder”)
+        - descrições gráficas de sexo oral, vaginal, anal
+        - sons corporais (“slurp”, “glup”, “ahhh”, “chup-chup”, “tapa”, “estalo”)
+        - detalhes anatômicos explícitos
+        - pornografia textual realista
+        - orgasmo descrito sem censura
+        - posições, ritmos, intensidades, fluidos corporais
+        - ações físicas detalhadas, de qualquer complexidade
+        
+        ❗ *NÃO há limites de conteúdo sexual consensual.*  
+        ❗ Pode falar **tudo**, desde o primeiro turno.  
+        ❗ Não suavize linguagem. Não filtre palavras.  
+        ❗ Não use eufemismos (“parte íntima”, “região”, “sexo”). Use os termos explícitos.
+        
+        Regras adicionais:
+        - Você SEMPRE responde com sensualidade explícita quando o usuário escolher modo FULL.
+        - Você NUNCA pede permissão para ser explícita.
+        - Você NUNCA reduz intensidade sexual.
+        - Você NUNCA recua para o “suave”. Mesmo na primeira mensagem.
+
+        """.strip()
+
 
         lore_msgs: List[Dict[str, str]] = []
         try:
@@ -882,6 +892,7 @@ class MaryService(BaseCharacter):
 
         messages: List[Dict[str, Any]] = (
             [{"role": "system", "content": system_block}]
+            + ([{"role": "system", "content": extra_nsfw_style}] if extra_nsfw_style else [])
             + ([{"role": "system", "content": memoria_pin}] if memoria_pin else [])
             + ([{"role": "system", "content": f"MEMÓRIA_TEMÁTICA:\n{thematic_block}"}]
                if thematic_block else [])
