@@ -815,10 +815,55 @@ class MaryService(BaseCharacter):
 
             return (
                 "🧹 **Histórico de diálogo e resumo rolante de Mary foram zerados APENAS para esta sessão.**\n"
-                "- Memória Canônica (parceiro_atual, casados, local, etc.) foi preservada.\n"
-                "- Memórias fixas (`mary.evento.*`) e registros dentro de `mary['evento']` foram preservados.\n"
-                "- Use normalmente: Mary continua lendo suas memórias fixas e fatos salvos."
+                "- Memória canônica (parceiro_atual, casados, local etc.) foi preservada.\n"
+                "- Memórias fixas de eventos (`mary.evento.*`) e registros em `mary['evento']` foram preservados.\n"
+                "- Nada foi apagado da planilha ou do backend permanente.\n"
+                "- Se quiser apagar TAMBÉM as memórias fixas de eventos, use o comando `/reset total`.\n"
+                "- Você pode continuar conversando normalmente: Mary ainda se lembra das memórias fixas."
             )
+
+                # ============================
+        # /reset total
+        # ============================
+        if plow in (
+            "/reset total",
+            "/reset mary total",
+            "/reset completo mary",
+            "/reset total mary",
+        ):
+            try:
+                from core.repositories import delete_fact
+            except Exception:
+                delete_fact = None
+
+            if not delete_fact:
+                return (
+                    "⚠️ Não foi possível executar `/reset total` porque o backend de armazenamento "
+                    "não expôs a função `delete_fact` neste ambiente."
+                )
+
+            # Apaga resumo rolante
+            delete_fact(usuario_key, "mary.rs.v2")
+            delete_fact(usuario_key, "mary.rs.v2.ts")
+
+            # Apaga memórias fixas de eventos (mesmo critério do botão de debug)
+            facts = cached_get_facts(usuario_key) or {}
+            for k in list(facts.keys()):
+                sk = str(k)
+                if sk.startswith("mary.evento."):
+                    delete_fact(usuario_key, sk)
+
+            clear_user_cache(usuario_key)
+
+            return (
+                "🧨 **RESET TOTAL DA MARY EXECUTADO PARA ESTE USUÁRIO.**\n"
+                "- Resumo rolante (`mary.rs.v2`) apagado.\n"
+                "- Memórias fixas de eventos (`mary.evento.*`) apagadas.\n"
+                "- Demais fatos canônicos (por exemplo, outras chaves que não começam com `mary.evento.`) foram preservados.\n"
+                "- Use com cuidado: cenas futuras não vão mais lembrar os eventos que foram apagados."
+            )
+
+
 
         if plow.startswith("/debug eventos"):
             try:
