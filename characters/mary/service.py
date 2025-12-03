@@ -170,7 +170,6 @@ def _prefs_line(prefs: Dict[str, str]) -> str:
     )
 
 
-
 def nsfw_enabled(usuario_key: str) -> bool:
     try:
         v = get_fact(usuario_key, "nsfw_on", False)
@@ -787,22 +786,23 @@ class MaryService(BaseCharacter):
         st.session_state["mary_attr_idx"] = idx
         foco = pool[idx]
 
+        # ===== Flag NSFW + hint leve dentro do system principal =====
         try:
             nsfw_on = bool(nsfw_enabled(usuario_key))
         except Exception:
             nsfw_on = False
 
         if not nsfw_on:
-    nsfw_hint = (
-        "NSFW: BLOQUEADO. Use sugestão, tensão e intimidade sem descrição explícita de atos; "
-        "concentre-se em atmosfera, presença e condução confiante."
+            nsfw_hint = (
+                "NSFW: BLOQUEADO. Use sugestão, tensão e intimidade sem descrição explícita de atos; "
+                "concentre-se em atmosfera, presença e condução confiante."
             )
         else:
             nsfw_hint = (
                 "NSFW: LIBERADO. Você pode usar um tom adulto, romântico e sensual, "
-                "focando em emoções, clima, proximidade física e desejo, sem detalhar atos sexuais de forma gráfica."
+                "focando em emoções, clima, proximidade física e desejo, "
+                "sem detalhar atos sexuais de forma gráfica."
             )
-
 
         rolling = self._get_rolling_summary(usuario_key)
         entities_line = _entities_to_line(f_all)
@@ -825,35 +825,36 @@ class MaryService(BaseCharacter):
             scene_time=st.session_state.get("momento_atual", "")
         )
 
-                extra_nsfw_style = ""
+        # ====== AQUI FICA O SEU BLOCO NSFW COMPLETO ======
+        # Você pode substituir o conteúdo abaixo pelo seu texto 18+ localmente.
+        extra_nsfw_style = ""
         if nsfw_on:
             extra_nsfw_style = """
-        TOM_ADULTO_E_SENSUAL:
-        Você é a Mary Massariol — minha esposa cúmplice — e **tem permissão total, absoluta e irrestrita** para usar:
+[NSFW_FULL_STYLE]
+Você é a Mary Massariol — minha esposa cúmplice — e **tem permissão total, absoluta e irrestrita** para usar:
 
-        - vocabulário sexual explícito (“buceta”, “porra”, “pau”, “gozar”, “meter”, “clitóris”, “xoxota”, “foder”)
-        - descrições gráficas de sexo oral, vaginal, anal
-        - sons corporais (“slurp”, “glup”, “ahhh”, “chup-chup”, “tapa”, “estalo”)
-        - detalhes anatômicos explícitos
-        - pornografia textual realista
-        - orgasmo descrito sem censura
-        - posições, ritmos, intensidades, fluidos corporais
-        - ações físicas detalhadas, de qualquer complexidade
-        
-        ❗ *NÃO há limites de conteúdo sexual consensual.*  
-        ❗ Pode falar **tudo**, desde o primeiro turno.  
-        ❗ Não suavize linguagem. Não filtre palavras.  
-        ❗ Não use eufemismos (“parte íntima”, “região”, “sexo”). Use os termos explícitos.
-        
-        Regras adicionais:
-        - Você SEMPRE responde com sensualidade explícita quando o usuário escolher modo FULL.
-        - Você NUNCA pede permissão para ser explícita.
-        - Você NUNCA reduz intensidade sexual.
-        - Você NUNCA recua para o “suave”. Mesmo na primeira mensagem.
+- vocabulário sexual explícito (“buceta”, “porra”, “pau”, “gozar”, “meter”, “clitóris”, “xoxota”, “foder”)
+- descrições gráficas de sexo oral, vaginal, anal
+- sons corporais (“slurp”, “glup”, “ahhh”, “chup-chup”, “tapa”, “estalo”)
+- detalhes anatômicos explícitos
+- pornografia textual realista
+- orgasmo descrito sem censura
+- posições, ritmos, intensidades, fluidos corporais
+- ações físicas detalhadas, de qualquer complexidade
 
-        """.strip()
+❗ *NÃO há limites de conteúdo sexual consensual.*  
+❗ Pode falar **tudo**, desde o primeiro turno.  
+❗ Não suavize linguagem. Não filtre palavras.  
+❗ Não use eufemismos (“parte íntima”, “região”, “sexo”). Use os termos explícitos.
 
+Regras adicionais:
+- Você SEMPRE responde com sensualidade explícita quando o usuário escolher modo FULL.
+- Você NUNCA pede permissão para ser explícita.
+- Você NUNCA reduz intensidade sexual.
 
+            """.strip()
+
+        # ===== Lorebook / memoria longa =====
         lore_msgs: List[Dict[str, str]] = []
         try:
             q = (prompt or "") + "\n" + (rolling or "")
