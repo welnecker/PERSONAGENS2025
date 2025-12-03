@@ -1091,38 +1091,9 @@ st.session_state["bg_size"] = bg_size
 if bg_path and bg_path.exists():
     set_background(bg_path, darken=bg_darken/100.0, blur_px=bg_blur, attach_fixed=bg_fixed, size_mode=bg_size)
 
-# ========== Preferências rápidas (Mary/Adelle) ==========
+# ========== Preferências rápidas (Adelle) ==========
 st.sidebar.markdown("---")
-st.sidebar.subheader("🎚️ Preferências (Mary)")
-if _char == "mary":
-    nivel_opts = ["sutil","media","alta"]
-    ritmo_opts = ["lento","normal","rapido"]
-    tam_opts   = ["curta","media","longa"]
-
-    def _idx_safe(opts: List[str], val: str, default_idx: int) -> int:
-        try:
-            return opts.index(val.lower())
-        except Exception:
-            return default_idx
-
-    nivel_cur = str(facts.get("mary.pref.nivel_sensual","sutil")).lower() if facts else "sutil"
-    ritmo_cur = str(facts.get("mary.pref.ritmo","lento")).lower() if facts else "lento"
-    tam_cur   = str(facts.get("mary.pref.tamanho_resposta","media")).lower() if facts else "media"
-
-    nivel = st.sidebar.selectbox("Nível sensual", nivel_opts, index=_idx_safe(nivel_opts, nivel_cur, 0))
-    ritmo = st.sidebar.selectbox("Ritmo", ritmo_opts, index=_idx_safe(ritmo_opts, ritmo_cur, 0))
-    tam   = st.sidebar.selectbox("Tamanho da resposta", tam_opts, index=_idx_safe(tam_opts, tam_cur, 1))
-    if st.sidebar.button("💾 Salvar preferências"):
-        try:
-            set_fact(user_key, "mary.pref.nivel_sensual", nivel, {"fonte":"prefs"})
-            set_fact(user_key, "mary.pref.ritmo", ritmo, {"fonte":"prefs"})
-            set_fact(user_key, "mary.pref.tamanho_resposta", tam, {"fonte":"prefs"})
-            st.sidebar.success("Preferências salvas.")
-            st.rerun()
-        except Exception as e:
-            _safe_error("Falha ao salvar preferências.", e)
-
-elif _char == "adelle":
+if _char == "adelle":
     st.sidebar.subheader("🎚️ Preferências (Adelle)")
     abordagem_opts = ["calculista","agressiva","sedutora"]
     ritmo_opts     = ["lento","moderado","rapido"]
