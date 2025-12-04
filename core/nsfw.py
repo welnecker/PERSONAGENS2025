@@ -34,22 +34,17 @@ def is_private_location(local_atual: Optional[str]) -> bool:
 
 def nsfw_enabled(usuario: str, local_atual: Optional[str] = None) -> bool:
     """
-    Gate NSFW SIMPLIFICADO:
+    Gate NSFW simplificado:
 
-      - Por padrão: **sempre ON**
-      - Se existir override = "off" para o usuário, força OFF
-      - Se override = "on", também fica ON (explícito)
-
-    Na prática:
-      - sem override => True
-      - override == "on" => True
-      - override == "off" => False
+      - Se nsfw_override == "off"  -> BLOQUEIA
+      - Qualquer outro caso        -> LIBERA (default ON)
     """
     override = (get_fact(usuario, "nsfw_override", "") or "").lower()
 
-    # Se explicitamente desligado → respeita
+    # Botão do sidebar ainda pode bloquear
     if override == "off":
         return False
 
-    # Se explicitamente ligado OU vazio / qualquer outra coisa → ON
+    # Fora isso, sempre liberado
     return True
+
