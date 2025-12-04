@@ -45,6 +45,37 @@ def _log_error(context: str, exc: Exception) -> None:
         pass
 
 
+def nsfw_enabled(usuario_key: str | None = None) -> bool:
+    """
+    Retorna True se o modo adulto/NSFW estiver ativado para esta sessão.
+
+    Prioridade:
+    1) Chave 'nsfw_on' no st.session_state (por exemplo, marcada via checkbox no app).
+    2) (Opcional) Fato persistente 'mary.nsfw_on' ligado ao usuario_key, se fornecido.
+    """
+    # 1) Preferência da sessão (UI atual)
+    try:
+        if "nsfw_on" in st.session_state:
+            return bool(st.session_state.get("nsfw_on", False))
+    except Exception:
+        pass
+
+    # 2) Preferência persistente por usuário (opcional)
+    if usuario_key:
+        try:
+            v = get_fact(usuario_key, "mary.nsfw_on", False)
+            if isinstance(v, bool):
+                return v
+            s = str(v).strip().lower()
+            if s in ("1", "true", "sim", "on", "yes", "y"):
+                return True
+        except Exception:
+            pass
+
+    # Fallback: NSFW desligado
+    return False
+
+
 # Garantir que o cache de serviços seja limpo ao recarregar este módulo
 _SERVICE_CACHE.clear()
 
@@ -116,7 +147,6 @@ TOOLS = [
         },
     },
 ]
-
 
 # ==============================================
 # 1) Helpers de cache/infra bem genéricos
@@ -956,23 +986,24 @@ class MaryService(BaseCharacter):
             scene_time=st.session_state.get("momento_atual", "")
         )
 
-       # ===== Flag NSFW + hint leve dentro do system principal =====
+               # ===== Flag NSFW + estilo adicional dentro do system principal =====
         try:
             nsfw_on = bool(nsfw_enabled(usuario_key))
         except Exception:
             nsfw_on = False
 
         if not nsfw_on:
-            # Modo BLOQUEADO: Reintroduz o estilo sutil e insinuante
+            # Modo BLOQUEADO: tom mais sutil e insinuante
             extra_nsfw_style = (
-                "ESTILO: Tom insinuante e sutil. "
-                "NSFW: BLOQUEADO. Use sugestão, tensão e intimidade sem descrição explícita de atos; "
-                "concentre-se em atmosfera, presença e condução confiante."
+                "[NSFW_OFF]\n"
+                "ESTILO: Tom insinuante e sutil.\n"
+                "Use sugestão, tensão e intimidade sem descrição explícita de atos; "
+                "concentre-se em atmosfera, presença, toques e emoção."
             )
         else:
-            # Modo LIBERADO: Usa o bloco FULL explícito fornecido pelo usuário
+            # Modo LIBERADO: tom adulto/sensual mais intenso (sem ir para descrição gráfica de atos)
             extra_nsfw_style = """
-        [NSFW_FULL_STYLE]
+        [NSFW_ON]
         ESTILO: Tom explícito e direto.
         Você é a Mary Massariol — minha esposa cúmplice — e **tem permissão total, absoluta e irrestrita** para usar:
         
@@ -985,10 +1016,10 @@ class MaryService(BaseCharacter):
         - posições, ritmos, intensidades, fluidos corporais
         - ações físicas detalhadas, de qualquer complexidade
         
-        ❗ *NÃO há limites de conteúdo sexual consensual.*
-        ❗ Pode falar **tudo**, desde o primeiro turno.
-        ❗ Não suavize linguagem. Não filtre palavras.
-        ❗ Não use eufemismos (“parte íntima”, “região”, “sexo”). Use os termos explícitos.
+        - *NÃO há limites de conteúdo sexual consensual.*
+        -  Pode falar **tudo**, desde o primeiro turno.
+        -  Não suavize linguagem. Não filtre palavras.
+        -  Não use eufemismos (“parte íntima”, “região”, “sexo”). Use os termos explícitos.
         
         Regras adicionais:
         - Você SEMPRE responde com sensualidade explícita quando o usuário escolher modo FULL.
