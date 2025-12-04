@@ -1016,7 +1016,7 @@ class MaryService(BaseCharacter):
             verbatim_ultimos=verbatim_ultimos,
         )
 
-        eventos_block = ""
+                eventos_block = ""
         try:
             eventos_dict = _collect_mary_events_from_facts(f_all)
             if eventos_dict:
@@ -1030,39 +1030,49 @@ class MaryService(BaseCharacter):
                     "Eles são eventos já vividos pelo casal (ex.: gravidez confirmada, encontros marcantes, etc.).\n"
                     + joined
                 )
-        except Exception:
+        except Exception as e:
             eventos_block = ""
+            _log_error("reply.build_eventos_block", e)
 
+        # Construção robusta do messages: se algo quebrar aqui, cai num fallback mínimo
+        try:
             messages: List[Dict[str, Any]] = (
-            [{"role": "system", "content": system_block}]
-            + ([{"role": "system", "content": extra_nsfw_style}] if extra_nsfw_style else [])
-            + ([{"role": "system", "content": memoria_pin}] if memoria_pin else [])
-            + ([{"role": "system", "content": f"MEMÓRIA_TEMÁTICA:\n{thematic_block}"}]
-               if thematic_block else [])
-            + ([{"role": "system", "content": eventos_block}] if eventos_block else [])
-            + lore_msgs
-            + [{
-                "role": "system",
-                "content": (
-                    f"LOCAL_ATUAL: {local_atual or '—'}. "
-                    "Regra dura: NÃO mude tempo/lugar sem pedido explícito do usuário."
-                )
-            }]
-            + hist_msgs
-            + [{"role": "user", "content": prompt}]
-        )
-
+                [{"role": "system", "content": system_block}]
+                + ([{"role": "system", "content": extra_nsfw_style}] if extra_nsfw_style else [])
+                + ([{"role": "system", "content": memoria_pin}] if memoria_pin else [])
+                + ([{"role": "system", "content": f"MEMÓRIA_TEMÁTICA:\n{thematic_block}"}]
+                   if thematic_block else [])
+                + ([{"role": "system", "content": eventos_block}] if eventos_block else [])
+                + lore_msgs
+                + [{
+                    "role": "system",
+                    "content": (
+                        f"LOCAL_ATUAL: {local_atual or '—'}. "
+                        "Regra dura: NÃO mude tempo/lugar sem pedido explícito do usuário."
+                    )
+                }]
+                + hist_msgs
+                + [{"role": "user", "content": prompt}]
+            )
+        except Exception as e:
+            _log_error("reply.build_messages", e)
+            messages = [
+                {"role": "system", "content": system_block},
+                {"role": "user", "content": prompt},
+            ]
 
         try:
             _mem_drop_warn(st.session_state.get("_mem_drop_report", {}))
-        except Exception:
-            pass
+        except Exception as e:
+            _log_error("reply.mem_drop_warn", e)
 
         win = _get_window_for(model)
         try:
             prompt_tokens = sum(toklen(m["content"]) for m in messages)
-        except Exception:
+        except Exception as e:
+            _log_error("reply.prompt_tokens", e)
             prompt_tokens = 0
+
         base_out = _safe_max_output(win, prompt_tokens)
         size = prefs.get("tamanho_resposta", "longa")
         mult = 1.0 if size == "media" else (0.75 if size == "curta" else 1.4)
@@ -1084,6 +1094,8 @@ class MaryService(BaseCharacter):
         iteration = 0
         texto = ""
         tool_calls = []
+        provider = ""
+        used_model = ""
 
         while iteration < max_iterations:
             iteration += 1
@@ -1110,7 +1122,7 @@ class MaryService(BaseCharacter):
             messages.append({
                 "role": "assistant",
                 "content": texto or None,
-                "tool_calls": tool_calls
+                "tool_calls": tool_calls,
             })
 
             for tc in tool_calls:
@@ -1125,7 +1137,7 @@ class MaryService(BaseCharacter):
                     messages.append({
                         "role": "tool",
                         "tool_call_id": tool_id,
-                        "content": result
+                        "content": result,
                     })
 
                     st.caption(f"  ✓ {func_name}: {result[:50]}...")
@@ -1136,10 +1148,9 @@ class MaryService(BaseCharacter):
                     messages.append({
                         "role": "tool",
                         "tool_call_id": tool_id,
-                        "content": error_msg
+                        "content": error_msg,
                     })
                     st.warning(f"⚠️ {error_msg}")
-
 
         if iteration >= max_iterations and st.session_state.get("tool_calling_on", False):
             st.warning("⚠️ Limite de iterações de Tool Calling atingido. Resposta pode estar incompleta.")
@@ -1149,13 +1160,17 @@ class MaryService(BaseCharacter):
                 critic_model = st.session_state.get("ultra_critic_model", model) or model
                 notes = critic_review(critic_model, system_block, prompt, texto)
                 texto = polish(model, system_block, prompt, texto, notes)
-        except Exception:
-            pass
+        except Exception as e:
+            _log_error("reply.ultra_ia", e)
 
         try:
-            save_interaction(usuario_key, prompt, texto, f"{provider}:{used_model}")
-        except Exception:
-            pass
+            if provider and used_model:
+                save_interaction(usuario_key, prompt, texto, f"{provider}:{used_model}")
+            else:
+                save_interaction(usuario_key, prompt, texto, model)
+        except Exception as e:
+            _log_error("reply.save_interaction", e)
+
 
                 # [DEPRECATED] Auto-gravação por gatilho de texto + regex de data.
         # A gravação de eventos importantes agora é feita via Tool Calling
