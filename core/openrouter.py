@@ -7,7 +7,7 @@ import httpx
 
 # Lista de modelos “sugeridos” para a UI (pode ampliar à vontade)
 DEFAULT_MODELS = [
-    "x-ai/grok-4.1-fast:free",          # Grok como sugestão principal
+    "x-ai/grok-4.1-fast",          # Grok como sugestão principal
     "tngtech/tng-r1t-chimera:free",     # Chimera de apoio
     "deepseek/deepseek-chat-v3-0324",
     "anthropic/claude-3.5-haiku",
