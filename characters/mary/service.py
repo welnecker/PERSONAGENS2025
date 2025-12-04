@@ -760,7 +760,7 @@ class MaryService(BaseCharacter):
 
 
 
-        def reply(self, user: str, model: str) -> str:
+    def reply(self, user: str, model: str) -> str:
         prompt = self._get_user_prompt()
         if not prompt:
             return ""
