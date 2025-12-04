@@ -1016,7 +1016,7 @@ class MaryService(BaseCharacter):
             verbatim_ultimos=verbatim_ultimos,
         )
 
-                eventos_block = ""
+        eventos_block = ""
         try:
             eventos_dict = _collect_mary_events_from_facts(f_all)
             if eventos_dict:
