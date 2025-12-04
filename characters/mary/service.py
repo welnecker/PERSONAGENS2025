@@ -1033,7 +1033,7 @@ class MaryService(BaseCharacter):
         except Exception:
             eventos_block = ""
 
-                messages: List[Dict[str, Any]] = (
+            messages: List[Dict[str, Any]] = (
             [{"role": "system", "content": system_block}]
             + ([{"role": "system", "content": extra_nsfw_style}] if extra_nsfw_style else [])
             + ([{"role": "system", "content": memoria_pin}] if memoria_pin else [])
