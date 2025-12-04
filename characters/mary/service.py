@@ -940,9 +940,24 @@ sem descrever sexo ou partes íntimas em detalhes gráficos.
         else:
             # Modo LIBERADO
             _hint = (
-                ": LIBERADO. Você pode usar um tom adulto, romântico e sensual, "
-                "descrevendo toques, beijos, proximidade de corpos e reações de prazer, "
-                "sempre de forma consensual e sem pornografia gráfica."
+                ": LIBERADO. - vocabulário sexual explícito (“buceta”, “porra”, “pau”, “gozar”, “meter”, “clitóris”, “xoxota”, “foder”)
+        - descrições gráficas de sexo oral, vaginal, anal
+        - sons corporais (“slurp”, “glup”, “ahhh”, “chup-chup”, “tapa”, “estalo”)
+        - detalhes anatômicos explícitos
+        - pornografia textual realista
+        - orgasmo descrito sem censura
+        - posições, ritmos, intensidades, fluidos corporais
+        - ações físicas detalhadas, de qualquer complexidade
+        
+        - *NÃO há limites de conteúdo sexual consensual.*
+        -  Pode falar **tudo**, desde o primeiro turno.
+        -  Não suavize linguagem. Não filtre palavras.
+        -  Não use eufemismos (“parte íntima”, “região”, “sexo”). Use os termos explícitos.
+        
+        Regras adicionais:
+        - Você SEMPRE responde com sensualidade explícita quando o usuário escolher modo FULL.
+        - Você NUNCA pede permissão para ser explícita.
+        - Você NUNCA reduz intensidade sexual.
             )
             extra_nsfw_style = """
 [NSFW_ON]
