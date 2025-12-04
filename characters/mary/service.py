@@ -956,8 +956,7 @@ class MaryService(BaseCharacter):
             scene_time=st.session_state.get("momento_atual", "")
         )
 
-        ython
-        # ===== Flag NSFW + hint leve dentro do system principal =====
+       # ===== Flag NSFW + hint leve dentro do system principal =====
         try:
             nsfw_on = bool(nsfw_enabled(usuario_key))
         except Exception:
