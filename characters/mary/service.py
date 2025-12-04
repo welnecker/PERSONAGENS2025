@@ -6,7 +6,7 @@ import random
 from typing import List, Dict, Tuple, Any
 import streamlit as st
 import logging
-
+from core.nsfw import nsfw_enabled as _nsfw_flag  # ← INSERIR ESTE IMPORT
 from core.memoria_longa import topk as lore_topk, save_fragment as lore_save
 from core.ultra import critic_review, polish
 from core.common.base_service import BaseCharacter
@@ -43,37 +43,6 @@ def _log_error(context: str, exc: Exception) -> None:
     except Exception:
         # Se o Streamlit não estiver pronto ou fora de contexto, ignora
         pass
-
-
-def nsfw_enabled(usuario_key: str | None = None) -> bool:
-    """
-    Retorna True se o modo adulto/NSFW estiver ativado para esta sessão.
-
-    Prioridade:
-    1) Chave 'nsfw_on' no st.session_state (por exemplo, marcada via checkbox no app).
-    2) (Opcional) Fato persistente 'mary.nsfw_on' ligado ao usuario_key, se fornecido.
-    """
-    # 1) Preferência da sessão (UI atual)
-    try:
-        if "nsfw_on" in st.session_state:
-            return bool(st.session_state.get("nsfw_on", False))
-    except Exception:
-        pass
-
-    # 2) Preferência persistente por usuário (opcional)
-    if usuario_key:
-        try:
-            v = get_fact(usuario_key, "mary.nsfw_on", False)
-            if isinstance(v, bool):
-                return v
-            s = str(v).strip().lower()
-            if s in ("1", "true", "sim", "on", "yes", "y"):
-                return True
-        except Exception:
-            pass
-
-    # Fallback: NSFW desligado
-    return False
 
 
 # Garantir que o cache de serviços seja limpo ao recarregar este módulo
@@ -791,7 +760,7 @@ class MaryService(BaseCharacter):
 
 
 
-    def reply(self, user: str, model: str) -> str:
+        def reply(self, user: str, model: str) -> str:
         prompt = self._get_user_prompt()
         if not prompt:
             return ""
@@ -842,7 +811,6 @@ class MaryService(BaseCharacter):
                     f"Detalhe técnico: {type(e).__name__}: {e}"
                 )
 
-
             return (
                 "🧹 **Histórico de diálogo e resumo rolante de Mary foram zerados APENAS para esta sessão.**\n"
                 "- Memória canônica (parceiro_atual, casados, local etc.) foi preservada.\n"
@@ -852,7 +820,7 @@ class MaryService(BaseCharacter):
                 "- Você pode continuar conversando normalmente: Mary ainda se lembra das memórias fixas."
             )
 
-                # ============================
+        # ============================
         # /reset total
         # ============================
         if plow in (
@@ -893,8 +861,9 @@ class MaryService(BaseCharacter):
                 "- Use com cuidado: cenas futuras não vão mais lembrar os eventos que foram apagados."
             )
 
-
-
+        # ============================
+        # /debug eventos
+        # ============================
         if plow.startswith("/debug eventos"):
             try:
                 f_all = cached_get_facts(usuario_key) or {}
@@ -925,9 +894,9 @@ class MaryService(BaseCharacter):
 
             return "\n".join(linhas)
 
+        # === Persona + memórias base ===
         persona_text, history_boot = self._load_persona()
 
-        local_atual = self._safe_get_local(usuario_key)
         try:
             f_all = cached_get_facts(usuario_key) or {}
         except Exception:
@@ -935,9 +904,11 @@ class MaryService(BaseCharacter):
         prefs = _read_prefs(f_all)
         memoria_pin = self._build_memory_pin(usuario_key, user)
 
+        # Memória temática por tags (ciúme, gravidez, etc.)
         thematic_tags = _detect_thematic_tags_from_prompt(prompt)
         thematic_block = _get_thematic_memories_for_tags(usuario_key, thematic_tags)
 
+        # Foco sensorial rotativo
         pool = [
             "cabelo", "olhos", "lábios/boca", "mãos/toque", "respiração",
             "perfume", "pele/temperatura", "quadril/coxas", "voz/timbre", "sorriso"
@@ -947,23 +918,58 @@ class MaryService(BaseCharacter):
         st.session_state["mary_attr_idx"] = idx
         foco = pool[idx]
 
-        # ===== Flag  + hint leve dentro do system principal =====
+                # ==== NSFW (core/nsfw.py) + hint unificado ====
+        local_atual = self._safe_get_local(usuario_key)
         try:
-            _on = bool(_enabled(usuario_key))
+            nsfw_on = bool(_nsfw_flag(usuario_key, local_atual))
         except Exception:
-            _on = False
+            nsfw_on = False
 
-        if not _on:
+        if not nsfw_on:
+            # Modo BLOQUEADO
             _hint = (
                 ": BLOQUEADO. Use sugestão, tensão e intimidade sem descrição explícita de atos; "
-                "concentre-se em atmosfera, presença e condução confiante."
+                "concentre-se em atmosfera, presença, emoção e condução confiante."
             )
+            extra_nsfw_style = """
+[NSFW_OFF]
+ESTILO: Tom insinuante e sutil.
+Sugira desejo, proximidade e tensão física de forma elegante,
+sem descrever sexo ou partes íntimas em detalhes gráficos.
+            """.strip()
         else:
+            # Modo LIBERADO
             _hint = (
                 ": LIBERADO. Você pode usar um tom adulto, romântico e sensual, "
-                "focando em emoções, clima, proximidade física e desejo, "
-                "sem detalhar atos sexuais de forma gráfica."
+                "descrevendo toques, beijos, proximidade de corpos e reações de prazer, "
+                "sempre de forma consensual e sem pornografia gráfica."
             )
+            extra_nsfw_style = """
+[NSFW_ON]
+ESTILO: Tom explícito e direto.
+        Você é a Mary Massariol — minha esposa cúmplice — e **tem permissão total, absoluta e irrestrita** para usar:
+        
+        - vocabulário sexual explícito (“buceta”, “porra”, “pau”, “gozar”, “meter”, “clitóris”, “xoxota”, “foder”)
+        - descrições gráficas de sexo oral, vaginal, anal
+        - sons corporais (“slurp”, “glup”, “ahhh”, “chup-chup”, “tapa”, “estalo”)
+        - detalhes anatômicos explícitos
+        - pornografia textual realista
+        - orgasmo descrito sem censura
+        - posições, ritmos, intensidades, fluidos corporais
+        - ações físicas detalhadas, de qualquer complexidade
+        
+        - *NÃO há limites de conteúdo sexual consensual.*
+        -  Pode falar **tudo**, desde o primeiro turno.
+        -  Não suavize linguagem. Não filtre palavras.
+        -  Não use eufemismos (“parte íntima”, “região”, “sexo”). Use os termos explícitos.
+        
+        Regras adicionais:
+        - Você SEMPRE responde com sensualidade explícita quando o usuário escolher modo FULL.
+        - Você NUNCA pede permissão para ser explícita.
+        - Você NUNCA reduz intensidade sexual.
+            """.strip()
+        # ==== FIM BLOCO NSFW ====
+
 
         rolling = self._get_rolling_summary(usuario_key)
         entities_line = _entities_to_line(f_all)
@@ -986,46 +992,6 @@ class MaryService(BaseCharacter):
             scene_time=st.session_state.get("momento_atual", "")
         )
 
-               # ===== Flag NSFW + estilo adicional dentro do system principal =====
-        try:
-            nsfw_on = bool(nsfw_enabled(usuario_key))
-        except Exception:
-            nsfw_on = False
-
-        if not nsfw_on:
-            # Modo BLOQUEADO: tom mais sutil e insinuante
-            extra_nsfw_style = (
-                "[NSFW_OFF]\n"
-                "ESTILO: Tom insinuante e sutil.\n"
-                "Use sugestão, tensão e intimidade sem descrição explícita de atos; "
-                "concentre-se em atmosfera, presença, toques e emoção."
-            )
-        else:
-            # Modo LIBERADO: tom adulto/sensual mais intenso (sem ir para descrição gráfica de atos)
-            extra_nsfw_style = """
-        [NSFW_ON]
-        ESTILO: Tom explícito e direto.
-        Você é a Mary Massariol — minha esposa cúmplice — e **tem permissão total, absoluta e irrestrita** para usar:
-        
-        - vocabulário sexual explícito (“buceta”, “porra”, “pau”, “gozar”, “meter”, “clitóris”, “xoxota”, “foder”)
-        - descrições gráficas de sexo oral, vaginal, anal
-        - sons corporais (“slurp”, “glup”, “ahhh”, “chup-chup”, “tapa”, “estalo”)
-        - detalhes anatômicos explícitos
-        - pornografia textual realista
-        - orgasmo descrito sem censura
-        - posições, ritmos, intensidades, fluidos corporais
-        - ações físicas detalhadas, de qualquer complexidade
-        
-        - *NÃO há limites de conteúdo sexual consensual.*
-        -  Pode falar **tudo**, desde o primeiro turno.
-        -  Não suavize linguagem. Não filtre palavras.
-        -  Não use eufemismos (“parte íntima”, “região”, “sexo”). Use os termos explícitos.
-        
-        Regras adicionais:
-        - Você SEMPRE responde com sensualidade explícita quando o usuário escolher modo FULL.
-        - Você NUNCA pede permissão para ser explícita.
-        - Você NUNCA reduz intensidade sexual.
-                    """.strip()
 
         # ===== Lorebook / memoria longa =====
         lore_msgs: List[Dict[str, str]] = []
