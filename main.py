@@ -16,6 +16,8 @@ from pymongo import MongoClient
 from datetime import datetime
 import html
 import importlib
+from core.nsfw import nsfw_enabled
+from core.repositories import get_fact
 
 import streamlit as st
 from characters.registry import list_models_for_character
@@ -1004,20 +1006,32 @@ with st.sidebar.expander("⚡ Seed rápido: Adelle (Diplomata Exilada)", expande
 st.sidebar.markdown("---")
 st.sidebar.subheader("🔞 NSFW & Primeira vez")
 
+from core.repositories import get_fact, set_fact
+from core.events import register_event  # se já não estiver importado acima
+
 try:
     from core.nsfw import nsfw_enabled
 except Exception:
-    def nsfw_enabled(_k: str) -> bool:
+    # Fallback simples: só usa override, mas mantém compatibilidade
+    def nsfw_enabled(_k: str, _loc: str | None = None) -> bool:
         return str(get_fact(_k, "nsfw_override", "")).lower() == "on"
 
 _user_id = str(st.session_state.get("user_id", "")).strip()
 _char    = str(st.session_state.get("character", "")).strip().lower()
 user_key = f"{_user_id}::{_char}" if _user_id and _char else _user_id
 
+# Local atual (para o core/nsfw usar, se quiser)
 try:
-    NSFW_ON = bool(nsfw_enabled(user_key))
+    local_atual = get_fact(user_key, "local_cena_atual", "") or ""
 except Exception:
-    NSFW_ON = False
+    local_atual = ""
+
+# Pergunta para o gate REAL (nsfw_enabled)
+try:
+    NSFW_ON = bool(nsfw_enabled(user_key, local_atual))
+except Exception:
+    # Se der qualquer erro, assume ON (seu padrão desejado)
+    NSFW_ON = True
 
 virgem_val = get_fact(user_key, "virgem", None)
 virg_caption = "—" if virgem_val is None else ("Sim" if virgem_val else "Não")
@@ -1026,18 +1040,27 @@ st.sidebar.caption(f"Status NSFW: **{'✅ ON' if NSFW_ON else '🔒 OFF'}**")
 st.sidebar.caption(f"Virgindade: **{virg_caption}**")
 
 c_on, c_off = st.sidebar.columns(2)
+
+# 🔓 Liberar NSFW (grava override=on e marca não-virgem)
 if c_on.button("🔓 Liberar NSFW"):
     try:
         set_fact(user_key, "virgem", False, {"fonte": "sidebar"})
         set_fact(user_key, "nsfw_override", "on", {"fonte": "sidebar"})
         local_atual = get_fact(user_key, "local_cena_atual", None)
-        register_event(user_key, "primeira_vez", f"{st.session_state.get('character','?')} teve sua primeira vez.", local_atual, {"origin": "sidebar"})
+        register_event(
+            user_key,
+            "primeira_vez",
+            f"{st.session_state.get('character','?')} teve sua primeira vez.",
+            local_atual,
+            {"origin": "sidebar"},
+        )
         st.sidebar.success("NSFW liberado e 'primeira_vez' registrado.")
         st.session_state["history_loaded_for"] = ""
         st.rerun()
     except Exception as e:
         _safe_error("Falha ao liberar NSFW.", e)
 
+# 🔒 Bloquear NSFW (freio de mão)
 if c_off.button("🔒 Bloquear NSFW"):
     try:
         set_fact(user_key, "nsfw_override", "off", {"fonte": "sidebar"})
