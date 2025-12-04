@@ -1007,7 +1007,8 @@ st.sidebar.markdown("---")
 st.sidebar.subheader("🔞 NSFW & Primeira vez")
 
 from core.repositories import get_fact, set_fact
-from core.events import register_event  # se já não estiver importado acima
+# NÃO importe core.events aqui; register_event já existe no escopo
+
 
 try:
     from core.nsfw import nsfw_enabled
