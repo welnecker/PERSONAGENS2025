@@ -1033,9 +1033,9 @@ class MaryService(BaseCharacter):
         except Exception:
             eventos_block = ""
 
-        messages: List[Dict[str, Any]] = (
+                messages: List[Dict[str, Any]] = (
             [{"role": "system", "content": system_block}]
-            + ([{"role": "system", "content": extra__style}] if extra__style else [])
+            + ([{"role": "system", "content": extra_nsfw_style}] if extra_nsfw_style else [])
             + ([{"role": "system", "content": memoria_pin}] if memoria_pin else [])
             + ([{"role": "system", "content": f"MEMÓRIA_TEMÁTICA:\n{thematic_block}"}]
                if thematic_block else [])
@@ -1051,6 +1051,7 @@ class MaryService(BaseCharacter):
             + hist_msgs
             + [{"role": "user", "content": prompt}]
         )
+
 
         try:
             _mem_drop_warn(st.session_state.get("_mem_drop_report", {}))
