@@ -1035,6 +1035,7 @@ class MaryService(BaseCharacter):
             _log_error("reply.build_eventos_block", e)
 
         # Construção robusta do messages: se algo quebrar aqui, cai num fallback mínimo
+                # Construção robusta do messages: se algo quebrar aqui, cai num fallback mínimo
         try:
             messages: List[Dict[str, Any]] = (
                 [{"role": "system", "content": system_block}]
@@ -1055,11 +1056,16 @@ class MaryService(BaseCharacter):
                 + [{"role": "user", "content": prompt}]
             )
         except Exception as e:
-            _log_error("reply.build_messages", e)
+            # Garante que SEMPRE exista um messages mínimo, mesmo se o log falhar
             messages = [
                 {"role": "system", "content": system_block},
                 {"role": "user", "content": prompt},
             ]
+            try:
+                _log_error("reply.build_messages", e)
+            except Exception:
+                pass
+
 
         try:
             _mem_drop_warn(st.session_state.get("_mem_drop_report", {}))
