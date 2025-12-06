@@ -876,6 +876,15 @@ class MaryService(BaseCharacter):
         usuario_key = _current_user_key()
         plow = prompt.strip().lower()
 
+        # ===== Comando manual para mudar o local da cena =====
+        if plow.startswith("/local "):
+            novo_local = prompt[len("/local "):].strip()
+            if novo_local:
+                set_fact(usuario_key, "local_cena_atual", novo_local, {"fonte": "chat"})
+                clear_user_cache(usuario_key)
+                return f"📍 Local da cena atualizado para: **{novo_local}**."
+
+
         # ============================
         # /reset historico
         # ============================
