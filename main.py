@@ -132,6 +132,7 @@ def require_password_if_configured(app_name: str = "PERSONAGENS 2025"):
     st.session_state.setdefault("_auth_ok", False)
     st.session_state.setdefault("_auth_attempts", 0)
     st.session_state.setdefault("_auth_block_until", 0.0)
+    st.session_state.setdefault("verbatim_ultimos", 30)
 
     now = time.time()
     if now < st.session_state["_auth_block_until"]:
