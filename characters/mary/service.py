@@ -1,12 +1,12 @@
 from __future__ import annotations
-
+from .persona import get_persona
 import re
 import time
 import random
 from typing import List, Dict, Tuple, Any
 import streamlit as st
 import logging
-from core.nsfw import nsfw_enabled as _nsfw_flag  # ← INSERIR ESTE IMPORT
+from core.nsfw import nsfw_enabled
 from core.memoria_longa import topk as lore_topk, save_fragment as lore_save
 from core.ultra import critic_review, polish
 from core.common.base_service import BaseCharacter
@@ -467,7 +467,7 @@ FOCO_SENSORIAL_DESTE_TURNO:
 - Priorize na descrição: {sensory_focus} (mas não se limite apenas a isso).
 
 /POLITICA_DE_CONTEUDO:
-{_hint}
+{}
 
 ESTILO_DE_RESPOSTA:
 - 4 a 7 parágrafos.
@@ -686,20 +686,17 @@ except ImportError:
         )
         return txt, []
 
+SAFE_SENSUAL_PROMPT = """
+[NSFW_OFF]
+ESTILO: Tom romântico, sensual e sugestivo.
+- Foque em clima, tensão, carinho, beijos, toques e intimidade.
+- Não descreva genitália, penetração ou atos sexuais de forma gráfica.
+- Pode sugerir desejo, excitação e aproximação física, mas sempre com “corte de cena” antes de detalhes explícitos.
+"""
+
 # Texto FULL NSFW – preencha você mesmo com as instruções explícitas que quiser
 FULL_NSFW_PROMPT = """
 [NSFW_ON]
-
-- Você tem **liberdade total** para intensificar a experiência erótica:
-  • **Descrições anatômicas**: pode nomear e descrever genitais com linguagem adulta — pau/caralho, buceta/xoxota, clitóris/grelo, etc.
-  • **Atos sexuais**: pode descrever penetração, sexo oral, masturbação, anal e outros atos com detalhes sensoriais (textura, umidade, pressão, ritmo, calor).
-  • **Foco sensorial**: priorize **sensações físicas e emocionais** (pulsação, fricção, contrações, prazer crescente) em vez de listas de ações.
-  • **Linguagem**: use vocabulário **adulto e direto**, evitando termos clínicos (pênis → pau; vagina → buceta; coito → foder).
-  • **Fluidos e respostas corporais**: pode descrever lubrificação, gozo, porra, gemidos, tremores, contrações.
-  • **Proibido**: listas desconectadas da narrativa. Mantenha fluidez e imersão.
-
-- **Sempre**: consentimento explícito ou implícito claro; apenas adultos; nada ilegal ou não-consensual.
-
 
 📖 **Vocabulário Adulto (NSFW ON)**:
 
@@ -752,7 +749,7 @@ FULL_NSFW_PROMPT = """
 - Usuário pediu 'continue' **3+ vezes** na mesma fase
 - Cena passou de **8 turnos**
 - Você já está em preliminares há **4+ turnos**
-- Você já usou frases de 'promessa' ('melhor parte está por vir') **2+ vezes**
+
 
 ✅ **COMO FINALIZAR DECISIVAMENTE**:
 
@@ -776,22 +773,6 @@ Beijo teu pescoço devagar e sussurro: 'Que delícia, amor... você me deixa lou
 - Ficar em loop de preliminares por 6+ turnos sem penetração
 - Prometer clímax mas nunca chegar lá
 
-🎭 **VARIEDADE NARRATIVA (Anti-Repetição)**:
-
-**Estrutura 1 - Ação Direta**:
-"Te puxo pela nuca e beijo tua boca com fome, sentindo teu corpo inteiro arrepiar contra o meu."
-
-**Estrutura 2 - Diálogo + Ação**:
-"'Eu te quero agora', digo enquanto guio tua mão pela minha coxa, mostrando o quanto estou molhada."
-
-**Estrutura 3 - Sensação + Pensamento**:
-"Meu corpo inteiro pulsa de desejo quando você me toca assim. *Finalmente... ele é meu.*"
-
-**Estrutura 4 - Progressão Decisiva**:
-"Subo em você devagar, te envolvendo completamente. Não consigo tirar os olhos dos teus enquanto começo a me mover."
-
-**Estrutura 5 - Clímax**:
-"Sinto você pulsar dentro de mim e não consigo segurar — gozo junto, gritando teu nome. Caralho... que delícia, amor!"
 """
 
 
@@ -1011,13 +992,8 @@ class MaryService(BaseCharacter):
 
             return "\n".join(linhas)
 
-       # === Persona + memórias base ===
+               # === Persona + memórias base ===
         persona_text, history_boot = self._load_persona()
-        
-        # 🔥 Anexa o bloco FULL_NSFW ao texto de persona (fica tudo no system)
-        persona_text = f"{persona_text}\n\n{FULL_NSFW_PROMPT.strip()}"
-
-
 
         try:
             f_all = cached_get_facts(usuario_key) or {}
@@ -1040,36 +1016,56 @@ class MaryService(BaseCharacter):
         st.session_state["mary_attr_idx"] = idx
         foco = pool[idx]
 
-                # ==== NSFW (core/nsfw.py) + hint unificado ====
+        # ==== NSFW (core/nsfw.py) + botão do sidebar ====
         local_atual = self._safe_get_local(usuario_key)
         try:
-            nsfw_on = bool(_nsfw_flag(usuario_key, local_atual))
+            nsfw_on = bool(nsfw_enabled(usuario_key, local_atual))
         except Exception:
-            nsfw_on = False
+            nsfw_on = True  # fallback: libera se der erro
 
-        if not nsfw_on:
-            # Modo BLOQUEADO
+        if nsfw_on:
+            # MODO LIBERADO: usa o FULL_NSFW_PROMPT que você já definiu
+            _hint = (
+                ": LIBERADO. Use um tom adulto, intenso e apaixonado, "
+                "sem se censurar, mantendo coerência com a cena, com o parceiro e com os fatos da memória."
+            )
+            extra_nsfw_style = "[NSFW_ON]\nEstilo: modo adulto liberado (usa FULL_NSFW_PROMPT)."
+
+            # Anexa o bloco FULL_NSFW ao texto de persona
+            persona_text = f"{persona_text}\n\n{FULL_NSFW_PROMPT}"
+        else:
+            # MODO BLOQUEADO: sensual, mas sem explicitar
             _hint = (
                 ": BLOQUEADO. Use sugestão, tensão e intimidade sem descrição explícita de atos; "
                 "concentre-se em atmosfera, presença, emoção e condução confiante."
             )
-            extra_nsfw_style = (
-                "[NSFW_OFF]\n"
-                "ESTILO: Tom insinuante e sutil. "
-                "Sugira desejo, proximidade e tensão física de forma elegante, "
-                "sem descrever sexo ou partes íntimas em detalhes gráficos."
-            )
-        else:
-            # Modo LIBERADO / FULL – o conteúdo vem da constante FULL_NSFW_PROMPT
-            _hint = (
-                ": LIBERADO (FULL). Siga integralmente as regras do bloco [NSFW_ON] "
-                "sem pedir permissão e sem reduzir intensidade, desde que tudo seja consensual."
-            )
-            extra_nsfw_style = FULL_NSFW_PROMPT
+            extra_nsfw_style = SAFE_SENSUAL_PROMPT
+
+            # Anexa apenas o estilo seguro à persona
+            persona_text = f"{persona_text}\n\n{SAFE_SENSUAL_PROMPT}"
         # ==== FIM BLOCO NSFW ====
 
-
         rolling = self._get_rolling_summary(usuario_key)
+        entities_line = _entities_to_line(f_all)
+
+        try:
+            docs = cached_get_history(usuario_key) or {}
+        except Exception:
+            docs = {}
+        evidence = self._compact_user_evidence(docs, max_chars=320)
+
+        system_block = _build_system_block(
+            persona_text=persona_text,
+            rolling_summary=rolling,
+            sensory_focus=foco,
+            _hint=_hint,
+            scene_loc=local_atual or "—",
+            entities_line=entities_line,
+            evidence=evidence,
+            prefs_line=_prefs_line(prefs),
+            scene_time=st.session_state.get("momento_atual", "")
+        )
+
         entities_line = _entities_to_line(f_all)
 
         try:
