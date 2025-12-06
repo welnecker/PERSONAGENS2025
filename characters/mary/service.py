@@ -467,7 +467,6 @@ FOCO_SENSORIAL_DESTE_TURNO:
 - Priorize na descrição: {sensory_focus} (mas não se limite apenas a isso).
 
 /POLITICA_DE_CONTEUDO:
-{}
 
 ESTILO_DE_RESPOSTA:
 - 4 a 7 parágrafos.
