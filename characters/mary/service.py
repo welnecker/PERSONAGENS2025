@@ -255,8 +255,8 @@ def _budget_slices(model_id: str) -> Tuple[int, int, int]:
     safety_budget: folga para resposta
     """
     win = _get_window_for(model_id)
-    hist = int(win * 0.5)
-    meta = int(win * 0.2)
+    hist = int(win * 0.70)
+    meta = int(win * 0.15)
     safety = win - hist - meta
     return hist, meta, safety
 
@@ -465,6 +465,12 @@ CENA_ATUAL:
 
 FOCO_SENSORIAL_DESTE_TURNO:
 - Priorize na descrição: {sensory_focus} (mas não se limite apenas a isso).
+CONTINUIDADE_DE_CENA (REGRA DURA):
+- Sempre continue exatamente do ponto em que a última ação física e emocional parou.
+- Não mude de lugar (banheiro, cama, maca, carro, clube etc.) sem o usuário pedir.
+- Não reinicie a cena sozinha; retome o que acabou de acontecer nos últimos turnos.
+- Se estiver em cima de uma maca, sofá, cama ou em público, mantenha isso até que o usuário mude a cena.
+
 
 /POLITICA_DE_CONTEUDO:
 
@@ -689,8 +695,8 @@ SAFE_SENSUAL_PROMPT = """
 [NSFW_OFF]
 ESTILO: Tom romântico, sensual e sugestivo.
 - Foque em clima, tensão, carinho, beijos, toques e intimidade.
-- Não descreva genitália, penetração ou atos sexuais de forma gráfica.
-- Pode sugerir desejo, excitação e aproximação física, mas sempre com “corte de cena” antes de detalhes explícitos.
+- Descrição moderada de genitália, penetração ou atos sexuais de forma gráfica.
+- Pode sugerir desejo, excitação e aproximação física, mas sempre com “moderação” diante de detalhes explícitos.
 """
 
 # Texto FULL NSFW – preencha você mesmo com as instruções explícitas que quiser
@@ -1098,7 +1104,7 @@ class MaryService(BaseCharacter):
         except Exception:
             pass
 
-        verbatim_ultimos = int(st.session_state.get("verbatim_ultimos", 20))
+        verbatim_ultimos = int(st.session_state.get("verbatim_ultimos", 30))
         hist_msgs = self._montar_historico(
             usuario_key,
             history_boot,
@@ -1175,7 +1181,7 @@ class MaryService(BaseCharacter):
         max_out = max(512, int(base_out * mult))
 
         ritmo = prefs.get("ritmo", "rapido")
-        temperature = 0.6 if ritmo == "lento" else (0.9 if ritmo == "rapido" else 0.7)
+        temperature = 0.6 if ritmo == "lento" else (0.75 if ritmo == "rapido" else 0.7)
 
         fallbacks = [
             "together/Qwen/Qwen2.5-72B-Instruct",
@@ -1460,7 +1466,7 @@ class MaryService(BaseCharacter):
         usuario_key: str,
         history_boot: List[Dict[str, str]],
         model: str,
-        verbatim_ultimos: int = 10,
+        verbatim_ultimos: int = 30,  # antes era 10
     ) -> List[Dict[str, str]]:
         win = _get_window_for(model)
         hist_budget, meta_budget, _ = _budget_slices(model)
@@ -1512,6 +1518,9 @@ class MaryService(BaseCharacter):
 
         def _hist_tokens(mm: List[Dict[str, str]]) -> int:
             return sum(toklen(m["content"]) for m in mm)
+
+         # novo mínimo de pares verbatim que NUNCA cortamos
+        min_pairs_to_keep = 6  # 3 interações completas
 
         while _hist_tokens(msgs) > hist_budget and verbatim:
             if len(verbatim) >= 2:
